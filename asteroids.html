@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>Asteroids</title>
+    <title>JMR's Asteroids</title>
     <style>
         * {
             margin: 0;
@@ -134,7 +134,7 @@
     </div>
 
     <div id="startScreen">
-        <h1>ASTEROIDS</h1>
+        <h1>JMR'S ASTEROIDS</h1>
         <p>Rotate with ◄ ► buttons<br>Thrust with ▲<br>Fire with ●</p>
         <button class="start-btn" id="startBtn">START GAME</button>
     </div>
@@ -246,6 +246,14 @@
                     ctx.stroke();
                 }
 
+                ctx.restore();
+
+                // Draw "Gene Machine" label near the ship
+                ctx.save();
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+                ctx.font = '10px Courier New';
+                ctx.textAlign = 'center';
+                ctx.fillText('Gene Machine', this.x, this.y + 35);
                 ctx.restore();
             }
         }
