@@ -150,14 +150,21 @@
         const ctx = canvas.getContext('2d');
 
         // Game state
-        let ship, asteroids, bullets, particles, score, lives, gameRunning;
+        let ship, asteroids = [], bullets = [], particles = [], score, lives, gameRunning = false;
         let keys = { left: false, right: false, thrust: false, fire: false };
         let lastFireTime = 0;
         const FIRE_RATE = 200;
+        let gameWidth, gameHeight;
 
         function resize() {
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight;
+            const dpr = window.devicePixelRatio || 1;
+            gameWidth = window.innerWidth;
+            gameHeight = window.innerHeight;
+            canvas.width = gameWidth * dpr;
+            canvas.height = gameHeight * dpr;
+            canvas.style.width = gameWidth + 'px';
+            canvas.style.height = gameHeight + 'px';
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         }
         window.addEventListener('resize', resize);
         resize();
@@ -165,8 +172,8 @@
         // Ship class
         class Ship {
             constructor() {
-                this.x = canvas.width / 2;
-                this.y = canvas.height / 2;
+                this.x = gameWidth / 2;
+                this.y = gameHeight / 2;
                 this.radius = 15;
                 this.angle = -Math.PI / 2;
                 this.rotation = 0;
@@ -203,10 +210,10 @@
                 this.thrust.y *= 0.99;
 
                 // Screen wrap
-                if (this.x < 0) this.x = canvas.width;
-                if (this.x > canvas.width) this.x = 0;
-                if (this.y < 0) this.y = canvas.height;
-                if (this.y > canvas.height) this.y = 0;
+                if (this.x < 0) this.x = gameWidth;
+                if (this.x > gameWidth) this.x = 0;
+                if (this.y < 0) this.y = gameHeight;
+                if (this.y > gameHeight) this.y = 0;
 
                 if (this.invincible > 0) this.invincible--;
             }
@@ -275,10 +282,10 @@
                 this.rotation += this.rotationSpeed;
 
                 // Screen wrap
-                if (this.x < -this.radius) this.x = canvas.width + this.radius;
-                if (this.x > canvas.width + this.radius) this.x = -this.radius;
-                if (this.y < -this.radius) this.y = canvas.height + this.radius;
-                if (this.y > canvas.height + this.radius) this.y = -this.radius;
+                if (this.x < -this.radius) this.x = gameWidth + this.radius;
+                if (this.x > gameWidth + this.radius) this.x = -this.radius;
+                if (this.y < -this.radius) this.y = gameHeight + this.radius;
+                if (this.y > gameHeight + this.radius) this.y = -this.radius;
             }
 
             draw() {
@@ -316,10 +323,10 @@
                 this.life--;
 
                 // Screen wrap
-                if (this.x < 0) this.x = canvas.width;
-                if (this.x > canvas.width) this.x = 0;
-                if (this.y < 0) this.y = canvas.height;
-                if (this.y > canvas.height) this.y = 0;
+                if (this.x < 0) this.x = gameWidth;
+                if (this.x > gameWidth) this.x = 0;
+                if (this.y < 0) this.y = gameHeight;
+                if (this.y > gameHeight) this.y = 0;
             }
 
             draw() {
@@ -364,10 +371,10 @@
                 // Spawn from edge
                 const edge = Math.floor(Math.random() * 4);
                 switch (edge) {
-                    case 0: x = 0; y = Math.random() * canvas.height; break;
-                    case 1: x = canvas.width; y = Math.random() * canvas.height; break;
-                    case 2: x = Math.random() * canvas.width; y = 0; break;
-                    case 3: x = Math.random() * canvas.width; y = canvas.height; break;
+                    case 0: x = 0; y = Math.random() * gameHeight; break;
+                    case 1: x = gameWidth; y = Math.random() * gameHeight; break;
+                    case 2: x = Math.random() * gameWidth; y = 0; break;
+                    case 3: x = Math.random() * gameWidth; y = gameHeight; break;
                 }
             }
             return new Asteroid(x, y, radius || 50);
@@ -457,8 +464,8 @@
                         if (lives <= 0) {
                             gameOver();
                         } else {
-                            ship.x = canvas.width / 2;
-                            ship.y = canvas.height / 2;
+                            ship.x = gameWidth / 2;
+                            ship.y = gameHeight / 2;
                             ship.thrust = { x: 0, y: 0 };
                             ship.invincible = 180;
                         }
@@ -522,9 +529,9 @@
 
         function draw() {
             ctx.fillStyle = 'black';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillRect(0, 0, gameWidth, gameHeight);
 
-            if (gameRunning) {
+            if (gameRunning && ship) {
                 ship.draw();
             }
 
