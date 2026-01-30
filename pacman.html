@@ -698,8 +698,41 @@
             initGame();
         });
 
-        // Prevent scrolling
-        document.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+        // Swipe controls
+        let touchStartX = 0;
+        let touchStartY = 0;
+
+        document.addEventListener('touchstart', (e) => {
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+        }, { passive: true });
+
+        document.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            if (!pacman || !gameRunning) return;
+
+            const touchX = e.touches[0].clientX;
+            const touchY = e.touches[0].clientY;
+            const dx = touchX - touchStartX;
+            const dy = touchY - touchStartY;
+
+            // Require minimum swipe distance
+            const minSwipe = 20;
+            if (Math.abs(dx) < minSwipe && Math.abs(dy) < minSwipe) return;
+
+            // Determine direction based on which axis has more movement
+            if (Math.abs(dx) > Math.abs(dy)) {
+                // Horizontal swipe
+                pacman.nextDirection = dx > 0 ? { x: 1, y: 0 } : { x: -1, y: 0 };
+            } else {
+                // Vertical swipe
+                pacman.nextDirection = dy > 0 ? { x: 0, y: 1 } : { x: 0, y: -1 };
+            }
+
+            // Update start position for continuous swiping
+            touchStartX = touchX;
+            touchStartY = touchY;
+        }, { passive: false });
 
         setupDpad();
         gameLoop();
