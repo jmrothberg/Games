@@ -347,8 +347,9 @@
             constructor(index) {
                 this.index = index;
                 this.color = GHOST_COLORS[index];
-                // Ghosts start in the ghost house
-                this.tileX = 8 + index;
+                // Ghosts start in the ghost house (tiles 8, 9, 10 only)
+                const startPositions = [8, 9, 10, 9];
+                this.tileX = startPositions[index];
                 this.tileY = 9;
                 this.x = this.tileX * TILE + TILE / 2;
                 this.y = this.tileY * TILE + TILE / 2;
@@ -544,8 +545,9 @@
                             pacman.direction = { x: 0, y: 0 };
                             pacman.nextDirection = { x: 0, y: 0 };
 
+                            const respawnX = [8, 9, 10, 9];
                             for (let i = 0; i < ghosts.length; i++) {
-                                ghosts[i].x = (8 + i) * TILE + TILE / 2;
+                                ghosts[i].x = respawnX[i] * TILE + TILE / 2;
                                 ghosts[i].y = 9 * TILE + TILE / 2;
                                 ghosts[i].exitDelay = i * 60;
                             }
