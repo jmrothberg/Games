@@ -42,6 +42,10 @@
             font-family: 'Courier New', monospace;
             font-size: 18px;
         }
+        #gameTitle {
+            color: #ffff00;
+            font-size: 14px;
+        }
         #gameCanvas {
             border: 3px solid #2121de;
             background: #000;
@@ -119,6 +123,7 @@
     <div id="gameContainer">
         <div id="hud">
             <div id="score">SCORE: 0</div>
+            <div id="gameTitle">JMR'S PAC-MAN</div>
             <div id="lives">PAC: 3</div>
         </div>
         <canvas id="gameCanvas"></canvas>
@@ -134,8 +139,9 @@
 
     <div id="startScreen">
         <h1>JMR'S PAC-MAN</h1>
-        <p>Use the D-pad to move<br>Eat all dots to win!<br>Avoid the ghosts!</p>
+        <p>Use the D-pad or swipe to move<br>Eat all dots to win!<br>Avoid the ghosts!</p>
         <button class="start-btn" id="startBtn">START GAME</button>
+        <p style="margin-top: 20px; font-size: 12px; opacity: 0.6;">v6</p>
     </div>
 
     <div id="gameOverScreen" class="hidden">
