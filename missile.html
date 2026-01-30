@@ -101,7 +101,7 @@
 
     <div id="startScreen">
         <h1>JMR'S MISSILE COMMAND</h1>
-        <p class="version">Version 1</p>
+        <p class="version">Version 2</p>
         <p>Drag to aim your crosshair<br>Tap to launch missiles<br>Defend your cities!</p>
         <button class="start-btn" id="startBtn">START GAME</button>
     </div>
@@ -181,7 +181,7 @@
         }
 
         // Game state
-        let score = 0, wave = 1, gameRunning = false;
+        let score = 0, wave = 1, gameRunning = false, waveSpawning = false;
         let cities = [];
         let playerMissiles = [];
         let enemyMissiles = [];
@@ -395,6 +395,7 @@
             score = 0;
             wave = 1;
             gameRunning = true;
+            waveSpawning = false;
 
             // Create cities
             cities = [];
@@ -413,13 +414,19 @@
         }
 
         function spawnWave() {
+            waveSpawning = true;
             const numMissiles = 5 + wave * 2;
+            const delay = Math.max(500, 1500 - wave * 100);
             for (let i = 0; i < numMissiles; i++) {
                 setTimeout(() => {
                     if (gameRunning) {
                         enemyMissiles.push(new EnemyMissile());
                     }
-                }, i * (1500 - wave * 100));
+                    // Mark spawning complete after last missile
+                    if (i === numMissiles - 1) {
+                        waveSpawning = false;
+                    }
+                }, i * delay);
             }
         }
 
@@ -439,7 +446,10 @@
         }
 
         function checkWaveComplete() {
-            if (enemyMissiles.length === 0 && gameRunning) {
+            // Only check if not already spawning a wave
+            if (enemyMissiles.length === 0 && gameRunning && !waveSpawning) {
+                waveSpawning = true; // Prevent multiple triggers
+
                 // Bonus for surviving cities
                 const aliveCities = cities.filter(c => c.alive).length;
                 score += aliveCities * 100;
