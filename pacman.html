@@ -158,8 +158,16 @@
         const TILE = 20;
         const COLS = 19;
         const ROWS = 21;
-        canvas.width = COLS * TILE;
-        canvas.height = ROWS * TILE;
+
+        // Handle retina displays
+        const dpr = window.devicePixelRatio || 1;
+        const gameWidth = COLS * TILE;
+        const gameHeight = ROWS * TILE;
+        canvas.width = gameWidth * dpr;
+        canvas.height = gameHeight * dpr;
+        canvas.style.width = gameWidth + 'px';
+        canvas.style.height = gameHeight + 'px';
+        ctx.scale(dpr, dpr);
 
         // Map: 1 = wall, 0 = dot, 2 = empty, 3 = power pellet, 4 = ghost house
         const MAP_TEMPLATE = [
