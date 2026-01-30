@@ -194,7 +194,7 @@
             [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
         ];
 
-        let map, pacman, ghosts, score, lives, gameRunning, dotsRemaining;
+        let map = [], pacman = null, ghosts = [], score = 0, lives = 3, gameRunning = false, dotsRemaining = 0;
         let nextDirection = null;
 
         const GHOST_COLORS = ['#ff0000', '#ffb8ff', '#00ffff', '#ffb852'];
@@ -574,6 +574,7 @@
         }
 
         function drawMap() {
+            if (!map || map.length === 0) return;
             for (let row = 0; row < ROWS; row++) {
                 for (let col = 0; col < COLS; col++) {
                     const tile = map[row][col];
