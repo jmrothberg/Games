@@ -155,7 +155,7 @@
 
     <div id="startScreen">
         <h1>JMR'S MR. DO!</h1>
-        <p class="version">Version 1</p>
+        <p class="version">Version 2</p>
         <p>Dig tunnels and collect cherries!<br>Throw your power ball at enemies<br>Push apples to crush them<br>Collect E-X-T-R-A for bonus!</p>
         <button class="start-btn" id="startBtn">START GAME</button>
     </div>
@@ -1192,8 +1192,12 @@
             ctx.fillStyle = '#000000';
             ctx.fillRect(0, 0, gameWidth, gameHeight);
 
+            // Only draw game elements if grid is initialized
+            if (grid.length === 0) return;
+
             // Draw grid
             for (let y = 0; y < GRID_ROWS; y++) {
+                if (!grid[y]) continue;
                 for (let x = 0; x < GRID_COLS; x++) {
                     const px = offsetX + x * TILE_SIZE;
                     const py = offsetY + y * TILE_SIZE;
