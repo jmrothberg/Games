@@ -108,33 +108,33 @@
     const DIFFICULTY = {
         woke: {
             numObstacles: 30,
-            numEnemyTanks: 3,
-            enemyTankSpeed: 0.5,
-            enemyTankStrength: 1000,
+            numEnemyTanks: 2,
+            enemyTankSpeed: 0.3,
+            enemyTankStrength: 500,
             playerTankSpeed: 3,
-            playerTankStrength: 5000,
-            playerCooldown: 10,
-            enemyCooldown: 30
+            playerTankStrength: 8000,
+            playerCooldown: 8,
+            enemyCooldown: 120  // Enemies fire very slowly
         },
         medium: {
-            numObstacles: 20,
-            numEnemyTanks: 5,
-            enemyTankSpeed: 1,
-            enemyTankStrength: 2000,
-            playerTankSpeed: 2,
-            playerTankStrength: 2000,
-            playerCooldown: 30,
-            enemyCooldown: 30
+            numObstacles: 25,
+            numEnemyTanks: 4,
+            enemyTankSpeed: 0.6,
+            enemyTankStrength: 1500,
+            playerTankSpeed: 2.5,
+            playerTankStrength: 4000,
+            playerCooldown: 15,
+            enemyCooldown: 60
         },
         based: {
-            numObstacles: 10,
-            numEnemyTanks: 10,
-            enemyTankSpeed: 2,
-            enemyTankStrength: 5000,
-            playerTankSpeed: 1,
-            playerTankStrength: 500,
-            playerCooldown: 60,
-            enemyCooldown: 30
+            numObstacles: 15,
+            numEnemyTanks: 7,
+            enemyTankSpeed: 1.2,
+            enemyTankStrength: 3000,
+            playerTankSpeed: 2,
+            playerTankStrength: 2000,
+            playerCooldown: 25,
+            enemyCooldown: 40
         }
     };
 
@@ -841,6 +841,12 @@
     }
 
     function update() {
+        // Always update explosions so they finish animating
+        if (gameState === 'gameover') {
+            explosions = explosions.filter(exp => exp.update());
+            return;
+        }
+
         if (gameState !== 'playing') return;
 
         // Player input
