@@ -2,23 +2,52 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>JMR's 3D Tank Battle</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            touch-action: none;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
             background: #000;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
             font-family: 'Courier New', monospace;
         }
         #gameCanvas {
-            border: 2px solid #333;
             display: block;
+            width: 100%;
+            height: 100%;
         }
         #helpOverlay {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.95);
+            padding: 20px;
+            border: 2px solid #0f0;
+            color: #fff;
+            display: none;
+            z-index: 100;
+            max-width: 90%;
+            max-height: 80%;
+            overflow-y: auto;
+            font-size: 14px;
+        }
+        #helpOverlay h2 { color: #0f0; margin-bottom: 15px; font-size: 18px; }
+        #helpOverlay p { margin: 6px 0; }
+        #helpOverlay .key { color: #ff0; }
+        #difficultySelect {
             position: fixed;
             top: 50%;
             left: 50%;
@@ -27,83 +56,200 @@
             padding: 30px;
             border: 2px solid #0f0;
             color: #fff;
-            display: none;
-            z-index: 100;
-            max-width: 500px;
-        }
-        #helpOverlay h2 { color: #0f0; margin-bottom: 20px; }
-        #helpOverlay p { margin: 8px 0; }
-        #helpOverlay .key { color: #ff0; }
-        #difficultySelect {
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(0,0,0,0.95);
-            padding: 40px;
-            border: 2px solid #0f0;
-            color: #fff;
             z-index: 100;
             text-align: center;
+            max-width: 90%;
         }
-        #difficultySelect h1 { color: #0f0; margin-bottom: 30px; }
+        #difficultySelect h1 { color: #0f0; margin-bottom: 20px; font-size: 24px; }
         #difficultySelect button {
             display: block;
-            width: 200px;
-            margin: 15px auto;
-            padding: 15px;
-            font-size: 18px;
+            width: 180px;
+            margin: 12px auto;
+            padding: 12px;
+            font-size: 16px;
             cursor: pointer;
             background: #222;
             color: #fff;
             border: 2px solid #0f0;
             transition: all 0.2s;
         }
-        #difficultySelect button:hover {
+        #difficultySelect button:hover, #difficultySelect button:active {
             background: #0f0;
             color: #000;
         }
+        /* Touch Controls */
+        #touchControls {
+            position: fixed;
+            bottom: 10px;
+            left: 0;
+            right: 0;
+            display: none;
+            justify-content: space-between;
+            padding: 0 10px;
+            pointer-events: none;
+            z-index: 50;
+        }
+        .control-pad {
+            position: relative;
+            width: 140px;
+            height: 140px;
+            pointer-events: auto;
+        }
+        .dpad-btn {
+            position: absolute;
+            width: 45px;
+            height: 45px;
+            background: rgba(255, 255, 255, 0.15);
+            border: 2px solid rgba(255, 255, 255, 0.4);
+            border-radius: 8px;
+            color: white;
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+        .dpad-btn:active, .dpad-btn.active {
+            background: rgba(255, 255, 255, 0.4);
+        }
+        .dpad-up { top: 0; left: 50%; transform: translateX(-50%); }
+        .dpad-down { bottom: 0; left: 50%; transform: translateX(-50%); }
+        .dpad-left { left: 0; top: 50%; transform: translateY(-50%); }
+        .dpad-right { right: 0; top: 50%; transform: translateY(-50%); }
+        .dpad-center {
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background: rgba(255, 50, 50, 0.3);
+            border-color: rgba(255, 100, 100, 0.6);
+            font-size: 24px;
+        }
+        /* Right side controls - barrel adjust */
+        .right-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            pointer-events: auto;
+        }
+        .barrel-btn {
+            width: 60px;
+            height: 50px;
+            background: rgba(255, 255, 255, 0.15);
+            border: 2px solid rgba(255, 255, 255, 0.4);
+            border-radius: 8px;
+            color: white;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+        .barrel-btn:active, .barrel-btn.active {
+            background: rgba(255, 255, 255, 0.4);
+        }
+        .help-btn {
+            width: 45px;
+            height: 45px;
+            background: rgba(0, 255, 0, 0.2);
+            border: 2px solid rgba(0, 255, 0, 0.5);
+            border-radius: 50%;
+            color: #0f0;
+            font-size: 20px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            pointer-events: auto;
+        }
+        .help-btn:active {
+            background: rgba(0, 255, 0, 0.5);
+        }
+        .hidden { display: none !important; }
     </style>
 </head>
 <body>
-    <canvas id="gameCanvas" width="1200" height="900"></canvas>
+    <canvas id="gameCanvas"></canvas>
+
+    <!-- Touch Controls -->
+    <div id="touchControls">
+        <!-- Left D-Pad: Movement -->
+        <div class="control-pad">
+            <button class="dpad-btn dpad-up" id="btnUp">▲</button>
+            <button class="dpad-btn dpad-down" id="btnDown">▼</button>
+            <button class="dpad-btn dpad-left" id="btnLeft">◄</button>
+            <button class="dpad-btn dpad-right" id="btnRight">►</button>
+            <button class="dpad-btn dpad-center" id="btnFire">●</button>
+        </div>
+        <!-- Right Controls: Barrel + Help -->
+        <div class="right-controls">
+            <button class="barrel-btn" id="btnBarrelUp">Q ↑</button>
+            <button class="barrel-btn" id="btnBarrelDown">Z ↓</button>
+            <button class="help-btn" id="btnHelp">H</button>
+        </div>
+    </div>
 
     <div id="difficultySelect">
         <h1>JMR's 3D Tank Battle</h1>
-        <p style="margin-bottom: 20px;">Select Difficulty:</p>
+        <p style="margin-bottom: 15px;">Select Difficulty:</p>
         <button onclick="startGame('woke')">Woke (Easy)</button>
         <button onclick="startGame('medium')">Medium</button>
         <button onclick="startGame('based')">Based (Hard)</button>
-        <p style="margin-top: 25px; color: #0f0;">Press H during game for help</p>
+        <p style="margin-top: 20px; color: #0f0; font-size: 12px;">
+            Touch: D-pad to move, center to fire<br>
+            Swipe to move/turn, tap to fire<br>
+            Press H for help
+        </p>
     </div>
 
     <div id="helpOverlay">
-        <h2>Controls</h2>
+        <h2>Keyboard Controls</h2>
         <p><span class="key">Arrow Up/Down</span>: Move forward/backward</p>
         <p><span class="key">Arrow Left/Right</span>: Rotate tank</p>
         <p><span class="key">Q/Z</span>: Raise/Lower barrel</p>
         <p><span class="key">Spacebar</span>: Fire</p>
-        <p><span class="key">H</span>: Toggle help screen</p>
-        <p><span class="key">R</span>: Restart (when game over)</p>
-        <h2 style="margin-top: 20px;">Objective</h2>
+        <p><span class="key">H</span>: Toggle help</p>
+        <p><span class="key">R</span>: Restart (game over)</p>
+        <h2 style="margin-top: 15px;">Touch Controls</h2>
+        <p><span class="key">D-Pad</span>: Move and rotate</p>
+        <p><span class="key">Center ●</span>: Fire</p>
+        <p><span class="key">Q↑/Z↓</span>: Adjust barrel</p>
+        <p><span class="key">Swipe Up/Down</span>: Move</p>
+        <p><span class="key">Swipe Left/Right</span>: Rotate</p>
+        <p><span class="key">Tap</span>: Fire</p>
+        <h2 style="margin-top: 15px;">Objective</h2>
         <p>Destroy all enemy tanks!</p>
-        <p>Avoid obstacles and enemy fire.</p>
         <p>Collect power-ups for bonuses.</p>
-        <h2 style="margin-top: 20px;">Power-ups</h2>
-        <p><span style="color: orange;">Orange</span>: Health</p>
-        <p><span style="color: magenta;">Magenta</span>: Faster cooldown</p>
-        <p><span style="color: cyan;">Cyan</span>: Speed boost</p>
-        <p><span style="color: purple;">Purple</span>: Minigun</p>
-        <p><span style="color: pink;">Pink</span>: Rocket launcher</p>
-        <p><span style="color: white;">White</span>: Cannon</p>
-        <p style="margin-top: 20px; color: #0f0;">Press H to close</p>
+        <h2 style="margin-top: 15px;">Power-ups</h2>
+        <p><span style="color: orange;">Orange</span>: Health | <span style="color: magenta;">Magenta</span>: Cooldown</p>
+        <p><span style="color: cyan;">Cyan</span>: Speed | <span style="color: purple;">Purple</span>: Minigun</p>
+        <p><span style="color: pink;">Pink</span>: Rocket | <span style="color: white;">White</span>: Cannon</p>
+        <p style="margin-top: 15px; color: #0f0;">Tap H or here to close</p>
     </div>
 
     <script>
-    // Game Constants
-    const WIDTH = 1200;
-    const HEIGHT = 900;
+    // Game Constants - will be set dynamically
+    let WIDTH = 1200;
+    let HEIGHT = 900;
     const TERRAIN_SIZE = 1000;
+    let dpr = 1;  // Device pixel ratio for retina displays
+    let isMobile = false;
+
+    // Touch state
+    let touchControls = {
+        up: false,
+        down: false,
+        left: false,
+        right: false,
+        fire: false,
+        barrelUp: false,
+        barrelDown: false
+    };
+    let swipeStart = null;
+    let lastTap = 0;
 
     // Difficulty settings
     const DIFFICULTY = {
@@ -558,33 +704,37 @@
     }
 
     function renderHUD() {
-        ctx.font = '20px Courier New';
-        const x = WIDTH - 200;
+        const fontSize = Math.max(12, Math.min(20, WIDTH / 60));
+        ctx.font = fontSize + 'px Courier New';
+        const x = WIDTH - Math.max(120, WIDTH / 6);
+        const bottomOffset = isMobile ? 180 : 30;  // Leave room for touch controls on mobile
+        const lineHeight = fontSize + 4;
 
         let weaponColor = COLORS.white;
         if (playerTank.weaponType === 'minigun') weaponColor = COLORS.purple;
         else if (playerTank.weaponType === 'rocket') weaponColor = COLORS.pink;
 
         ctx.fillStyle = weaponColor;
-        ctx.fillText(`Weapon: ${playerTank.weaponType}`, x, HEIGHT - 180);
+        ctx.fillText(`Weapon: ${playerTank.weaponType}`, x, HEIGHT - bottomOffset - lineHeight * 5);
 
         ctx.fillStyle = COLORS.orange;
-        ctx.fillText(`Health: ${Math.floor(playerTank.health)}`, x, HEIGHT - 150);
+        ctx.fillText(`Health: ${Math.floor(playerTank.health)}`, x, HEIGHT - bottomOffset - lineHeight * 4);
 
         ctx.fillStyle = COLORS.magenta;
-        ctx.fillText(`Cooldown: ${Math.floor(playerTank.coolTime)}`, x, HEIGHT - 120);
+        ctx.fillText(`CD: ${Math.floor(playerTank.coolTime)}`, x, HEIGHT - bottomOffset - lineHeight * 3);
 
         ctx.fillStyle = COLORS.cyan;
-        ctx.fillText(`Speed: ${playerTank.speed.toFixed(1)}`, x, HEIGHT - 90);
+        ctx.fillText(`Speed: ${playerTank.speed.toFixed(1)}`, x, HEIGHT - bottomOffset - lineHeight * 2);
 
         ctx.fillStyle = COLORS.white;
-        ctx.fillText(`Score: ${Math.floor(playerTank.score)}`, x, HEIGHT - 60);
+        ctx.fillText(`Score: ${Math.floor(playerTank.score)}`, x, HEIGHT - bottomOffset - lineHeight);
 
-        ctx.fillText(`Enemies: ${enemyTanks.length}`, x, HEIGHT - 30);
+        ctx.fillText(`Enemies: ${enemyTanks.length}`, x, HEIGHT - bottomOffset);
     }
 
     function renderScopeView() {
-        const scopeSize = 350;
+        // Responsive scope size
+        const scopeSize = Math.min(350, Math.floor(Math.min(WIDTH, HEIGHT) * 0.35));
         const scopeCanvas = document.createElement('canvas');
         scopeCanvas.width = scopeSize;
         scopeCanvas.height = scopeSize;
@@ -678,7 +828,8 @@
     }
 
     function renderMinimap() {
-        const mapSize = 350;
+        // Responsive minimap size
+        const mapSize = Math.min(350, Math.floor(Math.min(WIDTH, HEIGHT) * 0.35));
         const mapX = WIDTH - mapSize - 10;
         const mapY = 10;
 
@@ -850,14 +1001,14 @@
 
         if (gameState !== 'playing') return;
 
-        // Player input
-        if (keys['ArrowUp']) playerTank.move(true, enemyTanks);
-        if (keys['ArrowDown']) playerTank.move(false, enemyTanks);
-        if (keys['ArrowLeft']) playerTank.rotate(1);
-        if (keys['ArrowRight']) playerTank.rotate(-1);
-        if (keys['q'] || keys['Q']) playerTank.adjustBarrel(1);
-        if (keys['z'] || keys['Z']) playerTank.adjustBarrel(-1);
-        if (keys[' ']) {
+        // Player input (keyboard or touch)
+        if (keys['ArrowUp'] || touchControls.up) playerTank.move(true, enemyTanks);
+        if (keys['ArrowDown'] || touchControls.down) playerTank.move(false, enemyTanks);
+        if (keys['ArrowLeft'] || touchControls.left) playerTank.rotate(1);
+        if (keys['ArrowRight'] || touchControls.right) playerTank.rotate(-1);
+        if (keys['q'] || keys['Q'] || touchControls.barrelUp) playerTank.adjustBarrel(1);
+        if (keys['z'] || keys['Z'] || touchControls.barrelDown) playerTank.adjustBarrel(-1);
+        if (keys[' '] || touchControls.fire) {
             const bullet = playerTank.fire();
             if (bullet) playerBullets.push(bullet);
         }
@@ -1029,16 +1180,18 @@
 
         // Game over overlay
         if (gameState === 'gameover' && explosions.length === 0) {
+            const boxWidth = Math.min(500, WIDTH - 40);
+            const fontSize = Math.min(48, WIDTH / 15);
             ctx.fillStyle = 'rgba(0,0,0,0.7)';
-            ctx.fillRect(WIDTH / 2 - 250, HEIGHT / 2 - 50, 500, 120);
+            ctx.fillRect(WIDTH / 2 - boxWidth / 2, HEIGHT / 2 - 60, boxWidth, 140);
 
-            ctx.font = '48px Courier New';
+            ctx.font = fontSize + 'px Courier New';
             ctx.fillStyle = COLORS.white;
             ctx.textAlign = 'center';
             ctx.fillText(gameOverMessage, WIDTH / 2, HEIGHT / 2);
 
-            ctx.font = '24px Courier New';
-            ctx.fillText('Press R to Restart', WIDTH / 2, HEIGHT / 2 + 45);
+            ctx.font = Math.floor(fontSize / 2) + 'px Courier New';
+            ctx.fillText(isMobile ? 'Tap here to Restart' : 'Press R to Restart', WIDTH / 2, HEIGHT / 2 + 50);
             ctx.textAlign = 'left';
         }
 
@@ -1059,7 +1212,142 @@
     function startGame(difficulty) {
         settings = DIFFICULTY[difficulty];
         document.getElementById('difficultySelect').style.display = 'none';
+        if (isMobile) {
+            document.getElementById('touchControls').style.display = 'flex';
+        }
         resetGame();
+    }
+
+    // Responsive canvas sizing
+    function resize() {
+        dpr = window.devicePixelRatio || 1;
+        WIDTH = window.innerWidth;
+        HEIGHT = window.innerHeight;
+        canvas.width = WIDTH * dpr;
+        canvas.height = HEIGHT * dpr;
+        canvas.style.width = WIDTH + 'px';
+        canvas.style.height = HEIGHT + 'px';
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    // Setup touch button handlers
+    function setupTouchControls() {
+        const buttons = {
+            'btnUp': 'up',
+            'btnDown': 'down',
+            'btnLeft': 'left',
+            'btnRight': 'right',
+            'btnFire': 'fire',
+            'btnBarrelUp': 'barrelUp',
+            'btnBarrelDown': 'barrelDown'
+        };
+
+        for (const [btnId, control] of Object.entries(buttons)) {
+            const btn = document.getElementById(btnId);
+            if (!btn) continue;
+
+            btn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                touchControls[control] = true;
+                btn.classList.add('active');
+            });
+            btn.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                touchControls[control] = false;
+                btn.classList.remove('active');
+            });
+            btn.addEventListener('touchcancel', (e) => {
+                touchControls[control] = false;
+                btn.classList.remove('active');
+            });
+        }
+
+        // Help button
+        const helpBtn = document.getElementById('btnHelp');
+        if (helpBtn) {
+            helpBtn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                showHelp = !showHelp;
+            });
+        }
+
+        // Help overlay closes on tap
+        const helpOverlay = document.getElementById('helpOverlay');
+        if (helpOverlay) {
+            helpOverlay.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                showHelp = false;
+            });
+            helpOverlay.addEventListener('click', () => {
+                showHelp = false;
+            });
+        }
+    }
+
+    // Setup swipe gestures on canvas
+    function setupSwipeGestures() {
+        canvas.addEventListener('touchstart', (e) => {
+            if (e.target !== canvas) return;
+            const touch = e.touches[0];
+            swipeStart = { x: touch.clientX, y: touch.clientY, time: Date.now() };
+        });
+
+        canvas.addEventListener('touchmove', (e) => {
+            if (!swipeStart || e.target !== canvas) return;
+            e.preventDefault();
+
+            const touch = e.touches[0];
+            const dx = touch.clientX - swipeStart.x;
+            const dy = touch.clientY - swipeStart.y;
+            const threshold = 20;
+
+            // Reset all swipe controls
+            touchControls.up = false;
+            touchControls.down = false;
+            touchControls.left = false;
+            touchControls.right = false;
+
+            // Determine swipe direction (allow diagonal-ish)
+            if (Math.abs(dy) > threshold) {
+                if (dy < 0) touchControls.up = true;
+                else touchControls.down = true;
+            }
+            if (Math.abs(dx) > threshold) {
+                if (dx < 0) touchControls.left = true;
+                else touchControls.right = true;
+            }
+        });
+
+        canvas.addEventListener('touchend', (e) => {
+            if (e.target !== canvas) return;
+
+            const now = Date.now();
+            // Quick tap to fire (if not a swipe)
+            if (swipeStart && (now - swipeStart.time) < 200) {
+                const touch = e.changedTouches[0];
+                const dx = Math.abs(touch.clientX - swipeStart.x);
+                const dy = Math.abs(touch.clientY - swipeStart.y);
+                if (dx < 30 && dy < 30) {
+                    // Check if game over - tap to restart
+                    if (gameState === 'gameover' && explosions.length === 0) {
+                        document.getElementById('difficultySelect').style.display = 'block';
+                        document.getElementById('touchControls').style.display = 'none';
+                        gameState = 'menu';
+                    } else if (gameState === 'playing') {
+                        // It's a tap, fire!
+                        touchControls.fire = true;
+                        setTimeout(() => { touchControls.fire = false; }, 100);
+                    }
+                }
+            }
+
+            // Reset swipe controls
+            touchControls.up = false;
+            touchControls.down = false;
+            touchControls.left = false;
+            touchControls.right = false;
+            swipeStart = null;
+        });
     }
 
     // Initialize
@@ -1067,6 +1355,18 @@
         canvas = document.getElementById('gameCanvas');
         ctx = canvas.getContext('2d');
 
+        // Check if mobile
+        isMobile = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+
+        // Setup responsive canvas
+        resize();
+        window.addEventListener('resize', resize);
+
+        // Setup touch controls
+        setupTouchControls();
+        setupSwipeGestures();
+
+        // Keyboard events
         document.addEventListener('keydown', (e) => {
             keys[e.key] = true;
 
@@ -1076,6 +1376,7 @@
 
             if ((e.key === 'r' || e.key === 'R') && gameState === 'gameover') {
                 document.getElementById('difficultySelect').style.display = 'block';
+                document.getElementById('touchControls').style.display = 'none';
                 gameState = 'menu';
             }
 

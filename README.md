@@ -114,12 +114,37 @@ Classic dig-and-collect arcade action! Based on the 1982 Universal classic.
 
 ---
 
+### JMR's 3D Tank Battle
+**File:** `3D_Tank_Battle.html`
+
+3D wireframe tank battle with enemy AI!
+
+- **Controls:**
+  - D-pad: Move forward/back, rotate left/right
+  - Center button: Fire
+  - Q↑/Z↓: Adjust barrel angle
+  - Swipe up/down: Move
+  - Swipe left/right: Rotate
+  - Tap: Fire
+  - H: Help
+- **Features:**
+  - 3D wireframe graphics
+  - Scope view with range finder
+  - Minimap with enemy/power-up tracking
+  - 3 difficulty levels: Woke (Easy), Medium, Based (Hard)
+  - 6 power-up types (Health, Cooldown, Speed, Minigun, Rocket, Cannon)
+  - Enemy AI that pursues and attacks
+
+**Play:** `https://raw.githack.com/jmrothberg/Games/main/3D_Tank_Battle.html`
+
+---
+
 ## Desktop Python Games
 
-### 3D Tank Battle
+### 3D Tank Battle (Python - Multiplayer)
 **Files:** `3D_Network_Tank_Feb_4_25.py`, `3D_Network_Tank_July_21_24_rockets.py`
 
-A 3D tank battle game with single-player and multiplayer modes.
+The original Python version with networked multiplayer support.
 
 - **Requirements:** `pip install pygame python-nmap`
 - **Controls:**
@@ -128,7 +153,7 @@ A 3D tank battle game with single-player and multiplayer modes.
   - Spacebar: Fire
 - **Features:**
   - 3D graphics with Pygame
-  - Networked multiplayer
+  - Networked multiplayer (host/join)
   - Multiple weapons (Cannon, Minigun, Rockets)
   - Difficulty levels: Woke (Easy), Medium, Based (Hard)
 
@@ -152,7 +177,8 @@ A Doom-inspired first-person game.
 | Iron Dome | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/missile.html) |
 | Space Invaders | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/invaders.html) |
 | Mr. Do! | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/mrdo.html) |
-| Tank Battle | Desktop (Python) | Download & run with Python |
+| 3D Tank Battle | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/3D_Tank_Battle.html) |
+| Tank Battle (Python) | Desktop | Download & run with Python |
 
 ---
 
