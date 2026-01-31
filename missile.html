@@ -1,0 +1,1230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>JMR's Iron Dome</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            touch-action: none;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #000;
+        }
+        #gameCanvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #hud {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: white;
+            font-family: 'Courier New', monospace;
+            font-size: 16px;
+            text-shadow: 0 0 10px rgba(255,255,255,0.5);
+            z-index: 10;
+        }
+        #gameTitle {
+            color: #ff6600;
+            font-size: 12px;
+        }
+        #startScreen, #gameOverScreen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.9);
+            color: #ff6600;
+            font-family: 'Courier New', monospace;
+            z-index: 100;
+        }
+        #startScreen h1, #gameOverScreen h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+            text-shadow: 0 0 20px rgba(255,102,0,0.5);
+            text-align: center;
+        }
+        .version {
+            color: #ff6600;
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+        #startScreen p, #gameOverScreen p {
+            font-size: 14px;
+            margin-bottom: 20px;
+            text-align: center;
+            padding: 0 20px;
+            color: white;
+        }
+        .start-btn {
+            padding: 15px 40px;
+            font-size: 18px;
+            background: transparent;
+            border: 2px solid #ff6600;
+            color: #ff6600;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+        }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="hud">
+        <div id="score">SCORE: 0</div>
+        <div id="gameTitle">JMR'S IRON DOME</div>
+        <div id="cities">CITIES: 6</div>
+    </div>
+
+    <div id="startScreen">
+        <h1>JMR'S IRON DOME</h1>
+        <p class="version">Version 9</p>
+        <p>Drag to aim your crosshair<br>Tap to launch interceptors<br>Defend Israel's cities!</p>
+        <button class="start-btn" id="startBtn">START GAME</button>
+    </div>
+
+    <div id="gameOverScreen" class="hidden">
+        <h1>JMR'S IRON DOME</h1>
+        <h2 style="color: #ff6600; margin-bottom: 10px;">GAME OVER</h2>
+        <p id="finalScore">SCORE: 0</p>
+        <p id="waveReached" style="font-size: 14px; margin-bottom: 15px;">WAVE: 1</p>
+        <div id="qrCode" style="background: white; padding: 10px; margin: 10px 0;"></div>
+        <p style="font-size: 10px; color: #aaa; margin-bottom: 15px;">Scan QR to verify score</p>
+        <button class="start-btn" id="restartBtn">PLAY AGAIN</button>
+    </div>
+
+    <!-- QR Code Library -->
+    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Handle retina displays
+        let dpr, gameWidth, gameHeight;
+
+        function resize() {
+            dpr = window.devicePixelRatio || 1;
+            gameWidth = window.innerWidth;
+            gameHeight = window.innerHeight;
+            canvas.width = gameWidth * dpr;
+            canvas.height = gameHeight * dpr;
+            canvas.style.width = gameWidth + 'px';
+            canvas.style.height = gameHeight + 'px';
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Audio context for sound effects
+        let audioCtx = null;
+
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            // iOS requires resume after user interaction
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        function playSound(type) {
+            if (!audioCtx) return;
+
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            switch(type) {
+                case 'shoot':
+                    oscillator.type = 'square';
+                    oscillator.frequency.setValueAtTime(200, audioCtx.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.1);
+                    gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                    oscillator.start();
+                    oscillator.stop(audioCtx.currentTime + 0.1);
+                    break;
+                case 'explosion':
+                    oscillator.type = 'sawtooth';
+                    oscillator.frequency.setValueAtTime(100, audioCtx.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(20, audioCtx.currentTime + 0.3);
+                    gainNode.gain.setValueAtTime(0.4, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+                    oscillator.start();
+                    oscillator.stop(audioCtx.currentTime + 0.3);
+                    break;
+                case 'cityHit':
+                    oscillator.type = 'sawtooth';
+                    oscillator.frequency.setValueAtTime(150, audioCtx.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(30, audioCtx.currentTime + 0.5);
+                    gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+                    oscillator.start();
+                    oscillator.stop(audioCtx.currentTime + 0.5);
+                    break;
+                case 'drone':
+                    // Buzzing drone sound - low frequency oscillation
+                    oscillator.type = 'sawtooth';
+                    oscillator.frequency.setValueAtTime(80, audioCtx.currentTime);
+                    // Modulate frequency for buzzing effect
+                    for (let i = 0; i < 10; i++) {
+                        oscillator.frequency.setValueAtTime(80 + (i % 2) * 40, audioCtx.currentTime + i * 0.05);
+                    }
+                    gainNode.gain.setValueAtTime(0.15, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+                    oscillator.start();
+                    oscillator.stop(audioCtx.currentTime + 0.5);
+                    break;
+            }
+        }
+
+        // Game state
+        let score = 0, wave = 1, gameRunning = false, waveSpawning = false;
+        let cities = [];
+        let playerMissiles = [];
+        let enemyMissiles = [];
+        let explosions = [];
+        let drones = [];
+        let paragliders = [];
+        let terrorists = [];
+        let crosshair = { x: 0, y: 0 };
+        let baseY;
+        let qrCodeInstance = null;
+        let gameSessionId = null;
+
+        // Secret key for signing scores (in real app, this would be server-side)
+        const SECRET_KEY = 'JMR-IronDome-2024-Contest';
+
+        // Simple hash function for score verification
+        function simpleHash(str) {
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) {
+                const char = str.charCodeAt(i);
+                hash = ((hash << 5) - hash) + char;
+                hash = hash & hash;
+            }
+            return Math.abs(hash).toString(36);
+        }
+
+        // Generate verification signature
+        function generateSignature(sessionId, finalScore, finalWave, timestamp) {
+            const data = `${sessionId}-${finalScore}-${finalWave}-${timestamp}-${SECRET_KEY}`;
+            return simpleHash(data);
+        }
+
+        // Generate QR code for score verification
+        function generateScoreQR(finalScore, finalWave) {
+            const timestamp = Date.now();
+            const signature = generateSignature(gameSessionId, finalScore, finalWave, timestamp);
+
+            // Build verification URL (use same host or a verification page)
+            const params = new URLSearchParams({
+                s: finalScore,
+                w: finalWave,
+                t: timestamp,
+                id: gameSessionId,
+                sig: signature
+            });
+
+            const verifyUrl = `https://raw.githack.com/jmrothberg/Games/claude/asteroids-game-iphone-BpQVH/verify.html?${params.toString()}`;
+
+            // Clear previous QR code
+            const qrContainer = document.getElementById('qrCode');
+            qrContainer.innerHTML = '';
+
+            // Generate new QR code
+            qrCodeInstance = new QRCode(qrContainer, {
+                text: verifyUrl,
+                width: 128,
+                height: 128,
+                colorDark: '#000000',
+                colorLight: '#ffffff',
+                correctLevel: QRCode.CorrectLevel.M
+            });
+        }
+
+        // Generate unique session ID when game starts
+        function generateSessionId() {
+            return 'JMR' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+        }
+
+        class City {
+            constructor(x, name) {
+                this.x = x;
+                this.y = baseY;
+                this.width = 40;
+                this.height = 25;
+                this.alive = true;
+                this.name = name;
+            }
+
+            draw() {
+                if (!this.alive) return;
+
+                ctx.fillStyle = '#00aaff';
+                // Building shapes
+                ctx.fillRect(this.x - 15, this.y - 20, 10, 20);
+                ctx.fillRect(this.x - 3, this.y - 25, 8, 25);
+                ctx.fillRect(this.x + 8, this.y - 15, 10, 15);
+
+                // Windows
+                ctx.fillStyle = '#ffff00';
+                for (let i = 0; i < 3; i++) {
+                    ctx.fillRect(this.x - 13, this.y - 18 + i * 6, 3, 3);
+                    ctx.fillRect(this.x, this.y - 22 + i * 6, 3, 3);
+                    ctx.fillRect(this.x + 11, this.y - 12 + i * 4, 3, 2);
+                }
+
+                // City name label
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                ctx.font = '9px Courier New';
+                ctx.textAlign = 'center';
+                ctx.fillText(this.name, this.x, this.y + 12);
+            }
+        }
+
+        class PlayerMissile {
+            constructor(startX, startY, targetX, targetY) {
+                this.startX = startX;
+                this.startY = startY;
+                this.x = startX;
+                this.y = startY;
+                this.targetX = targetX;
+                this.targetY = targetY;
+                const dx = targetX - startX;
+                const dy = targetY - startY;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                this.speed = 8;
+                this.vx = (dx / dist) * this.speed;
+                this.vy = (dy / dist) * this.speed;
+                this.alive = true;
+                this.trail = [];
+            }
+
+            update() {
+                this.trail.push({ x: this.x, y: this.y });
+                if (this.trail.length > 20) this.trail.shift();
+
+                this.x += this.vx;
+                this.y += this.vy;
+
+                // Check if reached target
+                const dx = this.targetX - this.x;
+                const dy = this.targetY - this.y;
+                if (Math.sqrt(dx * dx + dy * dy) < this.speed) {
+                    this.alive = false;
+                    explosions.push(new Explosion(this.targetX, this.targetY, true));
+                    playSound('explosion');
+                }
+            }
+
+            draw() {
+                // Fixed-length trail
+                if (this.trail.length > 1) {
+                    ctx.strokeStyle = '#00ff00';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.moveTo(this.trail[0].x, this.trail[0].y);
+                    for (let i = 1; i < this.trail.length; i++) {
+                        ctx.lineTo(this.trail[i].x, this.trail[i].y);
+                    }
+                    ctx.lineTo(this.x, this.y);
+                    ctx.stroke();
+                }
+
+                // Missile head
+                ctx.fillStyle = '#00ff00';
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        class EnemyMissile {
+            constructor(startX, startY, targetX, targetY, canMIRV = true) {
+                // If no params, create from top of screen
+                if (startX === undefined) {
+                    this.startX = Math.random() * gameWidth;
+                    this.startY = 0;
+                } else {
+                    this.startX = startX;
+                    this.startY = startY;
+                }
+                this.x = this.startX;
+                this.y = this.startY;
+
+                // Target a city or the base
+                if (targetX !== undefined) {
+                    this.targetX = targetX;
+                    this.targetY = targetY;
+                } else {
+                    const aliveCities = cities.filter(c => c.alive);
+                    if (aliveCities.length > 0) {
+                        const target = aliveCities[Math.floor(Math.random() * aliveCities.length)];
+                        this.targetX = target.x;
+                        this.targetY = target.y;
+                    } else {
+                        this.targetX = gameWidth / 2;
+                        this.targetY = baseY;
+                    }
+                }
+
+                const dx = this.targetX - this.startX;
+                const dy = this.targetY - this.startY;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                this.speed = 1 + wave * 0.3;
+                this.vx = (dx / dist) * this.speed;
+                this.vy = (dy / dist) * this.speed;
+                this.alive = true;
+                this.trail = [];
+
+                // MIRV properties
+                this.canMIRV = canMIRV;
+                this.hasSplit = false;
+                this.isMIRV = canMIRV && Math.random() < 0.15 + wave * 0.05; // Increasing chance per wave
+            }
+
+            update() {
+                this.trail.push({ x: this.x, y: this.y });
+                if (this.trail.length > 30) this.trail.shift();
+
+                this.x += this.vx;
+                this.y += this.vy;
+
+                // MIRV split - when missile reaches 30-50% of screen height
+                if (this.isMIRV && !this.hasSplit && this.y > gameHeight * 0.3 && this.y < gameHeight * 0.5) {
+                    this.hasSplit = true;
+                    // Split into 2-3 warheads targeting different cities
+                    const aliveCities = cities.filter(c => c.alive);
+                    const numSplits = Math.min(2 + Math.floor(Math.random() * 2), aliveCities.length);
+
+                    if (aliveCities.length > 0) {
+                        // Shuffle and pick targets
+                        const shuffled = [...aliveCities].sort(() => Math.random() - 0.5);
+                        for (let i = 0; i < numSplits; i++) {
+                            const target = shuffled[i % shuffled.length];
+                            // Create child warhead (canMIRV = false so it won't split again)
+                            enemyMissiles.push(new EnemyMissile(this.x, this.y, target.x, target.y, false));
+                        }
+                        // Original missile dies after splitting
+                        this.alive = false;
+                        return;
+                    }
+                }
+
+                // Check if reached target
+                if (this.y >= baseY) {
+                    this.alive = false;
+                    // Check if hit a city
+                    for (let city of cities) {
+                        if (city.alive && Math.abs(this.x - city.x) < 25) {
+                            city.alive = false;
+                            playSound('cityHit');
+                            explosions.push(new Explosion(city.x, city.y, false));
+                            break;
+                        }
+                    }
+                }
+            }
+
+            draw() {
+                // MIRV missiles are orange, regular are red
+                const color = (this.isMIRV && !this.hasSplit) ? '#ffaa00' : '#ff0000';
+                const headSize = (this.isMIRV && !this.hasSplit) ? 6 : 4;
+
+                // Fixed-length trail
+                if (this.trail.length > 1) {
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = (this.isMIRV && !this.hasSplit) ? 3 : 2;
+                    ctx.beginPath();
+                    ctx.moveTo(this.trail[0].x, this.trail[0].y);
+                    for (let i = 1; i < this.trail.length; i++) {
+                        ctx.lineTo(this.trail[i].x, this.trail[i].y);
+                    }
+                    ctx.lineTo(this.x, this.y);
+                    ctx.stroke();
+                }
+
+                // Missile head
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, headSize, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        class Explosion {
+            constructor(x, y, isPlayer) {
+                this.x = x;
+                this.y = y;
+                this.radius = 0;
+                this.maxRadius = isPlayer ? 50 : 30;
+                this.growing = true;
+                this.isPlayer = isPlayer;
+                this.alive = true;
+            }
+
+            update() {
+                if (this.growing) {
+                    this.radius += 3;
+                    if (this.radius >= this.maxRadius) {
+                        this.growing = false;
+                    }
+                } else {
+                    this.radius -= 2;
+                    if (this.radius <= 0) {
+                        this.alive = false;
+                    }
+                }
+
+                // Check collision with enemy missiles (only player explosions)
+                if (this.isPlayer && this.radius > 0) {
+                    for (let missile of enemyMissiles) {
+                        if (!missile.alive) continue;
+                        const dx = missile.x - this.x;
+                        const dy = missile.y - this.y;
+                        if (Math.sqrt(dx * dx + dy * dy) < this.radius) {
+                            missile.alive = false;
+                            score += 25;
+                            updateHUD();
+                        }
+                    }
+
+                    // Check collision with drones
+                    for (let drone of drones) {
+                        if (!drone.alive) continue;
+                        const dx = drone.x - this.x;
+                        const dy = drone.y - this.y;
+                        if (Math.sqrt(dx * dx + dy * dy) < this.radius + 15) {
+                            drone.alive = false;
+                            score += 50;
+                            playSound('explosion');
+                            updateHUD();
+                        }
+                    }
+
+                    // Check collision with paragliders
+                    for (let para of paragliders) {
+                        if (!para.alive) continue;
+                        const dx = para.x - this.x;
+                        const dy = para.y - this.y;
+                        if (Math.sqrt(dx * dx + dy * dy) < this.radius + 20) {
+                            para.alive = false;
+                            score += 75;
+                            playSound('explosion');
+                            updateHUD();
+                        }
+                    }
+
+                    // Check collision with terrorists
+                    for (let terrorist of terrorists) {
+                        if (!terrorist.alive) continue;
+                        const dx = terrorist.x - this.x;
+                        const dy = terrorist.y - this.y;
+                        if (Math.sqrt(dx * dx + dy * dy) < this.radius + 10) {
+                            terrorist.alive = false;
+                            score += 100;
+                            playSound('explosion');
+                            updateHUD();
+                        }
+                    }
+                }
+            }
+
+            draw() {
+                const gradient = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.radius);
+                if (this.isPlayer) {
+                    gradient.addColorStop(0, 'white');
+                    gradient.addColorStop(0.3, '#ffff00');
+                    gradient.addColorStop(0.6, '#ff6600');
+                    gradient.addColorStop(1, 'rgba(255, 0, 0, 0)');
+                } else {
+                    gradient.addColorStop(0, 'white');
+                    gradient.addColorStop(0.3, '#ff6600');
+                    gradient.addColorStop(1, 'rgba(255, 0, 0, 0)');
+                }
+                ctx.fillStyle = gradient;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        // Drone class - comes from sides
+        class Drone {
+            constructor() {
+                this.fromLeft = Math.random() < 0.5;
+                this.x = this.fromLeft ? -20 : gameWidth + 20;
+                // Spawn at 2/3 down screen with some randomness
+                this.y = gameHeight * 0.5 + Math.random() * gameHeight * 0.2;
+
+                // Target a city
+                const aliveCities = cities.filter(c => c.alive);
+                if (aliveCities.length > 0) {
+                    const target = aliveCities[Math.floor(Math.random() * aliveCities.length)];
+                    this.targetX = target.x;
+                    this.targetY = target.y - 10;
+                } else {
+                    this.targetX = gameWidth / 2;
+                    this.targetY = baseY - 10;
+                }
+
+                this.speed = 2 + wave * 0.2;
+                const dx = this.targetX - this.x;
+                const dy = this.targetY - this.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                this.vx = (dx / dist) * this.speed;
+                this.vy = (dy / dist) * this.speed;
+                this.alive = true;
+                this.propellerAngle = 0;
+                this.soundTimer = 0;
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.propellerAngle += 0.5;
+
+                // Play drone buzzing sound periodically
+                this.soundTimer++;
+                if (this.soundTimer >= 30) {
+                    this.soundTimer = 0;
+                    playSound('drone');
+                }
+
+                // Check if reached target
+                const dx = this.targetX - this.x;
+                const dy = this.targetY - this.y;
+                if (Math.sqrt(dx * dx + dy * dy) < 15) {
+                    this.alive = false;
+                    // Hit a city
+                    for (let city of cities) {
+                        if (city.alive && Math.abs(this.x - city.x) < 30) {
+                            city.alive = false;
+                            playSound('cityHit');
+                            explosions.push(new Explosion(city.x, city.y, false));
+                            break;
+                        }
+                    }
+                }
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+
+                // Drone body (quadcopter style)
+                ctx.fillStyle = '#333';
+                ctx.fillRect(-12, -4, 24, 8);
+                ctx.fillRect(-4, -8, 8, 16);
+
+                // Arms
+                ctx.strokeStyle = '#555';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(-12, 0);
+                ctx.lineTo(-20, -8);
+                ctx.moveTo(12, 0);
+                ctx.lineTo(20, -8);
+                ctx.moveTo(-12, 0);
+                ctx.lineTo(-20, 8);
+                ctx.moveTo(12, 0);
+                ctx.lineTo(20, 8);
+                ctx.stroke();
+
+                // Propellers (spinning)
+                ctx.strokeStyle = '#888';
+                ctx.lineWidth = 2;
+                const propPositions = [[-20, -8], [20, -8], [-20, 8], [20, 8]];
+                for (let [px, py] of propPositions) {
+                    ctx.save();
+                    ctx.translate(px, py);
+                    ctx.rotate(this.propellerAngle);
+                    ctx.beginPath();
+                    ctx.moveTo(-6, 0);
+                    ctx.lineTo(6, 0);
+                    ctx.stroke();
+                    ctx.restore();
+                }
+
+                // Red light
+                ctx.fillStyle = '#ff0000';
+                ctx.beginPath();
+                ctx.arc(0, 0, 2, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.restore();
+            }
+        }
+
+        // Paraglider class - descends and drops terrorist
+        class Paraglider {
+            constructor() {
+                this.fromLeft = Math.random() < 0.5;
+                this.x = this.fromLeft ? -30 : gameWidth + 30;
+                this.y = gameHeight * 0.1 + Math.random() * gameHeight * 0.1;
+
+                // Target landing zone between cities
+                const aliveCities = cities.filter(c => c.alive);
+                if (aliveCities.length > 1) {
+                    // Pick two adjacent cities and land between them
+                    const idx = Math.floor(Math.random() * (aliveCities.length - 1));
+                    this.targetX = (aliveCities[idx].x + aliveCities[idx + 1].x) / 2;
+                } else if (aliveCities.length === 1) {
+                    this.targetX = aliveCities[0].x + (this.fromLeft ? 40 : -40);
+                } else {
+                    this.targetX = gameWidth / 2;
+                }
+                this.targetY = baseY;
+
+                this.speed = 1.5 + wave * 0.1;
+                this.alive = true;
+                this.landed = false;
+                this.swayOffset = Math.random() * Math.PI * 2;
+            }
+
+            update() {
+                // Move toward target with slight sway
+                const dx = this.targetX - this.x;
+                const dy = this.targetY - this.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                if (dist > 5) {
+                    this.x += (dx / dist) * this.speed + Math.sin(Date.now() * 0.003 + this.swayOffset) * 0.5;
+                    this.y += (dy / dist) * this.speed * 0.7; // Descend slower
+                }
+
+                // Check if landed
+                if (this.y >= baseY - 5 && !this.landed) {
+                    this.landed = true;
+                    this.alive = false;
+                    // Spawn terrorist
+                    terrorists.push(new Terrorist(this.x, baseY));
+                }
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+
+                // Parachute canopy
+                ctx.fillStyle = '#228B22';
+                ctx.beginPath();
+                ctx.arc(0, -20, 20, Math.PI, 0);
+                ctx.fill();
+
+                // Stripes on canopy
+                ctx.strokeStyle = '#006400';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(-10, -20);
+                ctx.lineTo(-5, 0);
+                ctx.moveTo(0, -20);
+                ctx.lineTo(0, 0);
+                ctx.moveTo(10, -20);
+                ctx.lineTo(5, 0);
+                ctx.stroke();
+
+                // Lines
+                ctx.strokeStyle = '#333';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(-18, -15);
+                ctx.lineTo(0, 5);
+                ctx.moveTo(18, -15);
+                ctx.lineTo(0, 5);
+                ctx.stroke();
+
+                // Person
+                ctx.fillStyle = '#222';
+                ctx.beginPath();
+                ctx.arc(0, 8, 4, 0, Math.PI * 2); // Head
+                ctx.fill();
+                ctx.fillRect(-3, 12, 6, 10); // Body
+
+                // Legs (dangling)
+                ctx.strokeStyle = '#222';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(-2, 22);
+                ctx.lineTo(-4, 30);
+                ctx.moveTo(2, 22);
+                ctx.lineTo(4, 30);
+                ctx.stroke();
+
+                ctx.restore();
+            }
+        }
+
+        // Terrorist class - runs toward city after landing
+        class Terrorist {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.alive = true;
+                this.speed = 2 + wave * 0.3;
+                this.runFrame = 0;
+
+                // Find nearest city
+                const aliveCities = cities.filter(c => c.alive);
+                if (aliveCities.length > 0) {
+                    let nearest = aliveCities[0];
+                    let minDist = Math.abs(this.x - nearest.x);
+                    for (let city of aliveCities) {
+                        const d = Math.abs(this.x - city.x);
+                        if (d < minDist) {
+                            minDist = d;
+                            nearest = city;
+                        }
+                    }
+                    this.targetCity = nearest;
+                    this.direction = this.targetCity.x > this.x ? 1 : -1;
+                } else {
+                    this.targetCity = null;
+                    this.direction = 1;
+                }
+            }
+
+            update() {
+                if (!this.targetCity || !this.targetCity.alive) {
+                    // Find new target
+                    const aliveCities = cities.filter(c => c.alive);
+                    if (aliveCities.length > 0) {
+                        let nearest = aliveCities[0];
+                        let minDist = Math.abs(this.x - nearest.x);
+                        for (let city of aliveCities) {
+                            const d = Math.abs(this.x - city.x);
+                            if (d < minDist) {
+                                minDist = d;
+                                nearest = city;
+                            }
+                        }
+                        this.targetCity = nearest;
+                        this.direction = this.targetCity.x > this.x ? 1 : -1;
+                    } else {
+                        this.alive = false;
+                        return;
+                    }
+                }
+
+                this.x += this.direction * this.speed;
+                this.runFrame += 0.3;
+
+                // Check if reached city
+                if (this.targetCity && Math.abs(this.x - this.targetCity.x) < 15) {
+                    this.alive = false;
+                    this.targetCity.alive = false;
+                    playSound('cityHit');
+                    explosions.push(new Explosion(this.targetCity.x, this.targetCity.y, false));
+                }
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.scale(this.direction, 1); // Face direction of movement
+
+                // Running animation
+                const legOffset = Math.sin(this.runFrame) * 5;
+
+                // Body
+                ctx.fillStyle = '#222';
+                ctx.beginPath();
+                ctx.arc(0, -15, 5, 0, Math.PI * 2); // Head
+                ctx.fill();
+
+                // Torso
+                ctx.fillRect(-3, -10, 6, 12);
+
+                // Arms (one forward, one back)
+                ctx.strokeStyle = '#222';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(0, -8);
+                ctx.lineTo(5 + legOffset, -5);
+                ctx.moveTo(0, -8);
+                ctx.lineTo(-5 - legOffset, -5);
+                ctx.stroke();
+
+                // Legs (running)
+                ctx.beginPath();
+                ctx.moveTo(0, 2);
+                ctx.lineTo(4 + legOffset, 10);
+                ctx.moveTo(0, 2);
+                ctx.lineTo(-4 - legOffset, 10);
+                ctx.stroke();
+
+                ctx.restore();
+            }
+        }
+
+        function initGame() {
+            baseY = gameHeight - 60;
+            score = 0;
+            wave = 1;
+            gameRunning = true;
+            waveSpawning = false;
+            gameSessionId = generateSessionId();
+
+            // Create cities with Israeli city names
+            cities = [];
+            const cityNames = ['Tel Aviv', 'Haifa', 'Beersheba', 'Eilat', 'Netanya', 'Ashkelon'];
+            const citySpacing = gameWidth / 7;
+            for (let i = 0; i < 6; i++) {
+                cities.push(new City(citySpacing * (i + 1), cityNames[i]));
+            }
+
+            playerMissiles = [];
+            enemyMissiles = [];
+            explosions = [];
+            drones = [];
+            paragliders = [];
+            terrorists = [];
+            crosshair = { x: gameWidth / 2, y: gameHeight / 2 };
+
+            spawnWave();
+            updateHUD();
+        }
+
+        function spawnWave() {
+            waveSpawning = true;
+            const numMissiles = 5 + wave * 2;
+            const delay = Math.max(500, 1500 - wave * 100);
+
+            // Spawn missiles
+            for (let i = 0; i < numMissiles; i++) {
+                setTimeout(() => {
+                    if (gameRunning) {
+                        enemyMissiles.push(new EnemyMissile());
+                    }
+                    // Mark spawning complete after last missile
+                    if (i === numMissiles - 1) {
+                        waveSpawning = false;
+                    }
+                }, i * delay);
+            }
+
+            // Spawn drones (starting wave 2)
+            if (wave >= 2) {
+                const numDrones = Math.min(wave - 1, 4);
+                for (let i = 0; i < numDrones; i++) {
+                    setTimeout(() => {
+                        if (gameRunning && cities.filter(c => c.alive).length > 0) {
+                            drones.push(new Drone());
+                        }
+                    }, 2000 + i * 3000);
+                }
+            }
+
+            // Spawn paragliders (starting wave 3)
+            if (wave >= 3) {
+                const numParas = Math.min(wave - 2, 3);
+                for (let i = 0; i < numParas; i++) {
+                    setTimeout(() => {
+                        if (gameRunning && cities.filter(c => c.alive).length > 0) {
+                            paragliders.push(new Paraglider());
+                        }
+                    }, 4000 + i * 4000);
+                }
+            }
+        }
+
+        function updateHUD() {
+            document.getElementById('score').textContent = 'SCORE: ' + score;
+            const aliveCities = cities.filter(c => c.alive).length;
+            document.getElementById('cities').textContent = 'CITIES: ' + aliveCities;
+        }
+
+        function checkGameOver() {
+            const aliveCities = cities.filter(c => c.alive).length;
+            if (aliveCities === 0) {
+                gameRunning = false;
+                document.getElementById('finalScore').textContent = 'SCORE: ' + score;
+                document.getElementById('waveReached').textContent = 'WAVE REACHED: ' + wave;
+                document.getElementById('gameOverScreen').classList.remove('hidden');
+
+                // Generate verification QR code
+                setTimeout(() => {
+                    generateScoreQR(score, wave);
+                }, 100);
+            }
+        }
+
+        function checkWaveComplete() {
+            // Only check if not already spawning a wave and all threats cleared
+            const allClear = enemyMissiles.length === 0 &&
+                             drones.length === 0 &&
+                             paragliders.length === 0 &&
+                             terrorists.length === 0;
+
+            if (allClear && gameRunning && !waveSpawning) {
+                waveSpawning = true; // Prevent multiple triggers
+
+                // Bonus for surviving cities
+                const aliveCities = cities.filter(c => c.alive).length;
+                score += aliveCities * 100;
+                updateHUD();
+
+                wave++;
+                setTimeout(() => {
+                    if (gameRunning) spawnWave();
+                }, 2000);
+            }
+        }
+
+        function update() {
+            if (!gameRunning) return;
+
+            // Update player missiles
+            for (let i = playerMissiles.length - 1; i >= 0; i--) {
+                playerMissiles[i].update();
+                if (!playerMissiles[i].alive) {
+                    playerMissiles.splice(i, 1);
+                }
+            }
+
+            // Update enemy missiles
+            for (let i = enemyMissiles.length - 1; i >= 0; i--) {
+                enemyMissiles[i].update();
+                if (!enemyMissiles[i].alive) {
+                    enemyMissiles.splice(i, 1);
+                }
+            }
+
+            // Update explosions
+            for (let i = explosions.length - 1; i >= 0; i--) {
+                explosions[i].update();
+                if (!explosions[i].alive) {
+                    explosions.splice(i, 1);
+                }
+            }
+
+            // Update drones
+            for (let i = drones.length - 1; i >= 0; i--) {
+                drones[i].update();
+                if (!drones[i].alive) {
+                    drones.splice(i, 1);
+                }
+            }
+
+            // Update paragliders
+            for (let i = paragliders.length - 1; i >= 0; i--) {
+                paragliders[i].update();
+                if (!paragliders[i].alive) {
+                    paragliders.splice(i, 1);
+                }
+            }
+
+            // Update terrorists
+            for (let i = terrorists.length - 1; i >= 0; i--) {
+                terrorists[i].update();
+                if (!terrorists[i].alive) {
+                    terrorists.splice(i, 1);
+                }
+            }
+
+            checkGameOver();
+            checkWaveComplete();
+        }
+
+        function draw() {
+            // Sky gradient
+            const gradient = ctx.createLinearGradient(0, 0, 0, gameHeight);
+            gradient.addColorStop(0, '#000022');
+            gradient.addColorStop(1, '#000044');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, gameWidth, gameHeight);
+
+            // Ground
+            ctx.fillStyle = '#444400';
+            ctx.fillRect(0, baseY, gameWidth, gameHeight - baseY);
+
+            // Missile base
+            ctx.fillStyle = '#00aa00';
+            ctx.beginPath();
+            ctx.moveTo(gameWidth / 2 - 30, baseY);
+            ctx.lineTo(gameWidth / 2 + 30, baseY);
+            ctx.lineTo(gameWidth / 2 + 15, baseY - 20);
+            ctx.lineTo(gameWidth / 2 - 15, baseY - 20);
+            ctx.closePath();
+            ctx.fill();
+
+            // Draw cities
+            for (let city of cities) {
+                city.draw();
+            }
+
+            // Defense platform label
+            ctx.fillStyle = 'rgba(0, 255, 0, 0.7)';
+            ctx.font = '10px Courier New';
+            ctx.textAlign = 'center';
+            ctx.fillText('IRON DOME', gameWidth / 2, baseY + 12);
+
+            // Draw enemy missiles
+            for (let missile of enemyMissiles) {
+                missile.draw();
+            }
+
+            // Draw player missiles
+            for (let missile of playerMissiles) {
+                missile.draw();
+            }
+
+            // Draw explosions
+            for (let explosion of explosions) {
+                explosion.draw();
+            }
+
+            // Draw drones
+            for (let drone of drones) {
+                drone.draw();
+            }
+
+            // Draw paragliders
+            for (let para of paragliders) {
+                para.draw();
+            }
+
+            // Draw terrorists
+            for (let terrorist of terrorists) {
+                terrorist.draw();
+            }
+
+            // Draw crosshair
+            if (gameRunning) {
+                ctx.strokeStyle = '#00ff00';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(crosshair.x - 15, crosshair.y);
+                ctx.lineTo(crosshair.x + 15, crosshair.y);
+                ctx.moveTo(crosshair.x, crosshair.y - 15);
+                ctx.lineTo(crosshair.x, crosshair.y + 15);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.arc(crosshair.x, crosshair.y, 10, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+
+            // Wave indicator
+            if (gameRunning) {
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+                ctx.font = '14px Courier New';
+                ctx.textAlign = 'center';
+
+                // Wave names
+                let waveName = '';
+                if (wave === 2) {
+                    waveName = ' - INTIFADA';
+                } else if (wave >= 3) {
+                    waveName = ' - AL-AQSA FLOOD';
+                }
+                ctx.fillText('WAVE ' + wave + waveName, gameWidth / 2, 60);
+            }
+        }
+
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Touch/Mouse controls
+        let isDragging = false;
+
+        function handleMove(x, y) {
+            crosshair.x = x;
+            crosshair.y = Math.min(y, baseY - 50); // Don't aim below cities
+        }
+
+        function handleShoot() {
+            if (!gameRunning) return;
+            initAudio();
+            playSound('shoot');
+            playerMissiles.push(new PlayerMissile(
+                gameWidth / 2,
+                baseY - 20,
+                crosshair.x,
+                crosshair.y
+            ));
+        }
+
+        // Touch events
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            initAudio();
+            const touch = e.touches[0];
+            handleMove(touch.clientX, touch.clientY);
+            isDragging = true;
+        });
+
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            if (isDragging) {
+                const touch = e.touches[0];
+                handleMove(touch.clientX, touch.clientY);
+            }
+        });
+
+        canvas.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            if (isDragging) {
+                handleShoot();
+                isDragging = false;
+            }
+        });
+
+        // Mouse events (for testing)
+        canvas.addEventListener('mousemove', (e) => {
+            handleMove(e.clientX, e.clientY);
+        });
+
+        canvas.addEventListener('click', (e) => {
+            handleShoot();
+        });
+
+        // Start/Restart buttons
+        document.getElementById('startBtn').addEventListener('click', () => {
+            initAudio();
+            document.getElementById('startScreen').classList.add('hidden');
+            initGame();
+        });
+
+        document.getElementById('restartBtn').addEventListener('click', () => {
+            document.getElementById('gameOverScreen').classList.add('hidden');
+            initGame();
+        });
+
+        // Prevent scrolling
+        document.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+
+        // Start game loop
+        gameLoop();
+    </script>
+</body>
+</html>

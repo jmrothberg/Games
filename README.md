@@ -1,87 +1,114 @@
-# 3D Tank Battle Game
+# JMR's Games Collection
 
-A Python-based 3D tank battle game featuring both single-player and multiplayer modes, powered by Pygame.
+A collection of games by JMR - playable on desktop and mobile (iPhone/iPad).
 
-## Features
+---
 
-- **Multiple Game Modes**
-  - Single-player against AI tanks
-  - Two-player networked multiplayer (host/join)
-  - Automatic network discovery for finding local games
+## Mobile HTML5 Games
 
-- **3D Graphics**
-  - Rendered using Pygame's 2D engine with 3D perspective calculations
-  - Dynamic camera system with scope view and minimap
-  - Real-time shadows and explosions
+These games work directly in your browser on iPhone, iPad, or desktop. No installation needed!
 
-- **Gameplay Elements**
-  - Multiple weapon systems (Cannon, Minigun, Rockets)
-  - Power-ups (Health, Speed, Cooldown)
-  - Destructible environment
-  - Sound effects for shooting and impacts
+### JMR's Asteroids
+**File:** `asteroids.html`
 
-- **Difficulty Levels**
-  - Woke (Easy)
-  - Medium
-  - Based (Hard)
+Classic asteroid-shooting action with touch controls.
 
-## Requirements
-pip install pygame
-pip install python-nmap
+- **Controls:** Tap left/right to rotate, tap thrust to move, tap fire to shoot
+- **Features:**
+  - "Gene Machine" ship label
+  - Retina display support
+  - Touch-optimized for mobile
 
+**Play:** `https://raw.githack.com/jmrothberg/Games/main/asteroids.html`
 
-## Controls
+---
 
-- **Arrow Keys**: Move tank forward/backward and rotate
-- **Q/Z**: Adjust barrel angle up/down
-- **Spacebar**: Fire weapon
-- **H**: Toggle help screen
-- **R**: Reset game (when game over)
-- **X**: Exit game (when game over)
+### JMR's Pac-Man
+**File:** `pacman.html` (Version 7)
 
-## Network Setup
+Classic maze chase with ghosts!
 
-For multiplayer mode:
-1. First player selects "Host" and shares their IP address
-2. Second player selects "Join" and enters the host's IP address
-3. Game automatically synchronizes between players
+- **Controls:**
+  - D-pad buttons on screen
+  - Swipe in any direction
+- **Features:**
+  - 4 colored ghosts with AI
+  - Power pellets to eat ghosts
+  - Touch and swipe controls
 
-## Difficulty Settings
+**Play:** `https://raw.githack.com/jmrothberg/Games/main/pacman.html`
 
-Select difficulty at game start:
-- **W**: Woke (Easy) - More obstacles, weaker enemies, faster player
-- **M**: Medium - Balanced gameplay
-- **B**: Based (Hard) - Fewer obstacles, stronger enemies, slower player
+---
 
-## Power-ups
+### JMR's Iron Dome
+**File:** `missile.html` (Version 9)
 
-- **Health** (Orange): Restore tank health
-- **Speed** (Cyan): Increase movement speed
-- **Cooldown** (Magenta): Reduce weapon cooldown
-- **Weapons**:
-  - Minigun (Purple): Rapid-fire, low damage
-  - Cannon (White): Standard weapon, balanced damage
-  - Rocket (Pink): Slow-fire, high damage
+Defend Israeli cities from incoming attacks! Inspired by Missile Command.
 
-## Development
+- **Controls:**
+  - Drag to aim crosshair
+  - Tap/release to launch interceptor
+- **Features:**
+  - 6 cities to defend (Tel Aviv, Haifa, Beersheba, Eilat, Netanya, Ashkelon)
+  - Multiple enemy types:
+    - Missiles (some are MIRVs that split!)
+    - Drones with buzzing sound (Wave 2+)
+    - Paragliders that drop terrorists (Wave 3+)
+    - Terrorists that run toward cities
+  - Wave names: "Intifada" (Wave 2), "Al-Aqsa Flood" (Wave 3+)
+  - QR code score verification for contests
+  - Sound effects
 
-Created by JMR, July 2024
-- Initial release: June 27, 2024
-- Latest update: July 21, 2024
+**Play:** `https://raw.githack.com/jmrothberg/Games/main/missile.html`
 
-## Known Issues
+**Score Verification:** `verify.html` - Scan QR codes to verify contest scores
 
-- Network reconnection may be unstable in some situations
-- Sound effects require specific WAV files to be present
+---
 
-## Future Enhancements
+## Desktop Python Games
 
-- Additional weapon types
-- More power-up varieties
-- Enhanced AI behavior
-- Improved network stability
-- Additional game modes
+### 3D Tank Battle
+**Files:** `3D_Network_Tank_Feb_4_25.py`, `3D_Network_Tank_July_21_24_rockets.py`
+
+A 3D tank battle game with single-player and multiplayer modes.
+
+- **Requirements:** `pip install pygame python-nmap`
+- **Controls:**
+  - Arrow Keys: Move/rotate tank
+  - Q/Z: Adjust barrel angle
+  - Spacebar: Fire
+- **Features:**
+  - 3D graphics with Pygame
+  - Networked multiplayer
+  - Multiple weapons (Cannon, Minigun, Rockets)
+  - Difficulty levels: Woke (Easy), Medium, Based (Hard)
+
+See `READMEDOOMNETWORK.MD` for more details.
+
+---
+
+### Doom-style Game
+**File:** `doom3_Feb_6_7pm.py`
+
+A Doom-inspired first-person game.
+
+---
+
+## Quick Links
+
+| Game | Platform | Link |
+|------|----------|------|
+| Asteroids | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/asteroids.html) |
+| Pac-Man | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/pacman.html) |
+| Iron Dome | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/missile.html) |
+| Tank Battle | Desktop (Python) | Download & run with Python |
+
+---
+
+## Author
+
+Created by JMR, 2024-2025
 
 ## License
 
-This project is open source and available under the MIT License.
+MIT License
