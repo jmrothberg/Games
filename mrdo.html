@@ -155,7 +155,7 @@
 
     <div id="startScreen">
         <h1>JMR'S MR. DO!</h1>
-        <p class="version">Version 3</p>
+        <p class="version">Version 4</p>
         <p>Dig tunnels and collect cherries!<br>Throw your power ball at enemies<br>Push apples to crush them<br>Collect E-X-T-R-A for bonus!</p>
         <button class="start-btn" id="startBtn">START GAME</button>
     </div>
@@ -290,6 +290,7 @@
 
         // Game state
         let score = 0, level = 1, lives = 3, gameRunning = false;
+        let levelTransitioning = false; // Prevent multiple level triggers
         let grid = [];
         let player = null;
         let enemies = [];
@@ -1126,12 +1127,17 @@
 
         function nextLevel() {
             level++;
+            levelTransitioning = false; // Reset flag
             initLevel();
         }
 
         function checkLevelComplete() {
+            // Prevent multiple triggers
+            if (levelTransitioning) return false;
+
             // Level complete if all cherries collected OR all enemies dead
             if (cherries.length === 0) {
+                levelTransitioning = true;
                 score += 500;
                 setTimeout(() => nextLevel(), 1000);
                 return true;
@@ -1139,6 +1145,7 @@
 
             const aliveEnemies = enemies.filter(e => e.alive);
             if (aliveEnemies.length === 0) {
+                levelTransitioning = true;
                 score += 500;
                 setTimeout(() => nextLevel(), 1000);
                 return true;
