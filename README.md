@@ -1,13 +1,13 @@
 # JMR's Games Collection
 
-![Games](https://img.shields.io/badge/Games-HTML5%20%2B%20Python-blue)
+![Games](https://img.shields.io/badge/Games-HTML5-blue)
 ![Mobile](https://img.shields.io/badge/Mobile-iOS%20%2B%20Android-green)
 
-A collection of games by Jonathan M. Rothberg - playable on desktop and mobile (iPhone/iPad).
+A collection of HTML5 games by Jonathan M. Rothberg - playable on desktop and mobile (iPhone/iPad).
 
 ---
 
-## Mobile HTML5 Games
+## HTML5 Games
 
 These games work directly in your browser on iPhone, iPad, or desktop. No installation needed!
 
@@ -139,35 +139,6 @@ Classic dig-and-collect arcade action! Based on the 1982 Universal classic.
 
 ---
 
-## Desktop Python Games
-
-### 3D Tank Battle (Python - Multiplayer)
-**Files:** `3D_Network_Tank_Feb_4_25.py`, `3D_Network_Tank_July_21_24_rockets.py`
-
-The original Python version with networked multiplayer support.
-
-- **Requirements:** `pip install pygame python-nmap`
-- **Controls:**
-  - Arrow Keys: Move/rotate tank
-  - Q/Z: Adjust barrel angle
-  - Spacebar: Fire
-- **Features:**
-  - 3D graphics with Pygame
-  - Networked multiplayer (host/join)
-  - Multiple weapons (Cannon, Minigun, Rockets)
-  - Difficulty levels: Woke (Easy), Medium, Based (Hard)
-
-See `READMEDOOMNETWORK.MD` for more details.
-
----
-
-### Doom-style Game
-**File:** `doom3_Feb_6_7pm.py`
-
-A Doom-inspired first-person game.
-
----
-
 ## Quick Links
 
 | Game | Platform | Link |
@@ -178,7 +149,6 @@ A Doom-inspired first-person game.
 | Space Invaders | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/invaders.html) |
 | Mr. Do! | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/mrdo.html) |
 | 3D Tank Battle | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/3D_Tank_Battle.html) |
-| Tank Battle (Python) | Desktop | Download & run with Python |
 
 ---
 
