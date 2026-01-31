@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JMR's Iron Dome - Score Verification</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Courier New', monospace;
+            color: white;
+            padding: 20px;
+        }
+        .container {
+            background: rgba(0, 0, 0, 0.5);
+            border: 2px solid #ff6600;
+            border-radius: 15px;
+            padding: 30px;
+            max-width: 400px;
+            width: 100%;
+            text-align: center;
+        }
+        h1 {
+            color: #ff6600;
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+        h2 {
+            font-size: 18px;
+            margin-bottom: 20px;
+            color: #aaa;
+        }
+        .result {
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        .valid {
+            background: rgba(0, 255, 0, 0.2);
+            border: 2px solid #00ff00;
+        }
+        .invalid {
+            background: rgba(255, 0, 0, 0.2);
+            border: 2px solid #ff0000;
+        }
+        .score-display {
+            font-size: 36px;
+            font-weight: bold;
+            color: #ffff00;
+            margin: 10px 0;
+        }
+        .wave-display {
+            font-size: 18px;
+            color: #ff6600;
+            margin-bottom: 10px;
+        }
+        .status {
+            font-size: 20px;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+        .valid .status {
+            color: #00ff00;
+        }
+        .invalid .status {
+            color: #ff0000;
+        }
+        .details {
+            font-size: 12px;
+            color: #888;
+            margin-top: 15px;
+            text-align: left;
+            background: rgba(0,0,0,0.3);
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .details p {
+            margin: 5px 0;
+        }
+        .timestamp {
+            font-size: 14px;
+            color: #aaa;
+            margin-top: 10px;
+        }
+        .logo {
+            font-size: 40px;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">🛡️</div>
+        <h1>JMR'S IRON DOME</h1>
+        <h2>Score Verification</h2>
+
+        <div id="result" class="result">
+            <p>Verifying...</p>
+        </div>
+
+        <div class="details" id="details"></div>
+    </div>
+
+    <script>
+        // Same secret key as in the game (must match!)
+        const SECRET_KEY = 'JMR-IronDome-2024-Contest';
+
+        // Same hash function as in the game
+        function simpleHash(str) {
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) {
+                const char = str.charCodeAt(i);
+                hash = ((hash << 5) - hash) + char;
+                hash = hash & hash;
+            }
+            return Math.abs(hash).toString(36);
+        }
+
+        // Verify signature
+        function verifySignature(sessionId, score, wave, timestamp, providedSig) {
+            const data = `${sessionId}-${score}-${wave}-${timestamp}-${SECRET_KEY}`;
+            const expectedSig = simpleHash(data);
+            return expectedSig === providedSig;
+        }
+
+        // Parse URL parameters
+        function getParams() {
+            const params = new URLSearchParams(window.location.search);
+            return {
+                score: params.get('s'),
+                wave: params.get('w'),
+                timestamp: params.get('t'),
+                sessionId: params.get('id'),
+                signature: params.get('sig')
+            };
+        }
+
+        // Format timestamp
+        function formatTime(timestamp) {
+            const date = new Date(parseInt(timestamp));
+            return date.toLocaleString();
+        }
+
+        // Main verification
+        function verify() {
+            const resultDiv = document.getElementById('result');
+            const detailsDiv = document.getElementById('details');
+            const params = getParams();
+
+            // Check if all params exist
+            if (!params.score || !params.wave || !params.timestamp || !params.sessionId || !params.signature) {
+                resultDiv.className = 'result invalid';
+                resultDiv.innerHTML = `
+                    <p class="status">❌ INVALID</p>
+                    <p>Missing verification data</p>
+                `;
+                return;
+            }
+
+            // Verify the signature
+            const isValid = verifySignature(
+                params.sessionId,
+                params.score,
+                params.wave,
+                params.timestamp,
+                params.signature
+            );
+
+            if (isValid) {
+                resultDiv.className = 'result valid';
+                resultDiv.innerHTML = `
+                    <p class="status">✅ VERIFIED</p>
+                    <p class="score-display">${params.score}</p>
+                    <p class="wave-display">Wave Reached: ${params.wave}</p>
+                    <p class="timestamp">Played: ${formatTime(params.timestamp)}</p>
+                `;
+            } else {
+                resultDiv.className = 'result invalid';
+                resultDiv.innerHTML = `
+                    <p class="status">❌ INVALID</p>
+                    <p>Score verification failed</p>
+                    <p style="font-size: 12px; margin-top: 10px;">This score may have been tampered with</p>
+                `;
+            }
+
+            // Show technical details
+            detailsDiv.innerHTML = `
+                <p><strong>Session:</strong> ${params.sessionId}</p>
+                <p><strong>Signature:</strong> ${params.signature}</p>
+                <p><strong>Timestamp:</strong> ${params.timestamp}</p>
+            `;
+        }
+
+        // Run verification on page load
+        verify();
+    </script>
+</body>
+</html>

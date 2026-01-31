@@ -101,16 +101,23 @@
 
     <div id="startScreen">
         <h1>JMR'S IRON DOME</h1>
-        <p class="version">Version 5</p>
+        <p class="version">Version 6</p>
         <p>Drag to aim your crosshair<br>Tap to launch interceptors<br>Defend Jerusalem!</p>
         <button class="start-btn" id="startBtn">START GAME</button>
     </div>
 
     <div id="gameOverScreen" class="hidden">
-        <h1>GAME OVER</h1>
+        <h1>JMR'S IRON DOME</h1>
+        <h2 style="color: #ff6600; margin-bottom: 10px;">GAME OVER</h2>
         <p id="finalScore">SCORE: 0</p>
+        <p id="waveReached" style="font-size: 14px; margin-bottom: 15px;">WAVE: 1</p>
+        <div id="qrCode" style="background: white; padding: 10px; margin: 10px 0;"></div>
+        <p style="font-size: 10px; color: #aaa; margin-bottom: 15px;">Scan QR to verify score</p>
         <button class="start-btn" id="restartBtn">PLAY AGAIN</button>
     </div>
+
+    <!-- QR Code Library -->
+    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 
     <script>
         const canvas = document.getElementById('gameCanvas');
@@ -192,6 +199,64 @@
         let explosions = [];
         let crosshair = { x: 0, y: 0 };
         let baseY;
+        let qrCodeInstance = null;
+        let gameSessionId = null;
+
+        // Secret key for signing scores (in real app, this would be server-side)
+        const SECRET_KEY = 'JMR-IronDome-2024-Contest';
+
+        // Simple hash function for score verification
+        function simpleHash(str) {
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) {
+                const char = str.charCodeAt(i);
+                hash = ((hash << 5) - hash) + char;
+                hash = hash & hash;
+            }
+            return Math.abs(hash).toString(36);
+        }
+
+        // Generate verification signature
+        function generateSignature(sessionId, finalScore, finalWave, timestamp) {
+            const data = `${sessionId}-${finalScore}-${finalWave}-${timestamp}-${SECRET_KEY}`;
+            return simpleHash(data);
+        }
+
+        // Generate QR code for score verification
+        function generateScoreQR(finalScore, finalWave) {
+            const timestamp = Date.now();
+            const signature = generateSignature(gameSessionId, finalScore, finalWave, timestamp);
+
+            // Build verification URL (use same host or a verification page)
+            const params = new URLSearchParams({
+                s: finalScore,
+                w: finalWave,
+                t: timestamp,
+                id: gameSessionId,
+                sig: signature
+            });
+
+            const verifyUrl = `https://raw.githack.com/jmrothberg/Games/claude/asteroids-game-iphone-BpQVH/verify.html?${params.toString()}`;
+
+            // Clear previous QR code
+            const qrContainer = document.getElementById('qrCode');
+            qrContainer.innerHTML = '';
+
+            // Generate new QR code
+            qrCodeInstance = new QRCode(qrContainer, {
+                text: verifyUrl,
+                width: 128,
+                height: 128,
+                colorDark: '#000000',
+                colorLight: '#ffffff',
+                correctLevel: QRCode.CorrectLevel.M
+            });
+        }
+
+        // Generate unique session ID when game starts
+        function generateSessionId() {
+            return 'JMR' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+        }
 
         class City {
             constructor(x) {
@@ -455,6 +520,7 @@
             wave = 1;
             gameRunning = true;
             waveSpawning = false;
+            gameSessionId = generateSessionId();
 
             // Create cities
             cities = [];
@@ -500,7 +566,13 @@
             if (aliveCities === 0) {
                 gameRunning = false;
                 document.getElementById('finalScore').textContent = 'SCORE: ' + score;
+                document.getElementById('waveReached').textContent = 'WAVE REACHED: ' + wave;
                 document.getElementById('gameOverScreen').classList.remove('hidden');
+
+                // Generate verification QR code
+                setTimeout(() => {
+                    generateScoreQR(score, wave);
+                }, 100);
             }
         }
 
