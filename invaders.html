@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>JMR's Space Invaders</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            touch-action: none;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #000;
+        }
+        #gameCanvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #hud {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: white;
+            font-family: 'Courier New', monospace;
+            font-size: 16px;
+            text-shadow: 0 0 10px rgba(255,255,255,0.5);
+            z-index: 10;
+        }
+        #gameTitle {
+            color: #00ff00;
+            font-size: 12px;
+        }
+        #startScreen, #gameOverScreen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.9);
+            color: #00ff00;
+            font-family: 'Courier New', monospace;
+            z-index: 100;
+        }
+        #startScreen h1, #gameOverScreen h1 {
+            font-size: 24px;
+            margin-bottom: 10px;
+            text-shadow: 0 0 20px rgba(0,255,0,0.5);
+            text-align: center;
+        }
+        .version {
+            color: #00ff00;
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+        #startScreen p, #gameOverScreen p {
+            font-size: 14px;
+            margin-bottom: 20px;
+            text-align: center;
+            padding: 0 20px;
+            color: white;
+        }
+        .start-btn {
+            padding: 15px 40px;
+            font-size: 18px;
+            background: transparent;
+            border: 2px solid #00ff00;
+            color: #00ff00;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+        }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="hud">
+        <div id="score">SCORE: 0</div>
+        <div id="gameTitle">JMR'S SPACE INVADERS</div>
+        <div id="lives">LIVES: 3</div>
+    </div>
+
+    <div id="startScreen">
+        <h1>JMR'S SPACE INVADERS</h1>
+        <p class="version">Version 1</p>
+        <p>Tap left/right to move<br>Tap center to shoot<br>Destroy all invaders!</p>
+        <button class="start-btn" id="startBtn">START GAME</button>
+    </div>
+
+    <div id="gameOverScreen" class="hidden">
+        <h1>JMR'S SPACE INVADERS</h1>
+        <h2 style="color: #00ff00; margin-bottom: 10px;">GAME OVER</h2>
+        <p id="finalScore">SCORE: 0</p>
+        <p id="waveReached" style="font-size: 14px; margin-bottom: 15px;">WAVE: 1</p>
+        <button class="start-btn" id="restartBtn">PLAY AGAIN</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Handle retina displays
+        let dpr, gameWidth, gameHeight;
+
+        function resize() {
+            dpr = window.devicePixelRatio || 1;
+            gameWidth = window.innerWidth;
+            gameHeight = window.innerHeight;
+            canvas.width = gameWidth * dpr;
+            canvas.height = gameHeight * dpr;
+            canvas.style.width = gameWidth + 'px';
+            canvas.style.height = gameHeight + 'px';
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Audio context for sound effects
+        let audioCtx = null;
+
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        function playSound(type) {
+            if (!audioCtx) return;
+
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            switch(type) {
+                case 'shoot':
+                    oscillator.type = 'square';
+                    oscillator.frequency.setValueAtTime(600, audioCtx.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(200, audioCtx.currentTime + 0.1);
+                    gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                    oscillator.start();
+                    oscillator.stop(audioCtx.currentTime + 0.1);
+                    break;
+                case 'explosion':
+                    oscillator.type = 'sawtooth';
+                    oscillator.frequency.setValueAtTime(150, audioCtx.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(30, audioCtx.currentTime + 0.2);
+                    gainNode.gain.setValueAtTime(0.4, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+                    oscillator.start();
+                    oscillator.stop(audioCtx.currentTime + 0.2);
+                    break;
+                case 'playerHit':
+                    oscillator.type = 'sawtooth';
+                    oscillator.frequency.setValueAtTime(200, audioCtx.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(50, audioCtx.currentTime + 0.4);
+                    gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
+                    oscillator.start();
+                    oscillator.stop(audioCtx.currentTime + 0.4);
+                    break;
+                case 'invaderMove':
+                    oscillator.type = 'square';
+                    oscillator.frequency.setValueAtTime(100 + Math.random() * 50, audioCtx.currentTime);
+                    gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.05);
+                    oscillator.start();
+                    oscillator.stop(audioCtx.currentTime + 0.05);
+                    break;
+            }
+        }
+
+        // ============================================================
+        // CUSTOM IMAGE SUPPORT (commented out - uncomment to use)
+        // ============================================================
+        // To use custom images for invaders, uncomment the following:
+        //
+        // const invaderImages = [];
+        // const imageUrls = [
+        //     'invader1.png',  // Row 0 - top row
+        //     'invader2.png',  // Row 1
+        //     'invader3.png',  // Row 2
+        //     'invader4.png',  // Row 3
+        //     'invader5.png',  // Row 4 - bottom row
+        // ];
+        //
+        // let imagesLoaded = 0;
+        // function loadImages(callback) {
+        //     imageUrls.forEach((url, index) => {
+        //         const img = new Image();
+        //         img.onload = () => {
+        //             imagesLoaded++;
+        //             if (imagesLoaded === imageUrls.length) {
+        //                 callback();
+        //             }
+        //         };
+        //         img.src = url;
+        //         invaderImages[index] = img;
+        //     });
+        // }
+        //
+        // // In Invader.draw(), replace the drawing code with:
+        // // if (invaderImages[this.row]) {
+        // //     ctx.drawImage(invaderImages[this.row], this.x - this.width/2, this.y - this.height/2, this.width, this.height);
+        // // }
+        //
+        // // For individual invader images (one per invader), use:
+        // // const allInvaderImages = [];  // Array of 55 images (11 columns x 5 rows)
+        // // In Invader constructor, add: this.imageIndex = row * 11 + col;
+        // // In Invader.draw(): ctx.drawImage(allInvaderImages[this.imageIndex], ...);
+        // ============================================================
+
+        // Game state
+        let score = 0, wave = 1, lives = 3, gameRunning = false;
+        let player = null;
+        let invaders = [];
+        let playerBullets = [];
+        let invaderBullets = [];
+        let explosions = [];
+        let barriers = [];
+
+        // Invader movement
+        let invaderDirection = 1;
+        let invaderSpeed = 1;
+        let moveTimer = 0;
+        let moveInterval = 30; // frames between moves
+
+        // Invader types for drawing (stick figures and monsters)
+        const INVADER_TYPES = {
+            MONSTER_1: 0,  // Top row - small monster
+            MONSTER_2: 1,  // Second row - medium monster
+            STICK_FIGURE: 2, // Middle rows - stick figures
+            MONSTER_3: 3,  // Fourth row - big monster
+            MONSTER_4: 4   // Bottom row - boss monster
+        };
+
+        class Player {
+            constructor() {
+                this.width = 40;
+                this.height = 20;
+                this.x = gameWidth / 2;
+                this.y = gameHeight - 80;
+                this.speed = 5;
+            }
+
+            moveLeft() {
+                this.x = Math.max(this.width / 2, this.x - this.speed);
+            }
+
+            moveRight() {
+                this.x = Math.min(gameWidth - this.width / 2, this.x + this.speed);
+            }
+
+            draw() {
+                ctx.fillStyle = '#00ff00';
+                // Ship body
+                ctx.fillRect(this.x - this.width / 2, this.y, this.width, this.height);
+                // Cannon
+                ctx.fillRect(this.x - 3, this.y - 10, 6, 10);
+                // Cockpit
+                ctx.fillRect(this.x - 8, this.y - 5, 16, 5);
+            }
+
+            shoot() {
+                if (playerBullets.length < 3) {
+                    playerBullets.push(new Bullet(this.x, this.y - 10, -8, true));
+                    playSound('shoot');
+                }
+            }
+        }
+
+        class Invader {
+            constructor(x, y, row, col) {
+                this.x = x;
+                this.y = y;
+                this.row = row;
+                this.col = col;
+                this.width = 30;
+                this.height = 24;
+                this.alive = true;
+                this.frame = 0; // For animation
+
+                // Assign type based on row
+                if (row === 0) this.type = INVADER_TYPES.MONSTER_1;
+                else if (row === 1) this.type = INVADER_TYPES.MONSTER_2;
+                else if (row === 2) this.type = INVADER_TYPES.STICK_FIGURE;
+                else if (row === 3) this.type = INVADER_TYPES.MONSTER_3;
+                else this.type = INVADER_TYPES.MONSTER_4;
+
+                // Points based on row (top = more points)
+                this.points = (5 - row) * 10;
+            }
+
+            draw() {
+                if (!this.alive) return;
+
+                ctx.save();
+                ctx.translate(this.x, this.y);
+
+                // ============================================================
+                // CUSTOM IMAGE DRAWING (uncomment to use images instead)
+                // ============================================================
+                // if (invaderImages[this.row]) {
+                //     ctx.drawImage(invaderImages[this.row], -this.width/2, -this.height/2, this.width, this.height);
+                //     ctx.restore();
+                //     return;
+                // }
+                // ============================================================
+
+                switch(this.type) {
+                    case INVADER_TYPES.MONSTER_1:
+                        this.drawMonster1();
+                        break;
+                    case INVADER_TYPES.MONSTER_2:
+                        this.drawMonster2();
+                        break;
+                    case INVADER_TYPES.STICK_FIGURE:
+                        this.drawStickFigure();
+                        break;
+                    case INVADER_TYPES.MONSTER_3:
+                        this.drawMonster3();
+                        break;
+                    case INVADER_TYPES.MONSTER_4:
+                        this.drawMonster4();
+                        break;
+                }
+
+                ctx.restore();
+            }
+
+            // Small squid-like monster (top row)
+            drawMonster1() {
+                ctx.fillStyle = '#ff00ff';
+                // Body
+                ctx.beginPath();
+                ctx.arc(0, 0, 8, 0, Math.PI * 2);
+                ctx.fill();
+                // Eyes
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(-5, -3, 3, 4);
+                ctx.fillRect(2, -3, 3, 4);
+                // Tentacles
+                ctx.fillStyle = '#ff00ff';
+                const wiggle = this.frame % 2 === 0 ? 2 : -2;
+                ctx.fillRect(-10, 6, 4, 6 + wiggle);
+                ctx.fillRect(-4, 6, 4, 8);
+                ctx.fillRect(2, 6, 4, 8);
+                ctx.fillRect(8, 6, 4, 6 - wiggle);
+            }
+
+            // Crab-like monster (second row)
+            drawMonster2() {
+                ctx.fillStyle = '#00ffff';
+                // Body
+                ctx.fillRect(-10, -6, 20, 12);
+                // Eyes
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(-6, -4, 4, 4);
+                ctx.fillRect(2, -4, 4, 4);
+                // Claws
+                ctx.fillStyle = '#00ffff';
+                const clawOut = this.frame % 2 === 0 ? 4 : 0;
+                ctx.fillRect(-16 - clawOut, -2, 6, 6);
+                ctx.fillRect(10 + clawOut, -2, 6, 6);
+                // Legs
+                ctx.fillRect(-8, 6, 3, 5);
+                ctx.fillRect(-2, 6, 4, 5);
+                ctx.fillRect(5, 6, 3, 5);
+            }
+
+            // Stick figure (middle row)
+            drawStickFigure() {
+                ctx.strokeStyle = '#ffff00';
+                ctx.lineWidth = 2;
+                ctx.fillStyle = '#ffff00';
+
+                // Head
+                ctx.beginPath();
+                ctx.arc(0, -8, 5, 0, Math.PI * 2);
+                ctx.stroke();
+
+                // Body
+                ctx.beginPath();
+                ctx.moveTo(0, -3);
+                ctx.lineTo(0, 8);
+                ctx.stroke();
+
+                // Arms (animated)
+                const armAngle = this.frame % 2 === 0 ? 0.3 : -0.3;
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(-10, 3 + armAngle * 10);
+                ctx.moveTo(0, 0);
+                ctx.lineTo(10, 3 - armAngle * 10);
+                ctx.stroke();
+
+                // Legs
+                ctx.beginPath();
+                ctx.moveTo(0, 8);
+                ctx.lineTo(-6, 14);
+                ctx.moveTo(0, 8);
+                ctx.lineTo(6, 14);
+                ctx.stroke();
+            }
+
+            // Bug monster (fourth row)
+            drawMonster3() {
+                ctx.fillStyle = '#ff8800';
+                // Body segments
+                ctx.beginPath();
+                ctx.ellipse(0, 0, 12, 8, 0, 0, Math.PI * 2);
+                ctx.fill();
+                // Head
+                ctx.beginPath();
+                ctx.arc(0, -10, 6, 0, Math.PI * 2);
+                ctx.fill();
+                // Antennae
+                ctx.strokeStyle = '#ff8800';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(-3, -14);
+                ctx.lineTo(-6, -20);
+                ctx.moveTo(3, -14);
+                ctx.lineTo(6, -20);
+                ctx.stroke();
+                // Eyes
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(-4, -12, 3, 3);
+                ctx.fillRect(1, -12, 3, 3);
+                // Legs
+                ctx.fillStyle = '#ff8800';
+                const legMove = this.frame % 2 === 0 ? 2 : -2;
+                ctx.fillRect(-14, 2 + legMove, 4, 8);
+                ctx.fillRect(-8, 4, 3, 8);
+                ctx.fillRect(5, 4, 3, 8);
+                ctx.fillRect(10, 2 - legMove, 4, 8);
+            }
+
+            // Boss monster (bottom row)
+            drawMonster4() {
+                ctx.fillStyle = '#ff0000';
+                // Large body
+                ctx.fillRect(-12, -8, 24, 16);
+                // Horns
+                ctx.beginPath();
+                ctx.moveTo(-10, -8);
+                ctx.lineTo(-14, -16);
+                ctx.lineTo(-6, -8);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.moveTo(10, -8);
+                ctx.lineTo(14, -16);
+                ctx.lineTo(6, -8);
+                ctx.fill();
+                // Eyes (angry)
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(-8, -4, 6, 5);
+                ctx.fillRect(2, -4, 6, 5);
+                ctx.fillStyle = '#000';
+                ctx.fillRect(-6, -2, 3, 3);
+                ctx.fillRect(5, -2, 3, 3);
+                // Mouth
+                ctx.fillStyle = '#000';
+                ctx.fillRect(-6, 4, 12, 3);
+                // Fangs
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(-4, 4, 2, 4);
+                ctx.fillRect(2, 4, 2, 4);
+            }
+
+            move(dx, dy) {
+                this.x += dx;
+                this.y += dy;
+                this.frame++;
+            }
+        }
+
+        class Bullet {
+            constructor(x, y, speed, isPlayer) {
+                this.x = x;
+                this.y = y;
+                this.speed = speed;
+                this.isPlayer = isPlayer;
+                this.width = 4;
+                this.height = 12;
+                this.alive = true;
+            }
+
+            update() {
+                this.y += this.speed;
+                if (this.y < 0 || this.y > gameHeight) {
+                    this.alive = false;
+                }
+            }
+
+            draw() {
+                ctx.fillStyle = this.isPlayer ? '#00ff00' : '#ff0000';
+                ctx.fillRect(this.x - this.width / 2, this.y, this.width, this.height);
+            }
+        }
+
+        class Explosion {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.frame = 0;
+                this.maxFrames = 15;
+                this.alive = true;
+            }
+
+            update() {
+                this.frame++;
+                if (this.frame >= this.maxFrames) {
+                    this.alive = false;
+                }
+            }
+
+            draw() {
+                const progress = this.frame / this.maxFrames;
+                const radius = 20 * progress;
+                const alpha = 1 - progress;
+
+                ctx.fillStyle = `rgba(255, ${Math.floor(200 * (1 - progress))}, 0, ${alpha})`;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, radius, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Particles
+                ctx.fillStyle = `rgba(255, 255, 0, ${alpha})`;
+                for (let i = 0; i < 8; i++) {
+                    const angle = (i / 8) * Math.PI * 2;
+                    const dist = radius * 1.5;
+                    ctx.beginPath();
+                    ctx.arc(
+                        this.x + Math.cos(angle) * dist,
+                        this.y + Math.sin(angle) * dist,
+                        3 * (1 - progress),
+                        0, Math.PI * 2
+                    );
+                    ctx.fill();
+                }
+            }
+        }
+
+        class Barrier {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.width = 50;
+                this.height = 30;
+                this.health = [];
+                // Create pixel grid for destructible barrier
+                for (let i = 0; i < 10; i++) {
+                    this.health[i] = [];
+                    for (let j = 0; j < 6; j++) {
+                        // Create shield shape (skip corners)
+                        if ((i < 2 || i > 7) && j < 2) {
+                            this.health[i][j] = 0;
+                        } else if (j > 3 && i > 2 && i < 7) {
+                            this.health[i][j] = 0; // Bottom center cutout
+                        } else {
+                            this.health[i][j] = 3;
+                        }
+                    }
+                }
+            }
+
+            draw() {
+                const blockW = this.width / 10;
+                const blockH = this.height / 6;
+
+                for (let i = 0; i < 10; i++) {
+                    for (let j = 0; j < 6; j++) {
+                        if (this.health[i][j] > 0) {
+                            const brightness = this.health[i][j] / 3;
+                            ctx.fillStyle = `rgb(0, ${Math.floor(255 * brightness)}, 0)`;
+                            ctx.fillRect(
+                                this.x + i * blockW,
+                                this.y + j * blockH,
+                                blockW, blockH
+                            );
+                        }
+                    }
+                }
+            }
+
+            checkHit(bullet) {
+                const blockW = this.width / 10;
+                const blockH = this.height / 6;
+
+                const localX = bullet.x - this.x;
+                const localY = bullet.y - this.y;
+
+                if (localX >= 0 && localX < this.width && localY >= 0 && localY < this.height) {
+                    const i = Math.floor(localX / blockW);
+                    const j = Math.floor(localY / blockH);
+
+                    if (this.health[i] && this.health[i][j] > 0) {
+                        this.health[i][j]--;
+                        return true;
+                    }
+                }
+                return false;
+            }
+        }
+
+        function initGame() {
+            score = 0;
+            lives = 3;
+            wave = 1;
+            gameRunning = true;
+
+            player = new Player();
+            playerBullets = [];
+            invaderBullets = [];
+            explosions = [];
+
+            createInvaders();
+            createBarriers();
+
+            invaderDirection = 1;
+            invaderSpeed = 1;
+            moveTimer = 0;
+            moveInterval = 30;
+
+            updateHUD();
+        }
+
+        function createInvaders() {
+            invaders = [];
+            const rows = 5;
+            const cols = 11;
+            const startX = (gameWidth - cols * 40) / 2 + 20;
+            const startY = 100;
+
+            for (let row = 0; row < rows; row++) {
+                for (let col = 0; col < cols; col++) {
+                    invaders.push(new Invader(
+                        startX + col * 40,
+                        startY + row * 40,
+                        row,
+                        col
+                    ));
+                }
+            }
+        }
+
+        function createBarriers() {
+            barriers = [];
+            const numBarriers = 4;
+            const spacing = gameWidth / (numBarriers + 1);
+
+            for (let i = 0; i < numBarriers; i++) {
+                barriers.push(new Barrier(
+                    spacing * (i + 1) - 25,
+                    gameHeight - 150
+                ));
+            }
+        }
+
+        function updateHUD() {
+            document.getElementById('score').textContent = 'SCORE: ' + score;
+            document.getElementById('lives').textContent = 'LIVES: ' + lives;
+        }
+
+        function moveInvaders() {
+            moveTimer++;
+            if (moveTimer < moveInterval) return;
+            moveTimer = 0;
+
+            // Check if any invader hit the edge
+            let hitEdge = false;
+            const aliveInvaders = invaders.filter(inv => inv.alive);
+
+            for (let inv of aliveInvaders) {
+                if ((invaderDirection > 0 && inv.x > gameWidth - 40) ||
+                    (invaderDirection < 0 && inv.x < 40)) {
+                    hitEdge = true;
+                    break;
+                }
+            }
+
+            if (hitEdge) {
+                // Move down and reverse direction
+                for (let inv of aliveInvaders) {
+                    inv.move(0, 20);
+                }
+                invaderDirection *= -1;
+                // Speed up slightly
+                moveInterval = Math.max(5, moveInterval - 1);
+            } else {
+                // Move horizontally
+                for (let inv of aliveInvaders) {
+                    inv.move(invaderDirection * 10, 0);
+                }
+            }
+
+            playSound('invaderMove');
+
+            // Random invader shoots
+            if (aliveInvaders.length > 0 && Math.random() < 0.3) {
+                const shooter = aliveInvaders[Math.floor(Math.random() * aliveInvaders.length)];
+                invaderBullets.push(new Bullet(shooter.x, shooter.y + 15, 5, false));
+            }
+        }
+
+        function checkCollisions() {
+            // Player bullets vs invaders
+            for (let bullet of playerBullets) {
+                if (!bullet.alive) continue;
+
+                for (let inv of invaders) {
+                    if (!inv.alive) continue;
+
+                    if (Math.abs(bullet.x - inv.x) < inv.width / 2 &&
+                        Math.abs(bullet.y - inv.y) < inv.height / 2) {
+                        bullet.alive = false;
+                        inv.alive = false;
+                        score += inv.points;
+                        explosions.push(new Explosion(inv.x, inv.y));
+                        playSound('explosion');
+                        updateHUD();
+                        break;
+                    }
+                }
+
+                // Check barriers
+                for (let barrier of barriers) {
+                    if (barrier.checkHit(bullet)) {
+                        bullet.alive = false;
+                        break;
+                    }
+                }
+            }
+
+            // Invader bullets vs player
+            for (let bullet of invaderBullets) {
+                if (!bullet.alive) continue;
+
+                if (Math.abs(bullet.x - player.x) < player.width / 2 &&
+                    bullet.y > player.y - 10 && bullet.y < player.y + player.height) {
+                    bullet.alive = false;
+                    lives--;
+                    playSound('playerHit');
+                    updateHUD();
+
+                    if (lives <= 0) {
+                        gameOver();
+                    }
+                    break;
+                }
+
+                // Check barriers
+                for (let barrier of barriers) {
+                    if (barrier.checkHit(bullet)) {
+                        bullet.alive = false;
+                        break;
+                    }
+                }
+            }
+
+            // Invaders reaching bottom
+            for (let inv of invaders) {
+                if (inv.alive && inv.y > player.y - 30) {
+                    gameOver();
+                    break;
+                }
+            }
+        }
+
+        function checkWaveComplete() {
+            const aliveInvaders = invaders.filter(inv => inv.alive);
+            if (aliveInvaders.length === 0) {
+                wave++;
+                createInvaders();
+                // Speed up for next wave
+                moveInterval = Math.max(10, 30 - wave * 3);
+                invaderSpeed = 1 + wave * 0.2;
+            }
+        }
+
+        function gameOver() {
+            gameRunning = false;
+            document.getElementById('finalScore').textContent = 'SCORE: ' + score;
+            document.getElementById('waveReached').textContent = 'WAVE REACHED: ' + wave;
+            document.getElementById('gameOverScreen').classList.remove('hidden');
+        }
+
+        function update() {
+            if (!gameRunning) return;
+
+            moveInvaders();
+
+            // Update bullets
+            for (let bullet of playerBullets) bullet.update();
+            for (let bullet of invaderBullets) bullet.update();
+
+            // Remove dead bullets
+            playerBullets = playerBullets.filter(b => b.alive);
+            invaderBullets = invaderBullets.filter(b => b.alive);
+
+            // Update explosions
+            for (let exp of explosions) exp.update();
+            explosions = explosions.filter(e => e.alive);
+
+            checkCollisions();
+            checkWaveComplete();
+        }
+
+        function draw() {
+            // Background
+            ctx.fillStyle = '#000011';
+            ctx.fillRect(0, 0, gameWidth, gameHeight);
+
+            // Stars
+            ctx.fillStyle = '#ffffff';
+            for (let i = 0; i < 50; i++) {
+                const x = (i * 137) % gameWidth;
+                const y = (i * 251) % (gameHeight - 100);
+                ctx.fillRect(x, y, 1, 1);
+            }
+
+            // Draw barriers
+            for (let barrier of barriers) {
+                barrier.draw();
+            }
+
+            // Draw invaders
+            for (let inv of invaders) {
+                inv.draw();
+            }
+
+            // Draw player
+            if (player) {
+                player.draw();
+            }
+
+            // Draw bullets
+            for (let bullet of playerBullets) bullet.draw();
+            for (let bullet of invaderBullets) bullet.draw();
+
+            // Draw explosions
+            for (let exp of explosions) exp.draw();
+
+            // Wave indicator
+            if (gameRunning) {
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+                ctx.font = '14px Courier New';
+                ctx.textAlign = 'center';
+                ctx.fillText('WAVE ' + wave, gameWidth / 2, 50);
+            }
+        }
+
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Touch/Mouse controls
+        let touchStartX = null;
+        let isTouching = false;
+        let moveDirection = 0;
+
+        function handleTouch(x) {
+            if (!gameRunning) return;
+
+            const third = gameWidth / 3;
+
+            if (x < third) {
+                moveDirection = -1;
+            } else if (x > third * 2) {
+                moveDirection = 1;
+            } else {
+                // Center - shoot
+                player.shoot();
+                moveDirection = 0;
+            }
+        }
+
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            initAudio();
+            isTouching = true;
+            const touch = e.touches[0];
+            handleTouch(touch.clientX);
+        });
+
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            if (isTouching) {
+                const touch = e.touches[0];
+                handleTouch(touch.clientX);
+            }
+        });
+
+        canvas.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            isTouching = false;
+            moveDirection = 0;
+        });
+
+        // Mouse controls (for testing)
+        canvas.addEventListener('mousedown', (e) => {
+            initAudio();
+            handleTouch(e.clientX);
+        });
+
+        canvas.addEventListener('mouseup', () => {
+            moveDirection = 0;
+        });
+
+        // Keyboard controls
+        const keys = {};
+        document.addEventListener('keydown', (e) => {
+            keys[e.key] = true;
+            if (e.key === ' ' && gameRunning) {
+                player.shoot();
+            }
+        });
+        document.addEventListener('keyup', (e) => {
+            keys[e.key] = false;
+        });
+
+        // Movement update loop
+        setInterval(() => {
+            if (!gameRunning || !player) return;
+
+            if (moveDirection < 0 || keys['ArrowLeft']) {
+                player.moveLeft();
+            }
+            if (moveDirection > 0 || keys['ArrowRight']) {
+                player.moveRight();
+            }
+        }, 16);
+
+        // Start/Restart buttons
+        document.getElementById('startBtn').addEventListener('click', () => {
+            initAudio();
+            document.getElementById('startScreen').classList.add('hidden');
+            initGame();
+        });
+
+        document.getElementById('restartBtn').addEventListener('click', () => {
+            document.getElementById('gameOverScreen').classList.add('hidden');
+            initGame();
+        });
+
+        // Prevent scrolling
+        document.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+
+        // Start game loop
+        gameLoop();
+    </script>
+</body>
+</html>
