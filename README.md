@@ -87,6 +87,30 @@ Classic alien invasion arcade action!
 
 ---
 
+### JMR's Mr. Do!
+**File:** `mrdo.html` (Version 1)
+
+Classic dig-and-collect arcade action! Based on the 1982 Universal classic.
+
+- **Controls:**
+  - D-pad to move and dig
+  - Center button to throw power ball
+  - Keyboard: Arrow keys + Space
+- **Features:**
+  - Dig tunnels through dirt
+  - Collect cherries (8 in a row = 500 bonus!)
+  - Throw bouncing power ball at enemies
+  - Push apples to crush enemies
+  - Red blob enemies that chase you through tunnels
+  - Digger enemies that create their own paths
+  - Alphamonsters carry E-X-T-R-A letters for extra life
+  - Multiple ways to complete each level
+  - Sound effects
+
+**Play:** `https://raw.githack.com/jmrothberg/Games/main/mrdo.html`
+
+---
+
 ## Desktop Python Games
 
 ### 3D Tank Battle
@@ -124,6 +148,7 @@ A Doom-inspired first-person game.
 | Pac-Man | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/pacman.html) |
 | Iron Dome | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/missile.html) |
 | Space Invaders | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/invaders.html) |
+| Mr. Do! | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/mrdo.html) |
 | Tank Battle | Desktop (Python) | Download & run with Python |
 
 ---
