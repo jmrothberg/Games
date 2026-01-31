@@ -101,8 +101,8 @@
 
     <div id="startScreen">
         <h1>JMR'S IRON DOME</h1>
-        <p class="version">Version 7</p>
-        <p>Drag to aim your crosshair<br>Tap to launch interceptors<br>Defend Jerusalem!</p>
+        <p class="version">Version 8</p>
+        <p>Drag to aim your crosshair<br>Tap to launch interceptors<br>Defend Israel's cities!</p>
         <button class="start-btn" id="startBtn">START GAME</button>
     </div>
 
@@ -188,6 +188,19 @@
                     oscillator.start();
                     oscillator.stop(audioCtx.currentTime + 0.5);
                     break;
+                case 'drone':
+                    // Buzzing drone sound - low frequency oscillation
+                    oscillator.type = 'sawtooth';
+                    oscillator.frequency.setValueAtTime(80, audioCtx.currentTime);
+                    // Modulate frequency for buzzing effect
+                    for (let i = 0; i < 10; i++) {
+                        oscillator.frequency.setValueAtTime(80 + (i % 2) * 40, audioCtx.currentTime + i * 0.05);
+                    }
+                    gainNode.gain.setValueAtTime(0.15, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+                    oscillator.start();
+                    oscillator.stop(audioCtx.currentTime + 0.5);
+                    break;
             }
         }
 
@@ -262,12 +275,13 @@
         }
 
         class City {
-            constructor(x) {
+            constructor(x, name) {
                 this.x = x;
                 this.y = baseY;
                 this.width = 40;
                 this.height = 25;
                 this.alive = true;
+                this.name = name;
             }
 
             draw() {
@@ -286,6 +300,12 @@
                     ctx.fillRect(this.x, this.y - 22 + i * 6, 3, 3);
                     ctx.fillRect(this.x + 11, this.y - 12 + i * 4, 3, 2);
                 }
+
+                // City name label
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                ctx.font = '9px Courier New';
+                ctx.textAlign = 'center';
+                ctx.fillText(this.name, this.x, this.y + 12);
             }
         }
 
@@ -583,12 +603,20 @@
                 this.vy = (dy / dist) * this.speed;
                 this.alive = true;
                 this.propellerAngle = 0;
+                this.soundTimer = 0;
             }
 
             update() {
                 this.x += this.vx;
                 this.y += this.vy;
                 this.propellerAngle += 0.5;
+
+                // Play drone buzzing sound periodically
+                this.soundTimer++;
+                if (this.soundTimer >= 30) {
+                    this.soundTimer = 0;
+                    playSound('drone');
+                }
 
                 // Check if reached target
                 const dx = this.targetX - this.x;
@@ -864,11 +892,12 @@
             waveSpawning = false;
             gameSessionId = generateSessionId();
 
-            // Create cities
+            // Create cities with Israeli city names
             cities = [];
+            const cityNames = ['Tel Aviv', 'Haifa', 'Beersheba', 'Eilat', 'Netanya', 'Ashkelon'];
             const citySpacing = gameWidth / 7;
-            for (let i = 1; i <= 6; i++) {
-                cities.push(new City(citySpacing * i));
+            for (let i = 0; i < 6; i++) {
+                cities.push(new City(citySpacing * (i + 1), cityNames[i]));
             }
 
             playerMissiles = [];
@@ -1051,11 +1080,11 @@
                 city.draw();
             }
 
-            // Jerusalem label
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
-            ctx.font = '12px Courier New';
+            // Defense platform label
+            ctx.fillStyle = 'rgba(0, 255, 0, 0.7)';
+            ctx.font = '10px Courier New';
             ctx.textAlign = 'center';
-            ctx.fillText('JERUSALEM', gameWidth / 2, baseY + 15);
+            ctx.fillText('IRON DOME', gameWidth / 2, baseY + 12);
 
             // Draw enemy missiles
             for (let missile of enemyMissiles) {
