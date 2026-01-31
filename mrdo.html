@@ -155,7 +155,7 @@
 
     <div id="startScreen">
         <h1>JMR'S MR. DO!</h1>
-        <p class="version">Version 2</p>
+        <p class="version">Version 3</p>
         <p>Dig tunnels and collect cherries!<br>Throw your power ball at enemies<br>Push apples to crush them<br>Collect E-X-T-R-A for bonus!</p>
         <button class="start-btn" id="startBtn">START GAME</button>
     </div>
@@ -523,7 +523,7 @@
                 if (!this.alive) return;
 
                 this.moveTimer++;
-                if (this.moveTimer < 10) return;
+                if (this.moveTimer < 20) return; // Slower enemy movement
                 this.moveTimer = 0;
 
                 if (this.moving) {
@@ -573,8 +573,8 @@
                 for (let d of dirs) {
                     if (d.gx < 0 || d.gx >= GRID_COLS || d.gy < 0 || d.gy >= GRID_ROWS) continue;
 
-                    // Non-diggers can only move through tunnels
-                    if (!this.isDigger && !this.isAlpha && grid[d.gy][d.gx] === TILE_DIRT) continue;
+                    // Non-diggers can only move through tunnels (alphas also can't dig)
+                    if (!this.isDigger && grid[d.gy][d.gx] === TILE_DIRT) continue;
 
                     // Check for apples
                     let blocked = false;
@@ -1167,7 +1167,7 @@
                 if (enemy.alive && player) {
                     const dx = enemy.x - player.x;
                     const dy = enemy.y - player.y;
-                    if (Math.sqrt(dx * dx + dy * dy) < 15) {
+                    if (Math.sqrt(dx * dx + dy * dy) < 12) {
                         playerDeath();
                     }
                 }
