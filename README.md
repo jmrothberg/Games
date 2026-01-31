@@ -1,6 +1,9 @@
 # JMR's Games Collection
 
-A collection of games by JMR - playable on desktop and mobile (iPhone/iPad).
+![Games](https://img.shields.io/badge/Games-HTML5%20%2B%20Python-blue)
+![Mobile](https://img.shields.io/badge/Mobile-iOS%20%2B%20Android-green)
+
+A collection of games by Jonathan M. Rothberg - playable on desktop and mobile (iPhone/iPad).
 
 ---
 
