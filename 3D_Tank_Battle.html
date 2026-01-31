@@ -403,12 +403,12 @@
             if (position.distanceTo(obs.position) < obs.size + 1) return true;
         }
         for (const tank of tankList) {
-            if (position.distanceTo(tank.position) < 20) return true;
+            if (position.distanceTo(tank.position) < 12) return true;  // Reduced from 20 for smoother movement
         }
         return false;
     }
 
-    function project3DTo2D(point, cameraPos, cameraDir, fov = 60) {
+    function project3DTo2D(point, cameraPos, cameraDir, fov = 60, viewWidth = WIDTH, viewHeight = HEIGHT) {
         const relativePos = point.sub(cameraPos);
         const forward = cameraDir.normalize();
         const right = new Vector3(forward.z, 0, -forward.x).normalize();
@@ -420,16 +420,16 @@
 
         if (z <= 0) return null;
 
-        const f = WIDTH / (2 * Math.tan(fov * Math.PI / 360));
-        const sx = WIDTH / 2 + x * f / z;
-        const sy = HEIGHT / 2 - y * f / z;
+        const f = viewWidth / (2 * Math.tan(fov * Math.PI / 360));
+        const sx = viewWidth / 2 + x * f / z;
+        const sy = viewHeight / 2 - y * f / z;
 
         return { x: sx, y: sy };
     }
 
-    function render3DLine(targetCtx, start, end, cameraPos, cameraDir, color, fov = 60) {
-        const start2D = project3DTo2D(start, cameraPos, cameraDir, fov);
-        const end2D = project3DTo2D(end, cameraPos, cameraDir, fov);
+    function render3DLine(targetCtx, start, end, cameraPos, cameraDir, color, fov = 60, viewWidth = WIDTH, viewHeight = HEIGHT) {
+        const start2D = project3DTo2D(start, cameraPos, cameraDir, fov, viewWidth, viewHeight);
+        const end2D = project3DTo2D(end, cameraPos, cameraDir, fov, viewWidth, viewHeight);
 
         if (start2D && end2D) {
             targetCtx.strokeStyle = color;
@@ -440,7 +440,7 @@
         }
     }
 
-    function render3DCube(targetCtx, center, size, cameraPos, cameraDir, color, fov = 60, direction = null) {
+    function render3DCube(targetCtx, center, size, cameraPos, cameraDir, color, fov = 60, direction = null, viewWidth = WIDTH, viewHeight = HEIGHT) {
         let sx, sy, sz;
         if (typeof size === 'number') {
             sx = sy = sz = size;
@@ -482,11 +482,11 @@
         ];
 
         for (const [i, j] of edges) {
-            render3DLine(targetCtx, vertices[i], vertices[j], cameraPos, cameraDir, color, fov);
+            render3DLine(targetCtx, vertices[i], vertices[j], cameraPos, cameraDir, color, fov, viewWidth, viewHeight);
         }
     }
 
-    function render3DPyramid(targetCtx, baseCenter, size, cameraPos, cameraDir, color, fov = 60) {
+    function render3DPyramid(targetCtx, baseCenter, size, cameraPos, cameraDir, color, fov = 60, viewWidth = WIDTH, viewHeight = HEIGHT) {
         const halfSize = size / 2;
         const baseVertices = [
             new Vector3(baseCenter.x - halfSize, baseCenter.y, baseCenter.z - halfSize),
@@ -497,23 +497,23 @@
         const apex = new Vector3(baseCenter.x, baseCenter.y + size, baseCenter.z);
 
         for (let i = 0; i < 4; i++) {
-            render3DLine(targetCtx, baseVertices[i], baseVertices[(i + 1) % 4], cameraPos, cameraDir, color, fov);
-            render3DLine(targetCtx, baseVertices[i], apex, cameraPos, cameraDir, color, fov);
+            render3DLine(targetCtx, baseVertices[i], baseVertices[(i + 1) % 4], cameraPos, cameraDir, color, fov, viewWidth, viewHeight);
+            render3DLine(targetCtx, baseVertices[i], apex, cameraPos, cameraDir, color, fov, viewWidth, viewHeight);
         }
     }
 
-    function renderObstacle(targetCtx, obstacle, cameraPos, cameraDir, fov = 60) {
+    function renderObstacle(targetCtx, obstacle, cameraPos, cameraDir, fov = 60, viewWidth = WIDTH, viewHeight = HEIGHT) {
         if (obstacle.shape === 'cube') {
-            render3DCube(targetCtx, obstacle.position, obstacle.size, cameraPos, cameraDir, COLORS.green, fov);
+            render3DCube(targetCtx, obstacle.position, obstacle.size, cameraPos, cameraDir, COLORS.green, fov, null, viewWidth, viewHeight);
         } else if (obstacle.shape === 'pyramid') {
-            render3DPyramid(targetCtx, obstacle.position, obstacle.size, cameraPos, cameraDir, COLORS.green, fov);
+            render3DPyramid(targetCtx, obstacle.position, obstacle.size, cameraPos, cameraDir, COLORS.green, fov, viewWidth, viewHeight);
         }
     }
 
-    function renderTank(targetCtx, tank, cameraPos, cameraDir, color, fov = 60) {
+    function renderTank(targetCtx, tank, cameraPos, cameraDir, color, fov = 60, viewWidth = WIDTH, viewHeight = HEIGHT) {
         const bodySize = new Vector3(8, 5, 10);
         const bodyPos = tank.position.add(new Vector3(0, bodySize.y / 2, 0));
-        render3DCube(targetCtx, bodyPos, bodySize, cameraPos, cameraDir, color, fov, tank.direction);
+        render3DCube(targetCtx, bodyPos, bodySize, cameraPos, cameraDir, color, fov, tank.direction, viewWidth, viewHeight);
 
         // Turret
         const turretPos = tank.position.add(new Vector3(0, bodySize.y + 1.5, 0));
@@ -521,7 +521,7 @@
         let turretColor = COLORS.white;
         if (tank.weaponType === 'rocket') turretColor = COLORS.pink;
         else if (tank.weaponType === 'minigun') turretColor = COLORS.purple;
-        render3DCube(targetCtx, turretPos, turretSize, cameraPos, cameraDir, turretColor, fov, tank.direction);
+        render3DCube(targetCtx, turretPos, turretSize, cameraPos, cameraDir, turretColor, fov, tank.direction, viewWidth, viewHeight);
 
         // Barrel
         const upVector = new Vector3(0, 1, 0);
@@ -529,19 +529,19 @@
         const barrelDirection = tank.direction.rotate(tank.barrelAngle, rightVector);
         const barrelStart = turretPos;
         const barrelEnd = barrelStart.add(barrelDirection.mul(tank.barrelLength));
-        render3DLine(targetCtx, barrelStart, barrelEnd, cameraPos, cameraDir, turretColor, fov);
+        render3DLine(targetCtx, barrelStart, barrelEnd, cameraPos, cameraDir, turretColor, fov, viewWidth, viewHeight);
 
         // Treads
         const treadOffset = 4;
         const leftTread = tank.position.add(tank.direction.cross(new Vector3(0, 1, 0)).mul(treadOffset));
         const rightTread = tank.position.add(tank.direction.cross(new Vector3(0, -1, 0)).mul(treadOffset));
         const treadSize = new Vector3(3, 2, 15);
-        render3DCube(targetCtx, leftTread, treadSize, cameraPos, cameraDir, color, fov, tank.direction);
-        render3DCube(targetCtx, rightTread, treadSize, cameraPos, cameraDir, color, fov, tank.direction);
+        render3DCube(targetCtx, leftTread, treadSize, cameraPos, cameraDir, color, fov, tank.direction, viewWidth, viewHeight);
+        render3DCube(targetCtx, rightTread, treadSize, cameraPos, cameraDir, color, fov, tank.direction, viewWidth, viewHeight);
     }
 
-    function renderExplosion(targetCtx, explosion, cameraPos, cameraDir) {
-        const center = project3DTo2D(explosion.position, cameraPos, cameraDir);
+    function renderExplosion(targetCtx, explosion, cameraPos, cameraDir, fov = 60, viewWidth = WIDTH, viewHeight = HEIGHT) {
+        const center = project3DTo2D(explosion.position, cameraPos, cameraDir, fov, viewWidth, viewHeight);
         if (center) {
             const dist = explosion.position.distanceTo(cameraPos);
             const size = Math.max(1, explosion.radius * 200 / dist);
@@ -552,8 +552,8 @@
         }
     }
 
-    function renderPowerUp(targetCtx, powerUp, cameraPos, cameraDir, fov = 60) {
-        render3DCube(targetCtx, powerUp.position, 5, cameraPos, cameraDir, powerUp.color, fov);
+    function renderPowerUp(targetCtx, powerUp, cameraPos, cameraDir, fov = 60, viewWidth = WIDTH, viewHeight = HEIGHT) {
+        render3DCube(targetCtx, powerUp.position, 5, cameraPos, cameraDir, powerUp.color, fov, null, viewWidth, viewHeight);
     }
 
     function renderHUD() {
@@ -603,34 +603,34 @@
 
         // Render obstacles
         for (const obs of obstacles) {
-            renderObstacle(scopeCtx, obs, scopeCameraPos, scopeCameraDir, fov);
+            renderObstacle(scopeCtx, obs, scopeCameraPos, scopeCameraDir, fov, scopeSize, scopeSize);
+        }
+
+        // Render power-ups (render before tanks so tanks appear on top)
+        for (const powerUp of powerUps) {
+            renderPowerUp(scopeCtx, powerUp, scopeCameraPos, scopeCameraDir, fov, scopeSize, scopeSize);
         }
 
         // Render enemy tanks with range
         const visibleTanks = [];
         for (const tank of enemyTanks) {
-            const pos2D = project3DTo2D(tank.position, scopeCameraPos, scopeCameraDir, fov);
+            const pos2D = project3DTo2D(tank.position, scopeCameraPos, scopeCameraDir, fov, scopeSize, scopeSize);
             if (pos2D && pos2D.x >= 0 && pos2D.x <= scopeSize && pos2D.y >= 0 && pos2D.y <= scopeSize) {
-                renderTank(scopeCtx, tank, scopeCameraPos, scopeCameraDir, tank.color, fov);
+                renderTank(scopeCtx, tank, scopeCameraPos, scopeCameraDir, tank.color, fov, scopeSize, scopeSize);
                 const range = tank.position.distanceTo(playerTank.position);
                 visibleTanks.push({ y: pos2D.y, range });
             }
         }
 
-        // Render power-ups
-        for (const powerUp of powerUps) {
-            renderPowerUp(scopeCtx, powerUp, scopeCameraPos, scopeCameraDir, fov);
-        }
-
         // Render bullets
         for (const bullet of [...playerBullets, ...enemyBullets]) {
             const end = bullet.position.add(bullet.direction.mul(5));
-            render3DLine(scopeCtx, bullet.position, end, scopeCameraPos, scopeCameraDir, bullet.color, fov);
+            render3DLine(scopeCtx, bullet.position, end, scopeCameraPos, scopeCameraDir, bullet.color, fov, scopeSize, scopeSize);
         }
 
         // Render explosions
         for (const exp of explosions) {
-            renderExplosion(scopeCtx, exp, scopeCameraPos, scopeCameraDir);
+            renderExplosion(scopeCtx, exp, scopeCameraPos, scopeCameraDir, fov, scopeSize, scopeSize);
         }
 
         // Range info
@@ -858,23 +858,38 @@
         // Enemy AI
         for (const enemy of enemyTanks) {
             const toPlayer = playerTank.position.sub(enemy.position);
+            const distToPlayer = toPlayer.length();
             const targetDir = new Vector3(toPlayer.x, 0, toPlayer.z).normalize();
-            const angleDiff = enemy.direction.angleTo(targetDir);
 
-            const rotation = Math.min(2, Math.max(-2, angleDiff));
+            // Calculate signed angle for rotation direction
+            // Use atan2 for proper signed angle calculation
+            const enemyAngle = Math.atan2(enemy.direction.x, enemy.direction.z);
+            const targetAngle = Math.atan2(targetDir.x, targetDir.z);
+            let angleDiff = (targetAngle - enemyAngle) * 180 / Math.PI;
 
-            // Determine rotation direction
-            const cross = enemy.direction.cross(targetDir);
-            if (cross.y > 0) enemy.rotate(rotation);
-            else enemy.rotate(-rotation);
+            // Normalize to -180 to 180
+            while (angleDiff > 180) angleDiff -= 360;
+            while (angleDiff < -180) angleDiff += 360;
 
-            // Fire logic
-            if (angleDiff < 5 || (toPlayer.length() < 100 && angleDiff < 20) || (Math.random() < 0.01 && angleDiff < 90)) {
+            // Rotate toward player (limit rotation speed)
+            const rotationSpeed = Math.min(2, Math.abs(angleDiff));
+            if (angleDiff > 0) {
+                enemy.rotate(-rotationSpeed);
+            } else if (angleDiff < 0) {
+                enemy.rotate(rotationSpeed);
+            }
+
+            // Fire logic - fire when roughly aimed at player
+            const absAngleDiff = Math.abs(angleDiff);
+            if (absAngleDiff < 10 || (distToPlayer < 150 && absAngleDiff < 25) || (Math.random() < 0.02 && absAngleDiff < 60)) {
                 const bullet = enemy.fire();
                 if (bullet) enemyBullets.push(bullet);
             }
 
-            enemy.move(true, [playerTank, ...enemyTanks]);
+            // Move toward player (with some randomness to avoid getting stuck)
+            if (Math.random() < 0.95) {
+                enemy.move(true, [playerTank, ...enemyTanks]);
+            }
             enemy.update();
         }
 
