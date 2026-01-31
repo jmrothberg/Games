@@ -257,13 +257,16 @@
             this.barrelAngle = 0;
         }
 
-        move(forward) {
+        move(forward, otherTanks = null) {
             const movement = this.direction.mul(forward ? this.speed : -this.speed);
             const newPos = this.position.add(movement);
 
             if (newPos.x >= 0 && newPos.x < TERRAIN_SIZE &&
                 newPos.z >= 0 && newPos.z < TERRAIN_SIZE) {
-                if (!checkCollision(newPos, obstacles, enemyTanks.filter(t => t !== this))) {
+                // Build list of tanks to check collision against (exclude self)
+                const tanksToCheck = otherTanks ? otherTanks.filter(t => t !== this) :
+                    [playerTank, ...enemyTanks].filter(t => t !== this);
+                if (!checkCollision(newPos, obstacles, tanksToCheck)) {
                     this.position = newPos;
                 }
             }
@@ -590,11 +593,10 @@
         scopeCtx.fillRect(0, 0, scopeSize, scopeSize);
 
         const turretOffset = 15;
-        const rightVec = new Vector3(0, 1, 0).cross(playerTank.direction).normalize();
+        // Camera position: at turret, looking forward, adjusted for barrel angle
         let scopeCameraPos = playerTank.position
             .add(playerTank.direction.mul(turretOffset))
-            .add(rightVec.mul(5))
-            .sub(new Vector3(0, 5 - playerTank.barrelAngle * 0.2, 0));
+            .add(new Vector3(0, 8 + playerTank.barrelAngle * 0.1, 0));
 
         const scopeCameraDir = playerTank.direction.copy();
         const fov = 20;
@@ -842,8 +844,8 @@
         if (gameState !== 'playing') return;
 
         // Player input
-        if (keys['ArrowUp']) playerTank.move(true);
-        if (keys['ArrowDown']) playerTank.move(false);
+        if (keys['ArrowUp']) playerTank.move(true, enemyTanks);
+        if (keys['ArrowDown']) playerTank.move(false, enemyTanks);
         if (keys['ArrowLeft']) playerTank.rotate(1);
         if (keys['ArrowRight']) playerTank.rotate(-1);
         if (keys['q'] || keys['Q']) playerTank.adjustBarrel(1);
@@ -872,7 +874,7 @@
                 if (bullet) enemyBullets.push(bullet);
             }
 
-            enemy.move(true);
+            enemy.move(true, [playerTank, ...enemyTanks]);
             enemy.update();
         }
 
