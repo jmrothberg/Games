@@ -1,0 +1,1072 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JMR's 3D Tank Battle</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Courier New', monospace;
+        }
+        #gameCanvas {
+            border: 2px solid #333;
+            display: block;
+        }
+        #helpOverlay {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.95);
+            padding: 30px;
+            border: 2px solid #0f0;
+            color: #fff;
+            display: none;
+            z-index: 100;
+            max-width: 500px;
+        }
+        #helpOverlay h2 { color: #0f0; margin-bottom: 20px; }
+        #helpOverlay p { margin: 8px 0; }
+        #helpOverlay .key { color: #ff0; }
+        #difficultySelect {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.95);
+            padding: 40px;
+            border: 2px solid #0f0;
+            color: #fff;
+            z-index: 100;
+            text-align: center;
+        }
+        #difficultySelect h1 { color: #0f0; margin-bottom: 30px; }
+        #difficultySelect button {
+            display: block;
+            width: 200px;
+            margin: 15px auto;
+            padding: 15px;
+            font-size: 18px;
+            cursor: pointer;
+            background: #222;
+            color: #fff;
+            border: 2px solid #0f0;
+            transition: all 0.2s;
+        }
+        #difficultySelect button:hover {
+            background: #0f0;
+            color: #000;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas" width="1200" height="900"></canvas>
+
+    <div id="difficultySelect">
+        <h1>JMR's 3D Tank Battle</h1>
+        <p style="margin-bottom: 20px;">Select Difficulty:</p>
+        <button onclick="startGame('woke')">Woke (Easy)</button>
+        <button onclick="startGame('medium')">Medium</button>
+        <button onclick="startGame('based')">Based (Hard)</button>
+    </div>
+
+    <div id="helpOverlay">
+        <h2>Controls</h2>
+        <p><span class="key">Arrow Up/Down</span>: Move forward/backward</p>
+        <p><span class="key">Arrow Left/Right</span>: Rotate tank</p>
+        <p><span class="key">Q/Z</span>: Raise/Lower barrel</p>
+        <p><span class="key">Spacebar</span>: Fire</p>
+        <p><span class="key">H</span>: Toggle help screen</p>
+        <p><span class="key">R</span>: Restart (when game over)</p>
+        <h2 style="margin-top: 20px;">Objective</h2>
+        <p>Destroy all enemy tanks!</p>
+        <p>Avoid obstacles and enemy fire.</p>
+        <p>Collect power-ups for bonuses.</p>
+        <h2 style="margin-top: 20px;">Power-ups</h2>
+        <p><span style="color: orange;">Orange</span>: Health</p>
+        <p><span style="color: magenta;">Magenta</span>: Faster cooldown</p>
+        <p><span style="color: cyan;">Cyan</span>: Speed boost</p>
+        <p><span style="color: purple;">Purple</span>: Minigun</p>
+        <p><span style="color: pink;">Pink</span>: Rocket launcher</p>
+        <p><span style="color: white;">White</span>: Cannon</p>
+        <p style="margin-top: 20px; color: #0f0;">Press H to close</p>
+    </div>
+
+    <script>
+    // Game Constants
+    const WIDTH = 1200;
+    const HEIGHT = 900;
+    const TERRAIN_SIZE = 1000;
+
+    // Difficulty settings
+    const DIFFICULTY = {
+        woke: {
+            numObstacles: 30,
+            numEnemyTanks: 3,
+            enemyTankSpeed: 0.5,
+            enemyTankStrength: 1000,
+            playerTankSpeed: 3,
+            playerTankStrength: 5000,
+            playerCooldown: 10,
+            enemyCooldown: 30
+        },
+        medium: {
+            numObstacles: 20,
+            numEnemyTanks: 5,
+            enemyTankSpeed: 1,
+            enemyTankStrength: 2000,
+            playerTankSpeed: 2,
+            playerTankStrength: 2000,
+            playerCooldown: 30,
+            enemyCooldown: 30
+        },
+        based: {
+            numObstacles: 10,
+            numEnemyTanks: 10,
+            enemyTankSpeed: 2,
+            enemyTankStrength: 5000,
+            playerTankSpeed: 1,
+            playerTankStrength: 500,
+            playerCooldown: 60,
+            enemyCooldown: 30
+        }
+    };
+
+    // Colors
+    const COLORS = {
+        black: '#000000',
+        green: '#00ff00',
+        red: '#ff0000',
+        blue: '#0000ff',
+        white: '#ffffff',
+        yellow: '#ffff00',
+        orange: '#ffa500',
+        cyan: '#00ffff',
+        magenta: '#ff00ff',
+        pink: '#ffc0cb',
+        purple: '#800080'
+    };
+
+    // Game state
+    let canvas, ctx;
+    let gameState = 'menu';
+    let settings = {};
+    let playerTank, enemyTanks, obstacles, terrain;
+    let playerBullets, enemyBullets, explosions, powerUps;
+    let keys = {};
+    let showHelp = false;
+    let gameOverMessage = '';
+    let lastPowerUpPos = null;
+
+    // Vector3 class
+    class Vector3 {
+        constructor(x = 0, y = 0, z = 0) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+        }
+
+        copy() {
+            return new Vector3(this.x, this.y, this.z);
+        }
+
+        add(v) {
+            return new Vector3(this.x + v.x, this.y + v.y, this.z + v.z);
+        }
+
+        sub(v) {
+            return new Vector3(this.x - v.x, this.y - v.y, this.z - v.z);
+        }
+
+        mul(s) {
+            return new Vector3(this.x * s, this.y * s, this.z * s);
+        }
+
+        div(s) {
+            return new Vector3(this.x / s, this.y / s, this.z / s);
+        }
+
+        dot(v) {
+            return this.x * v.x + this.y * v.y + this.z * v.z;
+        }
+
+        cross(v) {
+            return new Vector3(
+                this.y * v.z - this.z * v.y,
+                this.z * v.x - this.x * v.z,
+                this.x * v.y - this.y * v.x
+            );
+        }
+
+        length() {
+            return Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z);
+        }
+
+        normalize() {
+            const len = this.length();
+            if (len === 0) return new Vector3(0, 0, 1);
+            return this.div(len);
+        }
+
+        distanceTo(v) {
+            return this.sub(v).length();
+        }
+
+        angleTo(v) {
+            const dot = this.normalize().dot(v.normalize());
+            return Math.acos(Math.max(-1, Math.min(1, dot))) * 180 / Math.PI;
+        }
+
+        rotate(angleDeg, axis) {
+            const angle = angleDeg * Math.PI / 180;
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            const ax = axis.normalize();
+
+            const dot = this.dot(ax);
+            const cross = ax.cross(this);
+
+            return new Vector3(
+                this.x * cos + cross.x * sin + ax.x * dot * (1 - cos),
+                this.y * cos + cross.y * sin + ax.y * dot * (1 - cos),
+                this.z * cos + cross.z * sin + ax.z * dot * (1 - cos)
+            );
+        }
+    }
+
+    // Tank class
+    class Tank {
+        constructor(position, direction, isPlayer = false) {
+            this.position = position;
+            this.direction = direction.normalize();
+            this.isPlayer = isPlayer;
+            this.health = isPlayer ? settings.playerTankStrength : settings.enemyTankStrength;
+            this.coolTime = isPlayer ? settings.playerCooldown : settings.enemyCooldown;
+            this.speed = isPlayer ? settings.playerTankSpeed : settings.enemyTankSpeed;
+            this.color = isPlayer ? COLORS.blue : COLORS.red;
+            this.weaponType = 'cannon';
+            this.cooldown = 0;
+            this.score = 0;
+            this.barrelLength = 15;
+            this.barrelAngle = 0;
+        }
+
+        move(forward) {
+            const movement = this.direction.mul(forward ? this.speed : -this.speed);
+            const newPos = this.position.add(movement);
+
+            if (newPos.x >= 0 && newPos.x < TERRAIN_SIZE &&
+                newPos.z >= 0 && newPos.z < TERRAIN_SIZE) {
+                if (!checkCollision(newPos, obstacles, enemyTanks.filter(t => t !== this))) {
+                    this.position = newPos;
+                }
+            }
+        }
+
+        rotate(angle) {
+            const rad = angle * Math.PI / 180;
+            const oldX = this.direction.x;
+            const oldZ = this.direction.z;
+            this.direction.x = oldX * Math.cos(rad) - oldZ * Math.sin(rad);
+            this.direction.z = oldX * Math.sin(rad) + oldZ * Math.cos(rad);
+            this.direction = this.direction.normalize();
+        }
+
+        fire() {
+            if (this.cooldown > 0) return null;
+            this.cooldown = this.coolTime;
+
+            const upVector = new Vector3(0, 1, 0);
+            const rightVector = this.direction.cross(upVector).normalize();
+            const bulletDirection = this.direction.rotate(this.barrelAngle, rightVector);
+
+            const barrelAngleRad = this.barrelAngle * Math.PI / 180;
+            const verticalOffset = this.barrelLength * Math.sin(barrelAngleRad) + 5;
+
+            const start = this.position.add(this.direction.mul(15)).add(new Vector3(0, verticalOffset, 0));
+            const end = start.add(bulletDirection.mul(1000));
+
+            return new Bullet(start, end, this.isPlayer, this.weaponType);
+        }
+
+        adjustBarrel(angle) {
+            this.barrelAngle = Math.max(-35, Math.min(35, this.barrelAngle + angle));
+        }
+
+        update() {
+            if (this.cooldown > 0) this.cooldown--;
+        }
+    }
+
+    // Bullet class
+    class Bullet {
+        constructor(start, end, isPlayerBullet, type = 'cannon') {
+            this.start = start.copy();
+            this.end = end.copy();
+            this.position = start.copy();
+            this.direction = end.sub(start).normalize();
+            this.distanceTraveled = 0;
+            this.isPlayerBullet = isPlayerBullet;
+            this.type = type;
+
+            if (type === 'minigun') {
+                this.damage = 20;
+                this.speed = 10;
+                this.color = COLORS.purple;
+                this.maxDistance = 500;
+            } else if (type === 'rocket') {
+                this.damage = 1000;
+                this.speed = 2.5;
+                this.color = COLORS.pink;
+                this.maxDistance = 1500;
+            } else {
+                this.damage = 100;
+                this.speed = 5;
+                this.color = COLORS.white;
+                this.maxDistance = 1000;
+            }
+        }
+
+        update() {
+            this.position = this.position.add(this.direction.mul(this.speed));
+            this.distanceTraveled += this.speed;
+            return this.distanceTraveled < this.maxDistance;
+        }
+    }
+
+    // Explosion class
+    class Explosion {
+        constructor(position, tank, maxRadius = 10) {
+            this.position = position.copy();
+            this.radius = 0;
+            this.maxRadius = maxRadius;
+            this.growthRate = 1;
+            this.tank = tank;
+        }
+
+        update() {
+            this.radius += this.growthRate;
+            if (this.radius >= this.maxRadius && this.tank.health <= 0) {
+                const idx = enemyTanks.indexOf(this.tank);
+                if (idx > -1) enemyTanks.splice(idx, 1);
+            }
+            return this.radius < this.maxRadius;
+        }
+    }
+
+    // PowerUp class
+    class PowerUp {
+        constructor(position, type) {
+            this.position = position;
+            this.type = type;
+            this.creationTime = Date.now();
+            this.duration = 30000;
+
+            if (type === 'health') {
+                this.value = Math.random() * 500;
+                this.color = COLORS.orange;
+            } else if (type === 'cooldown') {
+                this.value = Math.random() * 10;
+                this.color = COLORS.magenta;
+            } else if (type === 'speed') {
+                this.value = Math.random() * 0.5;
+                this.color = COLORS.cyan;
+            } else if (type === 'minigun') {
+                this.value = 0;
+                this.color = COLORS.purple;
+            } else if (type === 'rocket') {
+                this.value = 0;
+                this.color = COLORS.pink;
+            } else {
+                this.value = 0;
+                this.color = COLORS.white;
+            }
+        }
+
+        isExpired() {
+            return Date.now() - this.creationTime > this.duration;
+        }
+    }
+
+    // Helper functions
+    function checkCollision(position, obstacleList, tankList = []) {
+        for (const obs of obstacleList) {
+            if (position.distanceTo(obs.position) < obs.size + 1) return true;
+        }
+        for (const tank of tankList) {
+            if (position.distanceTo(tank.position) < 20) return true;
+        }
+        return false;
+    }
+
+    function project3DTo2D(point, cameraPos, cameraDir, fov = 60) {
+        const relativePos = point.sub(cameraPos);
+        const forward = cameraDir.normalize();
+        const right = new Vector3(forward.z, 0, -forward.x).normalize();
+        const up = new Vector3(0, 1, 0);
+
+        const x = relativePos.dot(right);
+        const y = relativePos.dot(up);
+        const z = relativePos.dot(forward);
+
+        if (z <= 0) return null;
+
+        const f = WIDTH / (2 * Math.tan(fov * Math.PI / 360));
+        const sx = WIDTH / 2 + x * f / z;
+        const sy = HEIGHT / 2 - y * f / z;
+
+        return { x: sx, y: sy };
+    }
+
+    function render3DLine(targetCtx, start, end, cameraPos, cameraDir, color, fov = 60) {
+        const start2D = project3DTo2D(start, cameraPos, cameraDir, fov);
+        const end2D = project3DTo2D(end, cameraPos, cameraDir, fov);
+
+        if (start2D && end2D) {
+            targetCtx.strokeStyle = color;
+            targetCtx.beginPath();
+            targetCtx.moveTo(start2D.x, start2D.y);
+            targetCtx.lineTo(end2D.x, end2D.y);
+            targetCtx.stroke();
+        }
+    }
+
+    function render3DCube(targetCtx, center, size, cameraPos, cameraDir, color, fov = 60, direction = null) {
+        let sx, sy, sz;
+        if (typeof size === 'number') {
+            sx = sy = sz = size;
+        } else {
+            sx = size.x; sy = size.y; sz = size.z;
+        }
+
+        const halfX = sx / 2;
+        const halfY = sy / 2;
+        const halfZ = sz / 2;
+
+        let vertices = [
+            new Vector3(center.x - halfX, center.y - halfY, center.z - halfZ),
+            new Vector3(center.x + halfX, center.y - halfY, center.z - halfZ),
+            new Vector3(center.x + halfX, center.y + halfY, center.z - halfZ),
+            new Vector3(center.x - halfX, center.y + halfY, center.z - halfZ),
+            new Vector3(center.x - halfX, center.y - halfY, center.z + halfZ),
+            new Vector3(center.x + halfX, center.y - halfY, center.z + halfZ),
+            new Vector3(center.x + halfX, center.y + halfY, center.z + halfZ),
+            new Vector3(center.x - halfX, center.y + halfY, center.z + halfZ)
+        ];
+
+        if (direction && direction.length() > 0.001) {
+            const axis = direction.cross(new Vector3(0, 0, 1));
+            if (axis.length() > 0.001) {
+                const angle = direction.angleTo(new Vector3(0, 0, 1));
+                vertices = vertices.map(v => {
+                    const rel = v.sub(center);
+                    const rotated = rel.rotate(-angle, axis);
+                    return rotated.add(center);
+                });
+            }
+        }
+
+        const edges = [
+            [0, 1], [1, 2], [2, 3], [3, 0],
+            [4, 5], [5, 6], [6, 7], [7, 4],
+            [0, 4], [1, 5], [2, 6], [3, 7]
+        ];
+
+        for (const [i, j] of edges) {
+            render3DLine(targetCtx, vertices[i], vertices[j], cameraPos, cameraDir, color, fov);
+        }
+    }
+
+    function render3DPyramid(targetCtx, baseCenter, size, cameraPos, cameraDir, color, fov = 60) {
+        const halfSize = size / 2;
+        const baseVertices = [
+            new Vector3(baseCenter.x - halfSize, baseCenter.y, baseCenter.z - halfSize),
+            new Vector3(baseCenter.x + halfSize, baseCenter.y, baseCenter.z - halfSize),
+            new Vector3(baseCenter.x + halfSize, baseCenter.y, baseCenter.z + halfSize),
+            new Vector3(baseCenter.x - halfSize, baseCenter.y, baseCenter.z + halfSize)
+        ];
+        const apex = new Vector3(baseCenter.x, baseCenter.y + size, baseCenter.z);
+
+        for (let i = 0; i < 4; i++) {
+            render3DLine(targetCtx, baseVertices[i], baseVertices[(i + 1) % 4], cameraPos, cameraDir, color, fov);
+            render3DLine(targetCtx, baseVertices[i], apex, cameraPos, cameraDir, color, fov);
+        }
+    }
+
+    function renderObstacle(targetCtx, obstacle, cameraPos, cameraDir, fov = 60) {
+        if (obstacle.shape === 'cube') {
+            render3DCube(targetCtx, obstacle.position, obstacle.size, cameraPos, cameraDir, COLORS.green, fov);
+        } else if (obstacle.shape === 'pyramid') {
+            render3DPyramid(targetCtx, obstacle.position, obstacle.size, cameraPos, cameraDir, COLORS.green, fov);
+        }
+    }
+
+    function renderTank(targetCtx, tank, cameraPos, cameraDir, color, fov = 60) {
+        const bodySize = new Vector3(8, 5, 10);
+        const bodyPos = tank.position.add(new Vector3(0, bodySize.y / 2, 0));
+        render3DCube(targetCtx, bodyPos, bodySize, cameraPos, cameraDir, color, fov, tank.direction);
+
+        // Turret
+        const turretPos = tank.position.add(new Vector3(0, bodySize.y + 1.5, 0));
+        const turretSize = new Vector3(6, 3, 6);
+        let turretColor = COLORS.white;
+        if (tank.weaponType === 'rocket') turretColor = COLORS.pink;
+        else if (tank.weaponType === 'minigun') turretColor = COLORS.purple;
+        render3DCube(targetCtx, turretPos, turretSize, cameraPos, cameraDir, turretColor, fov, tank.direction);
+
+        // Barrel
+        const upVector = new Vector3(0, 1, 0);
+        const rightVector = tank.direction.cross(upVector).normalize();
+        const barrelDirection = tank.direction.rotate(tank.barrelAngle, rightVector);
+        const barrelStart = turretPos;
+        const barrelEnd = barrelStart.add(barrelDirection.mul(tank.barrelLength));
+        render3DLine(targetCtx, barrelStart, barrelEnd, cameraPos, cameraDir, turretColor, fov);
+
+        // Treads
+        const treadOffset = 4;
+        const leftTread = tank.position.add(tank.direction.cross(new Vector3(0, 1, 0)).mul(treadOffset));
+        const rightTread = tank.position.add(tank.direction.cross(new Vector3(0, -1, 0)).mul(treadOffset));
+        const treadSize = new Vector3(3, 2, 15);
+        render3DCube(targetCtx, leftTread, treadSize, cameraPos, cameraDir, color, fov, tank.direction);
+        render3DCube(targetCtx, rightTread, treadSize, cameraPos, cameraDir, color, fov, tank.direction);
+    }
+
+    function renderExplosion(targetCtx, explosion, cameraPos, cameraDir) {
+        const center = project3DTo2D(explosion.position, cameraPos, cameraDir);
+        if (center) {
+            const dist = explosion.position.distanceTo(cameraPos);
+            const size = Math.max(1, explosion.radius * 200 / dist);
+            targetCtx.fillStyle = explosion.radius % 2 === 0 ? COLORS.orange : COLORS.red;
+            targetCtx.beginPath();
+            targetCtx.arc(center.x, center.y, size, 0, Math.PI * 2);
+            targetCtx.fill();
+        }
+    }
+
+    function renderPowerUp(targetCtx, powerUp, cameraPos, cameraDir, fov = 60) {
+        render3DCube(targetCtx, powerUp.position, 5, cameraPos, cameraDir, powerUp.color, fov);
+    }
+
+    function renderHUD() {
+        ctx.font = '20px Courier New';
+        const x = WIDTH - 200;
+
+        let weaponColor = COLORS.white;
+        if (playerTank.weaponType === 'minigun') weaponColor = COLORS.purple;
+        else if (playerTank.weaponType === 'rocket') weaponColor = COLORS.pink;
+
+        ctx.fillStyle = weaponColor;
+        ctx.fillText(`Weapon: ${playerTank.weaponType}`, x, HEIGHT - 180);
+
+        ctx.fillStyle = COLORS.orange;
+        ctx.fillText(`Health: ${Math.floor(playerTank.health)}`, x, HEIGHT - 150);
+
+        ctx.fillStyle = COLORS.magenta;
+        ctx.fillText(`Cooldown: ${Math.floor(playerTank.coolTime)}`, x, HEIGHT - 120);
+
+        ctx.fillStyle = COLORS.cyan;
+        ctx.fillText(`Speed: ${playerTank.speed.toFixed(1)}`, x, HEIGHT - 90);
+
+        ctx.fillStyle = COLORS.white;
+        ctx.fillText(`Score: ${Math.floor(playerTank.score)}`, x, HEIGHT - 60);
+
+        ctx.fillText(`Enemies: ${enemyTanks.length}`, x, HEIGHT - 30);
+    }
+
+    function renderScopeView() {
+        const scopeSize = 350;
+        const scopeCanvas = document.createElement('canvas');
+        scopeCanvas.width = scopeSize;
+        scopeCanvas.height = scopeSize;
+        const scopeCtx = scopeCanvas.getContext('2d');
+
+        scopeCtx.fillStyle = COLORS.black;
+        scopeCtx.fillRect(0, 0, scopeSize, scopeSize);
+
+        const turretOffset = 15;
+        const rightVec = new Vector3(0, 1, 0).cross(playerTank.direction).normalize();
+        let scopeCameraPos = playerTank.position
+            .add(playerTank.direction.mul(turretOffset))
+            .add(rightVec.mul(5))
+            .sub(new Vector3(0, 5 - playerTank.barrelAngle * 0.2, 0));
+
+        const scopeCameraDir = playerTank.direction.copy();
+        const fov = 20;
+
+        // Render obstacles
+        for (const obs of obstacles) {
+            renderObstacle(scopeCtx, obs, scopeCameraPos, scopeCameraDir, fov);
+        }
+
+        // Render enemy tanks with range
+        const visibleTanks = [];
+        for (const tank of enemyTanks) {
+            const pos2D = project3DTo2D(tank.position, scopeCameraPos, scopeCameraDir, fov);
+            if (pos2D && pos2D.x >= 0 && pos2D.x <= scopeSize && pos2D.y >= 0 && pos2D.y <= scopeSize) {
+                renderTank(scopeCtx, tank, scopeCameraPos, scopeCameraDir, tank.color, fov);
+                const range = tank.position.distanceTo(playerTank.position);
+                visibleTanks.push({ y: pos2D.y, range });
+            }
+        }
+
+        // Render power-ups
+        for (const powerUp of powerUps) {
+            renderPowerUp(scopeCtx, powerUp, scopeCameraPos, scopeCameraDir, fov);
+        }
+
+        // Render bullets
+        for (const bullet of [...playerBullets, ...enemyBullets]) {
+            const end = bullet.position.add(bullet.direction.mul(5));
+            render3DLine(scopeCtx, bullet.position, end, scopeCameraPos, scopeCameraDir, bullet.color, fov);
+        }
+
+        // Render explosions
+        for (const exp of explosions) {
+            renderExplosion(scopeCtx, exp, scopeCameraPos, scopeCameraDir);
+        }
+
+        // Range info
+        scopeCtx.font = '14px Courier New';
+        scopeCtx.fillStyle = COLORS.white;
+        visibleTanks.sort((a, b) => a.y - b.y);
+        visibleTanks.forEach((t, i) => {
+            scopeCtx.fillText(`Range: ${t.range.toFixed(1)}m`, 10, 20 + i * 18);
+        });
+
+        // Barrel angle indicator
+        const barHeight = 100;
+        const barWidth = 10;
+        const barX = scopeSize - barWidth - 10;
+        const barY = (scopeSize - barHeight) / 2;
+        scopeCtx.strokeStyle = COLORS.white;
+        scopeCtx.strokeRect(barX, barY, barWidth, barHeight);
+
+        const indicatorY = barY + barHeight / 2 - (playerTank.barrelAngle / 90) * (barHeight / 2);
+        scopeCtx.beginPath();
+        scopeCtx.moveTo(barX, barY + barHeight / 2);
+        scopeCtx.lineTo(barX + barWidth, barY + barHeight / 2);
+        scopeCtx.stroke();
+
+        scopeCtx.strokeStyle = COLORS.green;
+        scopeCtx.beginPath();
+        scopeCtx.moveTo(barX, indicatorY);
+        scopeCtx.lineTo(barX + barWidth, indicatorY);
+        scopeCtx.stroke();
+
+        // Crosshair
+        scopeCtx.strokeStyle = COLORS.green;
+        scopeCtx.beginPath();
+        scopeCtx.arc(scopeSize / 2, scopeSize / 2, scopeSize / 2 - 1, 0, Math.PI * 2);
+        scopeCtx.stroke();
+        scopeCtx.beginPath();
+        scopeCtx.moveTo(scopeSize / 2, 0);
+        scopeCtx.lineTo(scopeSize / 2, scopeSize);
+        scopeCtx.moveTo(0, scopeSize / 2);
+        scopeCtx.lineTo(scopeSize, scopeSize / 2);
+        scopeCtx.stroke();
+
+        ctx.drawImage(scopeCanvas, 10, 10);
+    }
+
+    function renderMinimap() {
+        const mapSize = 350;
+        const mapX = WIDTH - mapSize - 10;
+        const mapY = 10;
+
+        ctx.strokeStyle = COLORS.white;
+        ctx.strokeRect(mapX, mapY, mapSize, mapSize);
+
+        // Obstacles
+        for (const obs of obstacles) {
+            const x = mapX + obs.position.x * mapSize / TERRAIN_SIZE;
+            const y = mapY + (TERRAIN_SIZE - obs.position.z) * mapSize / TERRAIN_SIZE;
+            ctx.fillStyle = COLORS.green;
+            if (obs.shape === 'cube') {
+                ctx.fillRect(x - obs.size / 5, y - obs.size / 5, obs.size / 5, obs.size / 5);
+            } else {
+                ctx.beginPath();
+                ctx.moveTo(x, y - obs.size / 10);
+                ctx.lineTo(x - obs.size / 10, y + obs.size / 10);
+                ctx.lineTo(x + obs.size / 10, y + obs.size / 10);
+                ctx.closePath();
+                ctx.fill();
+            }
+        }
+
+        // Enemy tanks
+        for (const tank of enemyTanks) {
+            const x = mapX + tank.position.x * mapSize / TERRAIN_SIZE;
+            const y = mapY + (TERRAIN_SIZE - tank.position.z) * mapSize / TERRAIN_SIZE;
+            ctx.fillStyle = tank.color;
+            ctx.beginPath();
+            ctx.arc(x, y, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // Power-ups
+        for (const powerUp of powerUps) {
+            const x = mapX + powerUp.position.x * mapSize / TERRAIN_SIZE;
+            const y = mapY + (TERRAIN_SIZE - powerUp.position.z) * mapSize / TERRAIN_SIZE;
+            ctx.fillStyle = powerUp.color;
+            ctx.beginPath();
+            ctx.arc(x, y, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // Player tank with direction
+        const px = mapX + playerTank.position.x * mapSize / TERRAIN_SIZE;
+        const py = mapY + (TERRAIN_SIZE - playerTank.position.z) * mapSize / TERRAIN_SIZE;
+        const endPoint = playerTank.position.add(playerTank.direction.mul(25));
+        const ex = mapX + endPoint.x * mapSize / TERRAIN_SIZE;
+        const ey = mapY + (TERRAIN_SIZE - endPoint.z) * mapSize / TERRAIN_SIZE;
+
+        ctx.strokeStyle = COLORS.blue;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        ctx.lineTo(ex, ey);
+        ctx.stroke();
+        ctx.lineWidth = 1;
+
+        ctx.fillStyle = COLORS.blue;
+        ctx.beginPath();
+        ctx.arc(px, py, 4, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    function createTerrain() {
+        const lines = [];
+        for (let x = 0; x <= TERRAIN_SIZE; x += 50) {
+            for (let z = 0; z <= TERRAIN_SIZE; z += 50) {
+                if (x < TERRAIN_SIZE) {
+                    lines.push([new Vector3(x, 0, z), new Vector3(x + 50, 0, z)]);
+                }
+                if (z < TERRAIN_SIZE) {
+                    lines.push([new Vector3(x, 0, z), new Vector3(x, 0, z + 50)]);
+                }
+            }
+        }
+        return lines;
+    }
+
+    function createObstacles() {
+        const obs = [];
+        for (let i = 0; i < settings.numObstacles; i++) {
+            obs.push({
+                position: new Vector3(
+                    Math.random() * TERRAIN_SIZE,
+                    0,
+                    Math.random() * TERRAIN_SIZE
+                ),
+                size: 10 + Math.random() * 20,
+                shape: Math.random() < 0.5 ? 'cube' : 'pyramid'
+            });
+        }
+        return obs;
+    }
+
+    function createPowerUp() {
+        const types = ['health', 'cooldown', 'speed', 'minigun', 'cannon', 'rocket'];
+        return new PowerUp(
+            new Vector3(Math.random() * TERRAIN_SIZE, 0, Math.random() * TERRAIN_SIZE),
+            types[Math.floor(Math.random() * types.length)]
+        );
+    }
+
+    function applyPowerUp(tank, powerUp) {
+        if (powerUp.type === 'health') {
+            tank.health = Math.min(tank.health + powerUp.value, 5000);
+        } else if (powerUp.type === 'cooldown') {
+            tank.coolTime = Math.max(tank.coolTime - powerUp.value, 10);
+        } else if (powerUp.type === 'speed') {
+            tank.speed = Math.min(tank.speed + powerUp.value, 5);
+        } else if (powerUp.type === 'minigun') {
+            tank.weaponType = 'minigun';
+            tank.coolTime = 5;
+        } else if (powerUp.type === 'cannon') {
+            tank.weaponType = 'cannon';
+            tank.coolTime = 30;
+        } else if (powerUp.type === 'rocket') {
+            tank.weaponType = 'rocket';
+            tank.coolTime = 100;
+        }
+    }
+
+    function resetGame() {
+        terrain = createTerrain();
+        obstacles = createObstacles();
+        playerBullets = [];
+        enemyBullets = [];
+        explosions = [];
+        powerUps = [];
+        enemyTanks = [];
+        lastPowerUpPos = null;
+        gameOverMessage = '';
+
+        // Place player tank
+        let attempts = 0;
+        do {
+            playerTank = new Tank(
+                new Vector3(Math.random() * TERRAIN_SIZE, 0, Math.random() * TERRAIN_SIZE),
+                new Vector3(Math.random() * 2 - 1, 0, Math.random() * 2 - 1),
+                true
+            );
+            attempts++;
+        } while (checkCollision(playerTank.position, obstacles, []) && attempts < 100);
+
+        // Place enemy tanks
+        for (let i = 0; i < settings.numEnemyTanks; i++) {
+            attempts = 0;
+            let enemy;
+            do {
+                enemy = new Tank(
+                    new Vector3(Math.random() * TERRAIN_SIZE, 0, Math.random() * TERRAIN_SIZE),
+                    new Vector3(Math.random() * 2 - 1, 0, Math.random() * 2 - 1),
+                    false
+                );
+                attempts++;
+            } while (checkCollision(enemy.position, obstacles, [playerTank, ...enemyTanks]) && attempts < 100);
+            enemyTanks.push(enemy);
+        }
+
+        gameState = 'playing';
+    }
+
+    function update() {
+        if (gameState !== 'playing') return;
+
+        // Player input
+        if (keys['ArrowUp']) playerTank.move(true);
+        if (keys['ArrowDown']) playerTank.move(false);
+        if (keys['ArrowLeft']) playerTank.rotate(1);
+        if (keys['ArrowRight']) playerTank.rotate(-1);
+        if (keys['q'] || keys['Q']) playerTank.adjustBarrel(1);
+        if (keys['z'] || keys['Z']) playerTank.adjustBarrel(-1);
+        if (keys[' ']) {
+            const bullet = playerTank.fire();
+            if (bullet) playerBullets.push(bullet);
+        }
+
+        // Enemy AI
+        for (const enemy of enemyTanks) {
+            const toPlayer = playerTank.position.sub(enemy.position);
+            const targetDir = new Vector3(toPlayer.x, 0, toPlayer.z).normalize();
+            const angleDiff = enemy.direction.angleTo(targetDir);
+
+            const rotation = Math.min(2, Math.max(-2, angleDiff));
+
+            // Determine rotation direction
+            const cross = enemy.direction.cross(targetDir);
+            if (cross.y > 0) enemy.rotate(rotation);
+            else enemy.rotate(-rotation);
+
+            // Fire logic
+            if (angleDiff < 5 || (toPlayer.length() < 100 && angleDiff < 20) || (Math.random() < 0.01 && angleDiff < 90)) {
+                const bullet = enemy.fire();
+                if (bullet) enemyBullets.push(bullet);
+            }
+
+            enemy.move(true);
+            enemy.update();
+        }
+
+        playerTank.update();
+
+        // Update bullets
+        for (const bulletList of [playerBullets, enemyBullets]) {
+            for (let i = bulletList.length - 1; i >= 0; i--) {
+                const bullet = bulletList[i];
+                if (!bullet.update()) {
+                    bulletList.splice(i, 1);
+                    continue;
+                }
+
+                // Check tank hits
+                const allTanks = [playerTank, ...enemyTanks];
+                for (const tank of allTanks) {
+                    if (tank.health > 0 && bullet.position.distanceTo(tank.position) < 7 && bullet.isPlayerBullet !== tank.isPlayer) {
+                        tank.health -= bullet.damage;
+                        tank.speed = Math.max(tank.speed * 0.9, 1);
+                        tank.coolTime = Math.min(tank.coolTime * 1.1, 100);
+                        bulletList.splice(i, 1);
+
+                        if (tank.health <= 0) {
+                            explosions.push(new Explosion(tank.position, tank, 60));
+                        } else {
+                            explosions.push(new Explosion(tank.position, tank, 10));
+                        }
+
+                        if (!tank.isPlayer) {
+                            playerTank.score += bullet.damage;
+                        }
+                        break;
+                    }
+                }
+
+                // Check obstacle hits
+                for (const obs of obstacles) {
+                    if (bullet.position.distanceTo(obs.position) < obs.size) {
+                        const idx = bulletList.indexOf(bullet);
+                        if (idx > -1) bulletList.splice(idx, 1);
+                        break;
+                    }
+                }
+
+                // Check power-up hits
+                for (let j = powerUps.length - 1; j >= 0; j--) {
+                    if (bullet.position.distanceTo(powerUps[j].position) < 7) {
+                        const idx = bulletList.indexOf(bullet);
+                        if (idx > -1) bulletList.splice(idx, 1);
+                        powerUps.splice(j, 1);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Update explosions
+        explosions = explosions.filter(exp => exp.update());
+
+        // Update power-ups
+        powerUps = powerUps.filter(p => !p.isExpired());
+        if (powerUps.length < 6 && Math.random() < 0.005) {
+            powerUps.push(createPowerUp());
+        }
+
+        // Check power-up collision
+        for (let i = powerUps.length - 1; i >= 0; i--) {
+            if (playerTank.position.distanceTo(powerUps[i].position) < 10) {
+                applyPowerUp(playerTank, powerUps[i]);
+                powerUps.splice(i, 1);
+            }
+        }
+
+        // Check game over
+        if (playerTank.health <= 0) {
+            gameState = 'gameover';
+            gameOverMessage = 'Game Over! You lost.';
+        } else if (enemyTanks.length === 0) {
+            gameState = 'gameover';
+            gameOverMessage = 'Congratulations! You won!';
+        }
+    }
+
+    function render() {
+        ctx.fillStyle = COLORS.black;
+        ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+        if (gameState === 'menu') return;
+
+        const cameraPos = playerTank.position.sub(playerTank.direction.mul(100)).add(new Vector3(0, 40, 0));
+        const cameraDir = playerTank.direction.copy();
+
+        // Render terrain
+        ctx.strokeStyle = COLORS.green;
+        for (const [start, end] of terrain) {
+            render3DLine(ctx, start, end, cameraPos, cameraDir, COLORS.green);
+        }
+
+        // Render obstacles
+        for (const obs of obstacles) {
+            renderObstacle(ctx, obs, cameraPos, cameraDir);
+        }
+
+        // Render power-ups
+        for (const powerUp of powerUps) {
+            renderPowerUp(ctx, powerUp, cameraPos, cameraDir);
+        }
+
+        // Render tanks
+        renderTank(ctx, playerTank, cameraPos, cameraDir, playerTank.health > 0 ? playerTank.color : COLORS.red);
+        for (const tank of enemyTanks) {
+            renderTank(ctx, tank, cameraPos, cameraDir, tank.health > 0 ? tank.color : COLORS.red);
+        }
+
+        // Render bullets
+        for (const bullet of [...playerBullets, ...enemyBullets]) {
+            const end = bullet.position.add(bullet.direction.mul(5));
+            render3DLine(ctx, bullet.position, end, cameraPos, cameraDir, bullet.color);
+        }
+
+        // Render explosions
+        for (const exp of explosions) {
+            renderExplosion(ctx, exp, cameraPos, cameraDir);
+        }
+
+        renderHUD();
+        renderScopeView();
+        renderMinimap();
+
+        // Game over overlay
+        if (gameState === 'gameover' && explosions.length === 0) {
+            ctx.fillStyle = 'rgba(0,0,0,0.7)';
+            ctx.fillRect(WIDTH / 2 - 250, HEIGHT / 2 - 50, 500, 120);
+
+            ctx.font = '48px Courier New';
+            ctx.fillStyle = COLORS.white;
+            ctx.textAlign = 'center';
+            ctx.fillText(gameOverMessage, WIDTH / 2, HEIGHT / 2);
+
+            ctx.font = '24px Courier New';
+            ctx.fillText('Press R to Restart', WIDTH / 2, HEIGHT / 2 + 45);
+            ctx.textAlign = 'left';
+        }
+
+        // Help overlay
+        if (showHelp) {
+            document.getElementById('helpOverlay').style.display = 'block';
+        } else {
+            document.getElementById('helpOverlay').style.display = 'none';
+        }
+    }
+
+    function gameLoop() {
+        update();
+        render();
+        requestAnimationFrame(gameLoop);
+    }
+
+    function startGame(difficulty) {
+        settings = DIFFICULTY[difficulty];
+        document.getElementById('difficultySelect').style.display = 'none';
+        resetGame();
+    }
+
+    // Initialize
+    window.onload = function() {
+        canvas = document.getElementById('gameCanvas');
+        ctx = canvas.getContext('2d');
+
+        document.addEventListener('keydown', (e) => {
+            keys[e.key] = true;
+
+            if (e.key === 'h' || e.key === 'H') {
+                showHelp = !showHelp;
+            }
+
+            if ((e.key === 'r' || e.key === 'R') && gameState === 'gameover') {
+                document.getElementById('difficultySelect').style.display = 'block';
+                gameState = 'menu';
+            }
+
+            // Prevent scrolling with arrow keys and space
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) {
+                e.preventDefault();
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            keys[e.key] = false;
+        });
+
+        gameLoop();
+    };
+    </script>
+</body>
+</html>
