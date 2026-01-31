@@ -65,6 +65,28 @@ Defend Israeli cities from incoming attacks! Inspired by Missile Command.
 
 ---
 
+### JMR's Space Invaders
+**File:** `invaders.html` (Version 1)
+
+Classic alien invasion arcade action!
+
+- **Controls:**
+  - Tap left side to move left
+  - Tap right side to move right
+  - Tap center to shoot
+  - Keyboard: Arrow keys + Space
+- **Features:**
+  - 5 rows of different enemy types (monsters and stick figures)
+  - Destructible barriers for cover
+  - Enemies speed up as you destroy them
+  - Wave progression
+  - Sound effects
+  - Commented code for adding custom images
+
+**Play:** `https://raw.githack.com/jmrothberg/Games/main/invaders.html`
+
+---
+
 ## Desktop Python Games
 
 ### 3D Tank Battle
@@ -101,6 +123,7 @@ A Doom-inspired first-person game.
 | Asteroids | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/asteroids.html) |
 | Pac-Man | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/pacman.html) |
 | Iron Dome | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/missile.html) |
+| Space Invaders | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/invaders.html) |
 | Tank Battle | Desktop (Python) | Download & run with Python |
 
 ---
