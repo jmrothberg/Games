@@ -1,0 +1,1349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>JMR's Mr. Do!</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            touch-action: none;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #000;
+        }
+        #gameCanvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #hud {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: white;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            text-shadow: 0 0 10px rgba(255,255,255,0.5);
+            z-index: 10;
+        }
+        #gameTitle {
+            color: #ff0000;
+            font-size: 11px;
+        }
+        #extra {
+            color: #ffff00;
+            letter-spacing: 2px;
+        }
+        #startScreen, #gameOverScreen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.9);
+            color: #ff0000;
+            font-family: 'Courier New', monospace;
+            z-index: 100;
+        }
+        #startScreen h1, #gameOverScreen h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+            text-shadow: 0 0 20px rgba(255,0,0,0.5);
+            text-align: center;
+        }
+        .version {
+            color: #ff0000;
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+        #startScreen p, #gameOverScreen p {
+            font-size: 14px;
+            margin-bottom: 20px;
+            text-align: center;
+            padding: 0 20px;
+            color: white;
+        }
+        .start-btn {
+            padding: 15px 40px;
+            font-size: 18px;
+            background: transparent;
+            border: 2px solid #ff0000;
+            color: #ff0000;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+        }
+        .hidden { display: none !important; }
+        #controls {
+            position: fixed;
+            bottom: 10px;
+            left: 0;
+            right: 0;
+            display: flex;
+            justify-content: space-between;
+            padding: 0 10px;
+            z-index: 10;
+        }
+        .ctrl-btn {
+            width: 60px;
+            height: 60px;
+            background: rgba(255,255,255,0.2);
+            border: 2px solid rgba(255,255,255,0.4);
+            border-radius: 10px;
+            color: white;
+            font-size: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        #dpad {
+            display: grid;
+            grid-template-columns: repeat(3, 50px);
+            grid-template-rows: repeat(3, 50px);
+            gap: 2px;
+        }
+        #dpad .ctrl-btn {
+            width: 50px;
+            height: 50px;
+        }
+        #dpad .empty {
+            background: transparent;
+            border: none;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="hud">
+        <div id="score">SCORE: 0</div>
+        <div id="gameTitle">JMR'S MR. DO!</div>
+        <div id="extra">EXTRA</div>
+    </div>
+
+    <div id="controls" class="hidden">
+        <div id="dpad">
+            <div class="empty"></div>
+            <div class="ctrl-btn" data-dir="up">▲</div>
+            <div class="empty"></div>
+            <div class="ctrl-btn" data-dir="left">◀</div>
+            <div class="ctrl-btn" data-dir="fire">●</div>
+            <div class="ctrl-btn" data-dir="right">▶</div>
+            <div class="empty"></div>
+            <div class="ctrl-btn" data-dir="down">▼</div>
+            <div class="empty"></div>
+        </div>
+    </div>
+
+    <div id="startScreen">
+        <h1>JMR'S MR. DO!</h1>
+        <p class="version">Version 1</p>
+        <p>Dig tunnels and collect cherries!<br>Throw your power ball at enemies<br>Push apples to crush them<br>Collect E-X-T-R-A for bonus!</p>
+        <button class="start-btn" id="startBtn">START GAME</button>
+    </div>
+
+    <div id="gameOverScreen" class="hidden">
+        <h1>JMR'S MR. DO!</h1>
+        <h2 style="color: #ff0000; margin-bottom: 10px;">GAME OVER</h2>
+        <p id="finalScore">SCORE: 0</p>
+        <p id="levelReached" style="font-size: 14px; margin-bottom: 15px;">LEVEL: 1</p>
+        <button class="start-btn" id="restartBtn">PLAY AGAIN</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Handle retina displays
+        let dpr, gameWidth, gameHeight;
+        let offsetX = 0, offsetY = 0;
+        let playAreaWidth, playAreaHeight;
+
+        // Grid settings
+        const TILE_SIZE = 24;
+        const GRID_COLS = 15;
+        const GRID_ROWS = 13;
+
+        function resize() {
+            dpr = window.devicePixelRatio || 1;
+            gameWidth = window.innerWidth;
+            gameHeight = window.innerHeight;
+            canvas.width = gameWidth * dpr;
+            canvas.height = gameHeight * dpr;
+            canvas.style.width = gameWidth + 'px';
+            canvas.style.height = gameHeight + 'px';
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+            // Calculate play area to fit grid
+            playAreaWidth = GRID_COLS * TILE_SIZE;
+            playAreaHeight = GRID_ROWS * TILE_SIZE;
+            offsetX = (gameWidth - playAreaWidth) / 2;
+            offsetY = (gameHeight - playAreaHeight) / 2 + 20;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Audio
+        let audioCtx = null;
+
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        function playSound(type) {
+            if (!audioCtx) return;
+
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            switch(type) {
+                case 'dig':
+                    oscillator.type = 'square';
+                    oscillator.frequency.setValueAtTime(200, audioCtx.currentTime);
+                    gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.05);
+                    oscillator.start();
+                    oscillator.stop(audioCtx.currentTime + 0.05);
+                    break;
+                case 'cherry':
+                    oscillator.type = 'sine';
+                    oscillator.frequency.setValueAtTime(800, audioCtx.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(1200, audioCtx.currentTime + 0.1);
+                    gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                    oscillator.start();
+                    oscillator.stop(audioCtx.currentTime + 0.1);
+                    break;
+                case 'throw':
+                    oscillator.type = 'triangle';
+                    oscillator.frequency.setValueAtTime(400, audioCtx.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(600, audioCtx.currentTime + 0.1);
+                    gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                    oscillator.start();
+                    oscillator.stop(audioCtx.currentTime + 0.1);
+                    break;
+                case 'kill':
+                    oscillator.type = 'sawtooth';
+                    oscillator.frequency.setValueAtTime(300, audioCtx.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.2);
+                    gainNode.gain.setValueAtTime(0.4, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+                    oscillator.start();
+                    oscillator.stop(audioCtx.currentTime + 0.2);
+                    break;
+                case 'crush':
+                    oscillator.type = 'sawtooth';
+                    oscillator.frequency.setValueAtTime(150, audioCtx.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(50, audioCtx.currentTime + 0.3);
+                    gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+                    oscillator.start();
+                    oscillator.stop(audioCtx.currentTime + 0.3);
+                    break;
+                case 'death':
+                    oscillator.type = 'sawtooth';
+                    oscillator.frequency.setValueAtTime(400, audioCtx.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.5);
+                    gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+                    oscillator.start();
+                    oscillator.stop(audioCtx.currentTime + 0.5);
+                    break;
+                case 'extra':
+                    oscillator.type = 'sine';
+                    for (let i = 0; i < 5; i++) {
+                        oscillator.frequency.setValueAtTime(400 + i * 100, audioCtx.currentTime + i * 0.1);
+                    }
+                    gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+                    oscillator.start();
+                    oscillator.stop(audioCtx.currentTime + 0.5);
+                    break;
+            }
+        }
+
+        // Game state
+        let score = 0, level = 1, lives = 3, gameRunning = false;
+        let grid = [];
+        let player = null;
+        let enemies = [];
+        let cherries = [];
+        let apples = [];
+        let powerBall = null;
+        let extraLetters = [false, false, false, false, false]; // E X T R A
+        let cherryStreak = 0;
+        let lastCherryTime = 0;
+
+        // Tile types
+        const TILE_DIRT = 0;
+        const TILE_EMPTY = 1;
+        const TILE_TUNNEL = 2;
+
+        class Player {
+            constructor(gridX, gridY) {
+                this.gridX = gridX;
+                this.gridY = gridY;
+                this.x = offsetX + gridX * TILE_SIZE + TILE_SIZE / 2;
+                this.y = offsetY + gridY * TILE_SIZE + TILE_SIZE / 2;
+                this.targetX = this.x;
+                this.targetY = this.y;
+                this.speed = 3;
+                this.direction = 0; // 0=right, 1=down, 2=left, 3=up
+                this.moving = false;
+                this.hasBall = true;
+                this.frame = 0;
+            }
+
+            move(dir) {
+                if (this.moving) return;
+
+                let newGridX = this.gridX;
+                let newGridY = this.gridY;
+
+                switch(dir) {
+                    case 0: newGridX++; break; // right
+                    case 1: newGridY++; break; // down
+                    case 2: newGridX--; break; // left
+                    case 3: newGridY--; break; // up
+                }
+
+                // Check bounds
+                if (newGridX < 0 || newGridX >= GRID_COLS || newGridY < 0 || newGridY >= GRID_ROWS) {
+                    return;
+                }
+
+                // Check for apple blocking
+                for (let apple of apples) {
+                    if (apple.gridX === newGridX && apple.gridY === newGridY && !apple.falling) {
+                        // Try to push apple
+                        this.pushApple(apple, dir);
+                        return;
+                    }
+                }
+
+                this.direction = dir;
+                this.gridX = newGridX;
+                this.gridY = newGridY;
+                this.targetX = offsetX + this.gridX * TILE_SIZE + TILE_SIZE / 2;
+                this.targetY = offsetY + this.gridY * TILE_SIZE + TILE_SIZE / 2;
+                this.moving = true;
+
+                // Dig tunnel
+                if (grid[this.gridY][this.gridX] === TILE_DIRT) {
+                    grid[this.gridY][this.gridX] = TILE_TUNNEL;
+                    playSound('dig');
+                }
+            }
+
+            pushApple(apple, dir) {
+                let newAX = apple.gridX;
+                let newAY = apple.gridY;
+
+                switch(dir) {
+                    case 0: newAX++; break;
+                    case 1: newAY++; break;
+                    case 2: newAX--; break;
+                    case 3: newAY--; break;
+                }
+
+                // Check if apple can be pushed
+                if (newAX < 0 || newAX >= GRID_COLS || newAY < 0 || newAY >= GRID_ROWS) return;
+
+                // Check for another apple or obstacle
+                for (let other of apples) {
+                    if (other !== apple && other.gridX === newAX && other.gridY === newAY) return;
+                }
+
+                // Push the apple
+                apple.gridX = newAX;
+                apple.gridY = newAY;
+                apple.targetX = offsetX + apple.gridX * TILE_SIZE + TILE_SIZE / 2;
+                apple.targetY = offsetY + apple.gridY * TILE_SIZE + TILE_SIZE / 2;
+                apple.moving = true;
+
+                // Check if apple should fall
+                apple.checkFall();
+            }
+
+            throwBall() {
+                if (!this.hasBall || powerBall) return;
+
+                this.hasBall = false;
+                let dx = 0, dy = 0;
+                switch(this.direction) {
+                    case 0: dx = 1; break;
+                    case 1: dy = 1; break;
+                    case 2: dx = -1; break;
+                    case 3: dy = -1; break;
+                }
+                powerBall = new PowerBall(this.x, this.y, dx * 5, dy * 5);
+                playSound('throw');
+            }
+
+            update() {
+                if (this.moving) {
+                    const dx = this.targetX - this.x;
+                    const dy = this.targetY - this.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+
+                    if (dist < this.speed) {
+                        this.x = this.targetX;
+                        this.y = this.targetY;
+                        this.moving = false;
+                    } else {
+                        this.x += (dx / dist) * this.speed;
+                        this.y += (dy / dist) * this.speed;
+                    }
+                    this.frame++;
+                }
+
+                // Check cherry collection
+                for (let i = cherries.length - 1; i >= 0; i--) {
+                    const cherry = cherries[i];
+                    if (cherry.gridX === this.gridX && cherry.gridY === this.gridY) {
+                        cherries.splice(i, 1);
+                        const now = Date.now();
+                        if (now - lastCherryTime < 500) {
+                            cherryStreak++;
+                        } else {
+                            cherryStreak = 1;
+                        }
+                        lastCherryTime = now;
+
+                        // 500 bonus for 8 in a row
+                        if (cherryStreak >= 8) {
+                            score += 500;
+                            cherryStreak = 0;
+                        }
+                        score += 50;
+                        playSound('cherry');
+                        updateHUD();
+                    }
+                }
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+
+                // Rotation based on direction
+                ctx.rotate(this.direction * Math.PI / 2);
+
+                // Clown body (red suit)
+                ctx.fillStyle = '#ff0000';
+                ctx.beginPath();
+                ctx.ellipse(0, 0, 10, 12, 0, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Face
+                ctx.fillStyle = '#ffccaa';
+                ctx.beginPath();
+                ctx.arc(0, -4, 7, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Red nose
+                ctx.fillStyle = '#ff0000';
+                ctx.beginPath();
+                ctx.arc(0, -2, 3, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Eyes
+                ctx.fillStyle = '#000';
+                ctx.fillRect(-4, -7, 2, 2);
+                ctx.fillRect(2, -7, 2, 2);
+
+                // Hair (blue poofs)
+                ctx.fillStyle = '#0066ff';
+                ctx.beginPath();
+                ctx.arc(-6, -8, 4, 0, Math.PI * 2);
+                ctx.arc(6, -8, 4, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Power ball indicator
+                if (this.hasBall) {
+                    ctx.fillStyle = '#00ffff';
+                    ctx.beginPath();
+                    ctx.arc(8, 4, 4, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+                }
+
+                ctx.restore();
+            }
+        }
+
+        class Enemy {
+            constructor(gridX, gridY, isAlpha = false, letter = null) {
+                this.gridX = gridX;
+                this.gridY = gridY;
+                this.x = offsetX + gridX * TILE_SIZE + TILE_SIZE / 2;
+                this.y = offsetY + gridY * TILE_SIZE + TILE_SIZE / 2;
+                this.targetX = this.x;
+                this.targetY = this.y;
+                this.speed = 1.5 + level * 0.2;
+                this.moving = false;
+                this.alive = true;
+                this.isDigger = false;
+                this.diggerTimer = 0;
+                this.frame = 0;
+                this.isAlpha = isAlpha;
+                this.letter = letter;
+                this.moveTimer = 0;
+            }
+
+            update() {
+                if (!this.alive) return;
+
+                this.moveTimer++;
+                if (this.moveTimer < 10) return;
+                this.moveTimer = 0;
+
+                if (this.moving) {
+                    const dx = this.targetX - this.x;
+                    const dy = this.targetY - this.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+
+                    if (dist < this.speed) {
+                        this.x = this.targetX;
+                        this.y = this.targetY;
+                        this.moving = false;
+                    } else {
+                        this.x += (dx / dist) * this.speed;
+                        this.y += (dy / dist) * this.speed;
+                    }
+                    this.frame++;
+                } else {
+                    // AI: move toward player
+                    this.moveTowardPlayer();
+                }
+
+                // Become digger after time
+                if (!this.isDigger && !this.isAlpha) {
+                    this.diggerTimer++;
+                    if (this.diggerTimer > 200 - level * 10) {
+                        this.isDigger = true;
+                    }
+                }
+            }
+
+            moveTowardPlayer() {
+                if (!player) return;
+
+                const dx = player.gridX - this.gridX;
+                const dy = player.gridY - this.gridY;
+
+                let possibleMoves = [];
+
+                // Check each direction
+                const dirs = [
+                    { dir: 0, gx: this.gridX + 1, gy: this.gridY },
+                    { dir: 1, gx: this.gridX, gy: this.gridY + 1 },
+                    { dir: 2, gx: this.gridX - 1, gy: this.gridY },
+                    { dir: 3, gx: this.gridX, gy: this.gridY - 1 }
+                ];
+
+                for (let d of dirs) {
+                    if (d.gx < 0 || d.gx >= GRID_COLS || d.gy < 0 || d.gy >= GRID_ROWS) continue;
+
+                    // Non-diggers can only move through tunnels
+                    if (!this.isDigger && !this.isAlpha && grid[d.gy][d.gx] === TILE_DIRT) continue;
+
+                    // Check for apples
+                    let blocked = false;
+                    for (let apple of apples) {
+                        if (apple.gridX === d.gx && apple.gridY === d.gy) {
+                            if (this.isAlpha) {
+                                // Alphas eat apples!
+                                apple.eaten = true;
+                            } else {
+                                blocked = true;
+                            }
+                            break;
+                        }
+                    }
+                    if (blocked) continue;
+
+                    // Calculate distance to player
+                    const distToPlayer = Math.abs(d.gx - player.gridX) + Math.abs(d.gy - player.gridY);
+                    possibleMoves.push({ ...d, dist: distToPlayer });
+                }
+
+                if (possibleMoves.length > 0) {
+                    // Sort by distance to player and pick best (with some randomness)
+                    possibleMoves.sort((a, b) => a.dist - b.dist);
+                    const choice = Math.random() < 0.7 ? possibleMoves[0] : possibleMoves[Math.floor(Math.random() * possibleMoves.length)];
+
+                    this.gridX = choice.gx;
+                    this.gridY = choice.gy;
+                    this.targetX = offsetX + this.gridX * TILE_SIZE + TILE_SIZE / 2;
+                    this.targetY = offsetY + this.gridY * TILE_SIZE + TILE_SIZE / 2;
+                    this.moving = true;
+
+                    // Diggers create tunnels
+                    if (this.isDigger && grid[this.gridY][this.gridX] === TILE_DIRT) {
+                        grid[this.gridY][this.gridX] = TILE_TUNNEL;
+                    }
+                }
+            }
+
+            draw() {
+                if (!this.alive) return;
+
+                ctx.save();
+                ctx.translate(this.x, this.y);
+
+                if (this.isAlpha) {
+                    // Alphamonster (blue with letter)
+                    ctx.fillStyle = '#0088ff';
+                    ctx.beginPath();
+                    ctx.arc(0, 0, 11, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Letter
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = 'bold 14px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(this.letter, 0, 0);
+                } else {
+                    // Regular enemy (red blob)
+                    const wobble = Math.sin(this.frame * 0.3) * 2;
+
+                    ctx.fillStyle = this.isDigger ? '#ff8800' : '#ff0000';
+                    ctx.beginPath();
+                    ctx.ellipse(0, 0, 10 + wobble, 10 - wobble, 0, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Eyes
+                    ctx.fillStyle = '#ffffff';
+                    ctx.beginPath();
+                    ctx.arc(-4, -2, 4, 0, Math.PI * 2);
+                    ctx.arc(4, -2, 4, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Pupils (looking at player)
+                    ctx.fillStyle = '#000000';
+                    let lookX = 0, lookY = 0;
+                    if (player) {
+                        const dx = player.x - this.x;
+                        const dy = player.y - this.y;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+                        if (dist > 0) {
+                            lookX = (dx / dist) * 2;
+                            lookY = (dy / dist) * 2;
+                        }
+                    }
+                    ctx.beginPath();
+                    ctx.arc(-4 + lookX, -2 + lookY, 2, 0, Math.PI * 2);
+                    ctx.arc(4 + lookX, -2 + lookY, 2, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Digger has antennae
+                    if (this.isDigger) {
+                        ctx.strokeStyle = '#ff8800';
+                        ctx.lineWidth = 2;
+                        ctx.beginPath();
+                        ctx.moveTo(-4, -10);
+                        ctx.lineTo(-6, -16);
+                        ctx.moveTo(4, -10);
+                        ctx.lineTo(6, -16);
+                        ctx.stroke();
+                    }
+                }
+
+                ctx.restore();
+            }
+        }
+
+        class Cherry {
+            constructor(gridX, gridY) {
+                this.gridX = gridX;
+                this.gridY = gridY;
+                this.x = offsetX + gridX * TILE_SIZE + TILE_SIZE / 2;
+                this.y = offsetY + gridY * TILE_SIZE + TILE_SIZE / 2;
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+
+                // Stems
+                ctx.strokeStyle = '#00aa00';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(-3, -6);
+                ctx.quadraticCurveTo(0, -12, 3, -6);
+                ctx.stroke();
+
+                // Cherries
+                ctx.fillStyle = '#ff0000';
+                ctx.beginPath();
+                ctx.arc(-4, -2, 5, 0, Math.PI * 2);
+                ctx.arc(4, -2, 5, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Shine
+                ctx.fillStyle = '#ffffff';
+                ctx.beginPath();
+                ctx.arc(-5, -4, 2, 0, Math.PI * 2);
+                ctx.arc(3, -4, 2, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.restore();
+            }
+        }
+
+        class Apple {
+            constructor(gridX, gridY) {
+                this.gridX = gridX;
+                this.gridY = gridY;
+                this.x = offsetX + gridX * TILE_SIZE + TILE_SIZE / 2;
+                this.y = offsetY + gridY * TILE_SIZE + TILE_SIZE / 2;
+                this.targetX = this.x;
+                this.targetY = this.y;
+                this.falling = false;
+                this.fallSpeed = 0;
+                this.moving = false;
+                this.wobbleTime = 0;
+                this.eaten = false;
+            }
+
+            checkFall() {
+                // Check if there's empty space below
+                if (this.gridY < GRID_ROWS - 1) {
+                    const below = grid[this.gridY + 1][this.gridX];
+                    if (below === TILE_TUNNEL || below === TILE_EMPTY) {
+                        // Check no apple below
+                        let appleBelow = false;
+                        for (let other of apples) {
+                            if (other !== this && other.gridX === this.gridX && other.gridY === this.gridY + 1) {
+                                appleBelow = true;
+                                break;
+                            }
+                        }
+                        if (!appleBelow) {
+                            this.wobbleTime++;
+                            if (this.wobbleTime > 30) {
+                                this.falling = true;
+                                this.fallSpeed = 2;
+                            }
+                        }
+                    }
+                }
+            }
+
+            update() {
+                if (this.eaten) return;
+
+                if (this.moving && !this.falling) {
+                    const dx = this.targetX - this.x;
+                    const dy = this.targetY - this.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+
+                    if (dist < 3) {
+                        this.x = this.targetX;
+                        this.y = this.targetY;
+                        this.moving = false;
+                        this.checkFall();
+                    } else {
+                        this.x += (dx / dist) * 3;
+                        this.y += (dy / dist) * 3;
+                    }
+                }
+
+                if (this.falling) {
+                    this.fallSpeed += 0.5;
+                    this.y += this.fallSpeed;
+
+                    // Update grid position
+                    const newGridY = Math.floor((this.y - offsetY) / TILE_SIZE);
+                    if (newGridY !== this.gridY && newGridY < GRID_ROWS) {
+                        this.gridY = newGridY;
+                    }
+
+                    // Check for crushing enemies
+                    for (let enemy of enemies) {
+                        if (!enemy.alive) continue;
+                        const dx = enemy.x - this.x;
+                        const dy = enemy.y - this.y;
+                        if (Math.sqrt(dx * dx + dy * dy) < 15) {
+                            enemy.alive = false;
+                            score += 100;
+                            playSound('crush');
+
+                            // Check for alpha letter
+                            if (enemy.isAlpha && enemy.letter) {
+                                const letterIndex = 'EXTRA'.indexOf(enemy.letter);
+                                if (letterIndex >= 0) {
+                                    extraLetters[letterIndex] = true;
+                                    checkExtra();
+                                }
+                            }
+                            updateHUD();
+                        }
+                    }
+
+                    // Check for crushing player
+                    if (player) {
+                        const dx = player.x - this.x;
+                        const dy = player.y - this.y;
+                        if (Math.sqrt(dx * dx + dy * dy) < 15 && this.fallSpeed > 3) {
+                            playerDeath();
+                        }
+                    }
+
+                    // Check for landing
+                    if (this.gridY >= GRID_ROWS - 1 ||
+                        (this.gridY < GRID_ROWS - 1 && grid[this.gridY + 1][this.gridX] === TILE_DIRT)) {
+                        this.falling = false;
+                        this.fallSpeed = 0;
+                        this.y = offsetY + this.gridY * TILE_SIZE + TILE_SIZE / 2;
+                        this.targetY = this.y;
+
+                        // Check for another apple below to stop
+                        for (let other of apples) {
+                            if (other !== this && other.gridX === this.gridX && other.gridY === this.gridY + 1) {
+                                this.falling = false;
+                                break;
+                            }
+                        }
+                    }
+                } else if (!this.moving) {
+                    this.checkFall();
+                }
+            }
+
+            draw() {
+                if (this.eaten) return;
+
+                ctx.save();
+                ctx.translate(this.x, this.y);
+
+                // Wobble when about to fall
+                if (this.wobbleTime > 0 && !this.falling) {
+                    ctx.rotate(Math.sin(this.wobbleTime * 0.5) * 0.2);
+                }
+
+                // Apple body
+                ctx.fillStyle = '#ff0000';
+                ctx.beginPath();
+                ctx.arc(0, 2, 10, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Leaf
+                ctx.fillStyle = '#00aa00';
+                ctx.beginPath();
+                ctx.ellipse(3, -8, 4, 6, 0.5, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Stem
+                ctx.fillStyle = '#663300';
+                ctx.fillRect(-1, -10, 2, 5);
+
+                // Shine
+                ctx.fillStyle = 'rgba(255,255,255,0.4)';
+                ctx.beginPath();
+                ctx.arc(-4, -2, 4, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.restore();
+            }
+        }
+
+        class PowerBall {
+            constructor(x, y, vx, vy) {
+                this.x = x;
+                this.y = y;
+                this.vx = vx;
+                this.vy = vy;
+                this.alive = true;
+                this.bounces = 0;
+                this.frame = 0;
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.frame++;
+
+                // Bounce off walls
+                if (this.x < offsetX + 10 || this.x > offsetX + playAreaWidth - 10) {
+                    this.vx *= -1;
+                    this.bounces++;
+                }
+                if (this.y < offsetY + 10 || this.y > offsetY + playAreaHeight - 10) {
+                    this.vy *= -1;
+                    this.bounces++;
+                }
+
+                // Return to player after many bounces
+                if (this.bounces > 5) {
+                    if (player) {
+                        const dx = player.x - this.x;
+                        const dy = player.y - this.y;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+                        if (dist < 20) {
+                            player.hasBall = true;
+                            powerBall = null;
+                            return;
+                        }
+                        this.vx = (dx / dist) * 5;
+                        this.vy = (dy / dist) * 5;
+                    }
+                }
+
+                // Check collision with enemies
+                for (let enemy of enemies) {
+                    if (!enemy.alive) continue;
+                    const dx = enemy.x - this.x;
+                    const dy = enemy.y - this.y;
+                    if (Math.sqrt(dx * dx + dy * dy) < 15) {
+                        enemy.alive = false;
+                        score += enemy.isAlpha ? 500 : 100;
+                        playSound('kill');
+
+                        // Check for alpha letter
+                        if (enemy.isAlpha && enemy.letter) {
+                            const letterIndex = 'EXTRA'.indexOf(enemy.letter);
+                            if (letterIndex >= 0) {
+                                extraLetters[letterIndex] = true;
+                                checkExtra();
+                            }
+                        }
+
+                        // Ball returns after kill
+                        this.bounces = 10;
+                        updateHUD();
+                    }
+                }
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.frame * 0.2);
+
+                // Glowing ball
+                const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 8);
+                gradient.addColorStop(0, '#ffffff');
+                gradient.addColorStop(0.5, '#00ffff');
+                gradient.addColorStop(1, '#0088ff');
+                ctx.fillStyle = gradient;
+                ctx.beginPath();
+                ctx.arc(0, 0, 8, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Sparkle
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(-5, 0);
+                ctx.lineTo(5, 0);
+                ctx.moveTo(0, -5);
+                ctx.lineTo(0, 5);
+                ctx.stroke();
+
+                ctx.restore();
+            }
+        }
+
+        function checkExtra() {
+            if (extraLetters.every(l => l)) {
+                // Got EXTRA!
+                lives++;
+                extraLetters = [false, false, false, false, false];
+                score += 1000;
+                playSound('extra');
+                updateHUD();
+                // Next level
+                setTimeout(() => nextLevel(), 1000);
+            }
+        }
+
+        function playerDeath() {
+            lives--;
+            playSound('death');
+            if (lives <= 0) {
+                gameOver();
+            } else {
+                // Reset player position
+                player.gridX = Math.floor(GRID_COLS / 2);
+                player.gridY = Math.floor(GRID_ROWS / 2);
+                player.x = offsetX + player.gridX * TILE_SIZE + TILE_SIZE / 2;
+                player.y = offsetY + player.gridY * TILE_SIZE + TILE_SIZE / 2;
+                player.targetX = player.x;
+                player.targetY = player.y;
+                player.hasBall = true;
+                powerBall = null;
+            }
+            updateHUD();
+        }
+
+        function updateHUD() {
+            document.getElementById('score').textContent = 'SCORE: ' + score;
+
+            // Update EXTRA display
+            let extraHTML = '';
+            const letters = 'EXTRA';
+            for (let i = 0; i < 5; i++) {
+                if (extraLetters[i]) {
+                    extraHTML += `<span style="color:#00ff00">${letters[i]}</span>`;
+                } else {
+                    extraHTML += `<span style="color:#444">${letters[i]}</span>`;
+                }
+            }
+            document.getElementById('extra').innerHTML = extraHTML;
+        }
+
+        function initGame() {
+            score = 0;
+            level = 1;
+            lives = 3;
+            gameRunning = true;
+            extraLetters = [false, false, false, false, false];
+
+            initLevel();
+            updateHUD();
+            document.getElementById('controls').classList.remove('hidden');
+        }
+
+        function initLevel() {
+            // Initialize grid with dirt
+            grid = [];
+            for (let y = 0; y < GRID_ROWS; y++) {
+                grid[y] = [];
+                for (let x = 0; x < GRID_COLS; x++) {
+                    grid[y][x] = TILE_DIRT;
+                }
+            }
+
+            // Create some initial tunnels
+            const centerX = Math.floor(GRID_COLS / 2);
+            const centerY = Math.floor(GRID_ROWS / 2);
+            for (let x = centerX - 2; x <= centerX + 2; x++) {
+                grid[centerY][x] = TILE_TUNNEL;
+            }
+            for (let y = centerY - 2; y <= centerY + 2; y++) {
+                grid[y][centerX] = TILE_TUNNEL;
+            }
+
+            // Create player
+            player = new Player(centerX, centerY);
+
+            // Create cherries in groups of 8
+            cherries = [];
+            const cherryGroups = 4 + level;
+            for (let g = 0; g < cherryGroups; g++) {
+                const cx = 2 + Math.floor(Math.random() * (GRID_COLS - 4));
+                const cy = 2 + Math.floor(Math.random() * (GRID_ROWS - 4));
+                // Place 8 cherries in a pattern
+                const pattern = [
+                    [0,0], [1,0], [0,1], [1,1],
+                    [2,0], [2,1], [0,2], [1,2]
+                ];
+                for (let p of pattern) {
+                    const px = cx + p[0];
+                    const py = cy + p[1];
+                    if (px < GRID_COLS && py < GRID_ROWS &&
+                        !(px === centerX && py === centerY)) {
+                        cherries.push(new Cherry(px, py));
+                    }
+                }
+            }
+
+            // Create apples
+            apples = [];
+            const numApples = 4 + level;
+            for (let i = 0; i < numApples; i++) {
+                let ax, ay;
+                do {
+                    ax = 1 + Math.floor(Math.random() * (GRID_COLS - 2));
+                    ay = 1 + Math.floor(Math.random() * (GRID_ROWS - 4));
+                } while (ax === centerX && ay === centerY);
+                apples.push(new Apple(ax, ay));
+            }
+
+            // Create enemies
+            enemies = [];
+            const numEnemies = 3 + level;
+            for (let i = 0; i < numEnemies; i++) {
+                let ex, ey;
+                do {
+                    ex = Math.floor(Math.random() * GRID_COLS);
+                    ey = Math.random() < 0.5 ? 0 : GRID_ROWS - 1;
+                } while (Math.abs(ex - centerX) < 3);
+
+                // Make tunnel for enemy
+                grid[ey][ex] = TILE_TUNNEL;
+                enemies.push(new Enemy(ex, ey));
+            }
+
+            // Add one alpha monster with a letter
+            const letters = 'EXTRA';
+            const missingLetters = letters.split('').filter((l, i) => !extraLetters[i]);
+            if (missingLetters.length > 0) {
+                const letter = missingLetters[Math.floor(Math.random() * missingLetters.length)];
+                let ax, ay;
+                do {
+                    ax = Math.floor(Math.random() * GRID_COLS);
+                    ay = Math.random() < 0.5 ? 0 : GRID_ROWS - 1;
+                } while (Math.abs(ax - centerX) < 3);
+                grid[ay][ax] = TILE_TUNNEL;
+                enemies.push(new Enemy(ax, ay, true, letter));
+            }
+
+            powerBall = null;
+            cherryStreak = 0;
+        }
+
+        function nextLevel() {
+            level++;
+            initLevel();
+        }
+
+        function checkLevelComplete() {
+            // Level complete if all cherries collected OR all enemies dead
+            if (cherries.length === 0) {
+                score += 500;
+                setTimeout(() => nextLevel(), 1000);
+                return true;
+            }
+
+            const aliveEnemies = enemies.filter(e => e.alive);
+            if (aliveEnemies.length === 0) {
+                score += 500;
+                setTimeout(() => nextLevel(), 1000);
+                return true;
+            }
+
+            return false;
+        }
+
+        function gameOver() {
+            gameRunning = false;
+            document.getElementById('controls').classList.add('hidden');
+            document.getElementById('finalScore').textContent = 'SCORE: ' + score;
+            document.getElementById('levelReached').textContent = 'LEVEL REACHED: ' + level;
+            document.getElementById('gameOverScreen').classList.remove('hidden');
+        }
+
+        function update() {
+            if (!gameRunning) return;
+
+            if (player) player.update();
+
+            for (let enemy of enemies) {
+                enemy.update();
+
+                // Check collision with player
+                if (enemy.alive && player) {
+                    const dx = enemy.x - player.x;
+                    const dy = enemy.y - player.y;
+                    if (Math.sqrt(dx * dx + dy * dy) < 15) {
+                        playerDeath();
+                    }
+                }
+            }
+
+            // Remove eaten apples
+            apples = apples.filter(a => !a.eaten);
+
+            for (let apple of apples) {
+                apple.update();
+            }
+
+            if (powerBall) {
+                powerBall.update();
+            }
+
+            checkLevelComplete();
+        }
+
+        function draw() {
+            // Background
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, gameWidth, gameHeight);
+
+            // Draw grid
+            for (let y = 0; y < GRID_ROWS; y++) {
+                for (let x = 0; x < GRID_COLS; x++) {
+                    const px = offsetX + x * TILE_SIZE;
+                    const py = offsetY + y * TILE_SIZE;
+
+                    if (grid[y][x] === TILE_DIRT) {
+                        // Dirt with texture
+                        ctx.fillStyle = '#8B4513';
+                        ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+
+                        // Dirt texture dots
+                        ctx.fillStyle = '#6B3503';
+                        for (let i = 0; i < 3; i++) {
+                            const dotX = px + 5 + (x * 7 + i * 11) % (TILE_SIZE - 10);
+                            const dotY = py + 5 + (y * 13 + i * 7) % (TILE_SIZE - 10);
+                            ctx.fillRect(dotX, dotY, 2, 2);
+                        }
+                    } else {
+                        // Tunnel (black)
+                        ctx.fillStyle = '#111122';
+                        ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+                    }
+                }
+            }
+
+            // Border
+            ctx.strokeStyle = '#444';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(offsetX, offsetY, playAreaWidth, playAreaHeight);
+
+            // Draw cherries
+            for (let cherry of cherries) {
+                cherry.draw();
+            }
+
+            // Draw apples
+            for (let apple of apples) {
+                apple.draw();
+            }
+
+            // Draw enemies
+            for (let enemy of enemies) {
+                enemy.draw();
+            }
+
+            // Draw player
+            if (player) {
+                player.draw();
+            }
+
+            // Draw power ball
+            if (powerBall) {
+                powerBall.draw();
+            }
+
+            // Lives display
+            ctx.fillStyle = '#ff0000';
+            ctx.font = '14px Courier New';
+            ctx.textAlign = 'left';
+            ctx.fillText('LIVES: ' + lives, offsetX, offsetY - 5);
+
+            // Level display
+            ctx.textAlign = 'right';
+            ctx.fillText('LEVEL: ' + level, offsetX + playAreaWidth, offsetY - 5);
+        }
+
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Controls
+        let currentDir = -1;
+
+        function handleControl(dir) {
+            if (!gameRunning || !player) return;
+
+            if (dir === 'fire') {
+                player.throwBall();
+            } else {
+                const dirMap = { 'up': 3, 'down': 1, 'left': 2, 'right': 0 };
+                currentDir = dirMap[dir];
+            }
+        }
+
+        // D-pad touch events
+        document.querySelectorAll('.ctrl-btn').forEach(btn => {
+            btn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                initAudio();
+                handleControl(btn.dataset.dir);
+            });
+            btn.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                if (btn.dataset.dir !== 'fire') {
+                    currentDir = -1;
+                }
+            });
+            btn.addEventListener('mousedown', (e) => {
+                initAudio();
+                handleControl(btn.dataset.dir);
+            });
+            btn.addEventListener('mouseup', () => {
+                if (btn.dataset.dir !== 'fire') {
+                    currentDir = -1;
+                }
+            });
+        });
+
+        // Keyboard
+        document.addEventListener('keydown', (e) => {
+            if (!gameRunning) return;
+            switch(e.key) {
+                case 'ArrowUp': currentDir = 3; break;
+                case 'ArrowDown': currentDir = 1; break;
+                case 'ArrowLeft': currentDir = 2; break;
+                case 'ArrowRight': currentDir = 0; break;
+                case ' ': player.throwBall(); break;
+            }
+        });
+        document.addEventListener('keyup', (e) => {
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+                currentDir = -1;
+            }
+        });
+
+        // Continuous movement
+        setInterval(() => {
+            if (currentDir >= 0 && player && gameRunning) {
+                player.move(currentDir);
+            }
+        }, 100);
+
+        // Start/Restart
+        document.getElementById('startBtn').addEventListener('click', () => {
+            initAudio();
+            document.getElementById('startScreen').classList.add('hidden');
+            initGame();
+        });
+
+        document.getElementById('restartBtn').addEventListener('click', () => {
+            document.getElementById('gameOverScreen').classList.add('hidden');
+            initGame();
+        });
+
+        // Prevent scrolling
+        document.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+
+        // Start loop
+        gameLoop();
+    </script>
+</body>
+</html>
