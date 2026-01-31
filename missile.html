@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>JMR's Missile Command</title>
+    <title>JMR's Iron Dome</title>
     <style>
         * {
             margin: 0;
@@ -95,14 +95,14 @@
 
     <div id="hud">
         <div id="score">SCORE: 0</div>
-        <div id="gameTitle">JMR'S MISSILE COMMAND</div>
+        <div id="gameTitle">JMR'S IRON DOME</div>
         <div id="cities">CITIES: 6</div>
     </div>
 
     <div id="startScreen">
-        <h1>JMR'S MISSILE COMMAND</h1>
-        <p class="version">Version 4</p>
-        <p>Drag to aim your crosshair<br>Tap to launch missiles<br>Defend your cities!</p>
+        <h1>JMR'S IRON DOME</h1>
+        <p class="version">Version 5</p>
+        <p>Drag to aim your crosshair<br>Tap to launch interceptors<br>Defend Jerusalem!</p>
         <button class="start-btn" id="startBtn">START GAME</button>
     </div>
 
@@ -578,6 +578,12 @@
             for (let city of cities) {
                 city.draw();
             }
+
+            // Jerusalem label
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+            ctx.font = '12px Courier New';
+            ctx.textAlign = 'center';
+            ctx.fillText('JERUSALEM', gameWidth / 2, baseY + 15);
 
             // Draw enemy missiles
             for (let missile of enemyMissiles) {
