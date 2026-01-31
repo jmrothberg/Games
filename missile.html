@@ -101,7 +101,7 @@
 
     <div id="startScreen">
         <h1>JMR'S MISSILE COMMAND</h1>
-        <p class="version">Version 3</p>
+        <p class="version">Version 4</p>
         <p>Drag to aim your crosshair<br>Tap to launch missiles<br>Defend your cities!</p>
         <button class="start-btn" id="startBtn">START GAME</button>
     </div>
@@ -279,21 +279,32 @@
         }
 
         class EnemyMissile {
-            constructor() {
-                this.startX = Math.random() * gameWidth;
-                this.startY = 0;
+            constructor(startX, startY, targetX, targetY, canMIRV = true) {
+                // If no params, create from top of screen
+                if (startX === undefined) {
+                    this.startX = Math.random() * gameWidth;
+                    this.startY = 0;
+                } else {
+                    this.startX = startX;
+                    this.startY = startY;
+                }
                 this.x = this.startX;
                 this.y = this.startY;
 
                 // Target a city or the base
-                const aliveCities = cities.filter(c => c.alive);
-                if (aliveCities.length > 0) {
-                    const target = aliveCities[Math.floor(Math.random() * aliveCities.length)];
-                    this.targetX = target.x;
-                    this.targetY = target.y;
+                if (targetX !== undefined) {
+                    this.targetX = targetX;
+                    this.targetY = targetY;
                 } else {
-                    this.targetX = gameWidth / 2;
-                    this.targetY = baseY;
+                    const aliveCities = cities.filter(c => c.alive);
+                    if (aliveCities.length > 0) {
+                        const target = aliveCities[Math.floor(Math.random() * aliveCities.length)];
+                        this.targetX = target.x;
+                        this.targetY = target.y;
+                    } else {
+                        this.targetX = gameWidth / 2;
+                        this.targetY = baseY;
+                    }
                 }
 
                 const dx = this.targetX - this.startX;
@@ -304,6 +315,11 @@
                 this.vy = (dy / dist) * this.speed;
                 this.alive = true;
                 this.trail = [];
+
+                // MIRV properties
+                this.canMIRV = canMIRV;
+                this.hasSplit = false;
+                this.isMIRV = canMIRV && Math.random() < 0.15 + wave * 0.05; // Increasing chance per wave
             }
 
             update() {
@@ -312,6 +328,27 @@
 
                 this.x += this.vx;
                 this.y += this.vy;
+
+                // MIRV split - when missile reaches 30-50% of screen height
+                if (this.isMIRV && !this.hasSplit && this.y > gameHeight * 0.3 && this.y < gameHeight * 0.5) {
+                    this.hasSplit = true;
+                    // Split into 2-3 warheads targeting different cities
+                    const aliveCities = cities.filter(c => c.alive);
+                    const numSplits = Math.min(2 + Math.floor(Math.random() * 2), aliveCities.length);
+
+                    if (aliveCities.length > 0) {
+                        // Shuffle and pick targets
+                        const shuffled = [...aliveCities].sort(() => Math.random() - 0.5);
+                        for (let i = 0; i < numSplits; i++) {
+                            const target = shuffled[i % shuffled.length];
+                            // Create child warhead (canMIRV = false so it won't split again)
+                            enemyMissiles.push(new EnemyMissile(this.x, this.y, target.x, target.y, false));
+                        }
+                        // Original missile dies after splitting
+                        this.alive = false;
+                        return;
+                    }
+                }
 
                 // Check if reached target
                 if (this.y >= baseY) {
@@ -329,10 +366,14 @@
             }
 
             draw() {
+                // MIRV missiles are orange, regular are red
+                const color = (this.isMIRV && !this.hasSplit) ? '#ffaa00' : '#ff0000';
+                const headSize = (this.isMIRV && !this.hasSplit) ? 6 : 4;
+
                 // Fixed-length trail
                 if (this.trail.length > 1) {
-                    ctx.strokeStyle = '#ff0000';
-                    ctx.lineWidth = 2;
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = (this.isMIRV && !this.hasSplit) ? 3 : 2;
                     ctx.beginPath();
                     ctx.moveTo(this.trail[0].x, this.trail[0].y);
                     for (let i = 1; i < this.trail.length; i++) {
@@ -343,9 +384,9 @@
                 }
 
                 // Missile head
-                ctx.fillStyle = '#ff0000';
+                ctx.fillStyle = color;
                 ctx.beginPath();
-                ctx.arc(this.x, this.y, 4, 0, Math.PI * 2);
+                ctx.arc(this.x, this.y, headSize, 0, Math.PI * 2);
                 ctx.fill();
             }
         }
