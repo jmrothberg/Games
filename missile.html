@@ -101,7 +101,7 @@
 
     <div id="startScreen">
         <h1>JMR'S IRON DOME</h1>
-        <p class="version">Version 8</p>
+        <p class="version">Version 9</p>
         <p>Drag to aim your crosshair<br>Tap to launch interceptors<br>Defend Israel's cities!</p>
         <button class="start-btn" id="startBtn">START GAME</button>
     </div>
@@ -1136,7 +1136,15 @@
                 ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
                 ctx.font = '14px Courier New';
                 ctx.textAlign = 'center';
-                ctx.fillText('WAVE ' + wave, gameWidth / 2, 60);
+
+                // Wave names
+                let waveName = '';
+                if (wave === 2) {
+                    waveName = ' - INTIFADA';
+                } else if (wave >= 3) {
+                    waveName = ' - AL-AQSA FLOOD';
+                }
+                ctx.fillText('WAVE ' + wave + waveName, gameWidth / 2, 60);
             }
         }
 
