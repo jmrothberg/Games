@@ -155,7 +155,7 @@
 
     <div id="startScreen">
         <h1>JMR'S MR. DO!</h1>
-        <p class="version">Version 4</p>
+        <p class="version">Version 5</p>
         <p>Dig tunnels and collect cherries!<br>Throw your power ball at enemies<br>Push apples to crush them<br>Collect E-X-T-R-A for bonus!</p>
         <button class="start-btn" id="startBtn">START GAME</button>
     </div>
@@ -177,10 +177,10 @@
         let offsetX = 0, offsetY = 0;
         let playAreaWidth, playAreaHeight;
 
-        // Grid settings
-        const TILE_SIZE = 24;
-        const GRID_COLS = 15;
-        const GRID_ROWS = 13;
+        // Grid settings - larger tiles for better graphics
+        const TILE_SIZE = 32;
+        const GRID_COLS = 12;
+        const GRID_ROWS = 11;
 
         function resize() {
             dpr = window.devicePixelRatio || 1;
@@ -314,7 +314,7 @@
                 this.y = offsetY + gridY * TILE_SIZE + TILE_SIZE / 2;
                 this.targetX = this.x;
                 this.targetY = this.y;
-                this.speed = 3;
+                this.speed = 4;
                 this.direction = 0; // 0=right, 1=down, 2=left, 3=up
                 this.moving = false;
                 this.hasBall = true;
@@ -456,41 +456,87 @@
                 // Rotation based on direction
                 ctx.rotate(this.direction * Math.PI / 2);
 
-                // Clown body (red suit)
+                // Shadow
+                ctx.fillStyle = 'rgba(0,0,0,0.3)';
+                ctx.beginPath();
+                ctx.ellipse(2, 12, 10, 4, 0, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Clown body (red suit with white buttons)
                 ctx.fillStyle = '#ff0000';
                 ctx.beginPath();
-                ctx.ellipse(0, 0, 10, 12, 0, 0, Math.PI * 2);
+                ctx.ellipse(0, 2, 12, 14, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = '#cc0000';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                // White buttons
+                ctx.fillStyle = '#ffffff';
+                ctx.beginPath();
+                ctx.arc(0, 0, 2, 0, Math.PI * 2);
+                ctx.arc(0, 6, 2, 0, Math.PI * 2);
                 ctx.fill();
 
                 // Face
-                ctx.fillStyle = '#ffccaa';
+                ctx.fillStyle = '#ffddbb';
                 ctx.beginPath();
-                ctx.arc(0, -4, 7, 0, Math.PI * 2);
+                ctx.arc(0, -6, 9, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = '#eeccaa';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+
+                // Red nose (shiny)
+                const noseGrad = ctx.createRadialGradient(-1, -4, 0, 0, -3, 5);
+                noseGrad.addColorStop(0, '#ff4444');
+                noseGrad.addColorStop(1, '#cc0000');
+                ctx.fillStyle = noseGrad;
+                ctx.beginPath();
+                ctx.arc(0, -3, 4, 0, Math.PI * 2);
                 ctx.fill();
 
-                // Red nose
-                ctx.fillStyle = '#ff0000';
+                // Eyes (with pupils)
+                ctx.fillStyle = '#ffffff';
                 ctx.beginPath();
-                ctx.arc(0, -2, 3, 0, Math.PI * 2);
+                ctx.arc(-4, -8, 3, 0, Math.PI * 2);
+                ctx.arc(4, -8, 3, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#000000';
+                ctx.beginPath();
+                ctx.arc(-4, -7, 1.5, 0, Math.PI * 2);
+                ctx.arc(4, -7, 1.5, 0, Math.PI * 2);
                 ctx.fill();
 
-                // Eyes
-                ctx.fillStyle = '#000';
-                ctx.fillRect(-4, -7, 2, 2);
-                ctx.fillRect(2, -7, 2, 2);
+                // Smile
+                ctx.strokeStyle = '#cc0000';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.arc(0, -4, 5, 0.2, Math.PI - 0.2);
+                ctx.stroke();
 
-                // Hair (blue poofs)
+                // Hair (blue poofs with highlights)
                 ctx.fillStyle = '#0066ff';
                 ctx.beginPath();
-                ctx.arc(-6, -8, 4, 0, Math.PI * 2);
-                ctx.arc(6, -8, 4, 0, Math.PI * 2);
+                ctx.arc(-8, -10, 5, 0, Math.PI * 2);
+                ctx.arc(8, -10, 5, 0, Math.PI * 2);
+                ctx.arc(0, -14, 4, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#3388ff';
+                ctx.beginPath();
+                ctx.arc(-9, -12, 2, 0, Math.PI * 2);
+                ctx.arc(7, -12, 2, 0, Math.PI * 2);
                 ctx.fill();
 
                 // Power ball indicator
                 if (this.hasBall) {
-                    ctx.fillStyle = '#00ffff';
+                    const ballGrad = ctx.createRadialGradient(10, 6, 0, 10, 6, 6);
+                    ballGrad.addColorStop(0, '#ffffff');
+                    ballGrad.addColorStop(0.5, '#00ffff');
+                    ballGrad.addColorStop(1, '#0088ff');
+                    ctx.fillStyle = ballGrad;
                     ctx.beginPath();
-                    ctx.arc(8, 4, 4, 0, Math.PI * 2);
+                    ctx.arc(10, 6, 5, 0, Math.PI * 2);
                     ctx.fill();
                     ctx.strokeStyle = '#ffffff';
                     ctx.lineWidth = 1;
@@ -621,33 +667,61 @@
                 ctx.save();
                 ctx.translate(this.x, this.y);
 
+                // Shadow
+                ctx.fillStyle = 'rgba(0,0,0,0.3)';
+                ctx.beginPath();
+                ctx.ellipse(2, 12, 10, 4, 0, 0, Math.PI * 2);
+                ctx.fill();
+
                 if (this.isAlpha) {
-                    // Alphamonster (blue with letter)
-                    ctx.fillStyle = '#0088ff';
+                    // Alphamonster (blue with letter) - larger and more detailed
+                    const alphaGrad = ctx.createRadialGradient(-3, -3, 0, 0, 0, 14);
+                    alphaGrad.addColorStop(0, '#44aaff');
+                    alphaGrad.addColorStop(1, '#0066cc');
+                    ctx.fillStyle = alphaGrad;
                     ctx.beginPath();
-                    ctx.arc(0, 0, 11, 0, Math.PI * 2);
+                    ctx.arc(0, 0, 14, 0, Math.PI * 2);
                     ctx.fill();
+                    ctx.strokeStyle = '#0044aa';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+
+                    // Spikes around edge
+                    ctx.fillStyle = '#0088ff';
+                    for (let i = 0; i < 8; i++) {
+                        const angle = (i / 8) * Math.PI * 2 + this.frame * 0.05;
+                        ctx.beginPath();
+                        ctx.arc(Math.cos(angle) * 12, Math.sin(angle) * 12, 4, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
 
                     // Letter
                     ctx.fillStyle = '#ffffff';
-                    ctx.font = 'bold 14px Arial';
+                    ctx.font = 'bold 18px Arial';
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
-                    ctx.fillText(this.letter, 0, 0);
+                    ctx.fillText(this.letter, 0, 1);
                 } else {
-                    // Regular enemy (red blob)
-                    const wobble = Math.sin(this.frame * 0.3) * 2;
+                    // Regular enemy (red blob) - larger and scarier
+                    const wobble = Math.sin(this.frame * 0.3) * 3;
 
-                    ctx.fillStyle = this.isDigger ? '#ff8800' : '#ff0000';
+                    // Body gradient
+                    const bodyGrad = ctx.createRadialGradient(-3, -3, 0, 0, 0, 14);
+                    bodyGrad.addColorStop(0, this.isDigger ? '#ffaa44' : '#ff4444');
+                    bodyGrad.addColorStop(1, this.isDigger ? '#cc6600' : '#aa0000');
+                    ctx.fillStyle = bodyGrad;
                     ctx.beginPath();
-                    ctx.ellipse(0, 0, 10 + wobble, 10 - wobble, 0, 0, Math.PI * 2);
+                    ctx.ellipse(0, 0, 13 + wobble, 13 - wobble, 0, 0, Math.PI * 2);
                     ctx.fill();
+                    ctx.strokeStyle = this.isDigger ? '#884400' : '#660000';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
 
-                    // Eyes
+                    // Eyes (larger, angrier)
                     ctx.fillStyle = '#ffffff';
                     ctx.beginPath();
-                    ctx.arc(-4, -2, 4, 0, Math.PI * 2);
-                    ctx.arc(4, -2, 4, 0, Math.PI * 2);
+                    ctx.ellipse(-5, -3, 5, 6, -0.2, 0, Math.PI * 2);
+                    ctx.ellipse(5, -3, 5, 6, 0.2, 0, Math.PI * 2);
                     ctx.fill();
 
                     // Pupils (looking at player)
@@ -663,20 +737,41 @@
                         }
                     }
                     ctx.beginPath();
-                    ctx.arc(-4 + lookX, -2 + lookY, 2, 0, Math.PI * 2);
-                    ctx.arc(4 + lookX, -2 + lookY, 2, 0, Math.PI * 2);
+                    ctx.arc(-5 + lookX, -2 + lookY, 2.5, 0, Math.PI * 2);
+                    ctx.arc(5 + lookX, -2 + lookY, 2.5, 0, Math.PI * 2);
                     ctx.fill();
 
-                    // Digger has antennae
+                    // Angry eyebrows
+                    ctx.strokeStyle = this.isDigger ? '#884400' : '#660000';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.moveTo(-9, -8);
+                    ctx.lineTo(-2, -6);
+                    ctx.moveTo(9, -8);
+                    ctx.lineTo(2, -6);
+                    ctx.stroke();
+
+                    // Teeth
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(-6, 5, 4, 4);
+                    ctx.fillRect(2, 5, 4, 4);
+
+                    // Digger has antennae with glowing tips
                     if (this.isDigger) {
                         ctx.strokeStyle = '#ff8800';
-                        ctx.lineWidth = 2;
+                        ctx.lineWidth = 3;
                         ctx.beginPath();
-                        ctx.moveTo(-4, -10);
-                        ctx.lineTo(-6, -16);
-                        ctx.moveTo(4, -10);
-                        ctx.lineTo(6, -16);
+                        ctx.moveTo(-5, -12);
+                        ctx.lineTo(-8, -20);
+                        ctx.moveTo(5, -12);
+                        ctx.lineTo(8, -20);
                         ctx.stroke();
+                        // Glowing tips
+                        ctx.fillStyle = '#ffff00';
+                        ctx.beginPath();
+                        ctx.arc(-8, -20, 3, 0, Math.PI * 2);
+                        ctx.arc(8, -20, 3, 0, Math.PI * 2);
+                        ctx.fill();
                     }
                 }
 
@@ -696,26 +791,42 @@
                 ctx.save();
                 ctx.translate(this.x, this.y);
 
-                // Stems
-                ctx.strokeStyle = '#00aa00';
-                ctx.lineWidth = 2;
+                // Stems (curved and detailed)
+                ctx.strokeStyle = '#228822';
+                ctx.lineWidth = 3;
                 ctx.beginPath();
-                ctx.moveTo(-3, -6);
-                ctx.quadraticCurveTo(0, -12, 3, -6);
+                ctx.moveTo(-5, -8);
+                ctx.quadraticCurveTo(0, -16, 5, -8);
                 ctx.stroke();
 
-                // Cherries
-                ctx.fillStyle = '#ff0000';
+                // Leaf
+                ctx.fillStyle = '#44aa44';
                 ctx.beginPath();
-                ctx.arc(-4, -2, 5, 0, Math.PI * 2);
-                ctx.arc(4, -2, 5, 0, Math.PI * 2);
+                ctx.ellipse(0, -14, 5, 3, 0, 0, Math.PI * 2);
                 ctx.fill();
 
-                // Shine
-                ctx.fillStyle = '#ffffff';
+                // Cherries (with gradient)
+                const cherryGrad1 = ctx.createRadialGradient(-7, -4, 0, -6, -2, 8);
+                cherryGrad1.addColorStop(0, '#ff6666');
+                cherryGrad1.addColorStop(1, '#cc0000');
+                ctx.fillStyle = cherryGrad1;
                 ctx.beginPath();
-                ctx.arc(-5, -4, 2, 0, Math.PI * 2);
-                ctx.arc(3, -4, 2, 0, Math.PI * 2);
+                ctx.arc(-6, -2, 7, 0, Math.PI * 2);
+                ctx.fill();
+
+                const cherryGrad2 = ctx.createRadialGradient(5, -4, 0, 6, -2, 8);
+                cherryGrad2.addColorStop(0, '#ff6666');
+                cherryGrad2.addColorStop(1, '#cc0000');
+                ctx.fillStyle = cherryGrad2;
+                ctx.beginPath();
+                ctx.arc(6, -2, 7, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Shine highlights
+                ctx.fillStyle = 'rgba(255,255,255,0.7)';
+                ctx.beginPath();
+                ctx.arc(-8, -5, 3, 0, Math.PI * 2);
+                ctx.arc(4, -5, 3, 0, Math.PI * 2);
                 ctx.fill();
 
                 ctx.restore();
@@ -853,26 +964,49 @@
                     ctx.rotate(Math.sin(this.wobbleTime * 0.5) * 0.2);
                 }
 
-                // Apple body
-                ctx.fillStyle = '#ff0000';
+                // Shadow
+                ctx.fillStyle = 'rgba(0,0,0,0.3)';
                 ctx.beginPath();
-                ctx.arc(0, 2, 10, 0, Math.PI * 2);
+                ctx.ellipse(2, 14, 10, 4, 0, 0, Math.PI * 2);
                 ctx.fill();
+
+                // Apple body (with gradient)
+                const appleGrad = ctx.createRadialGradient(-4, -2, 0, 0, 2, 14);
+                appleGrad.addColorStop(0, '#ff6666');
+                appleGrad.addColorStop(0.7, '#ff0000');
+                appleGrad.addColorStop(1, '#aa0000');
+                ctx.fillStyle = appleGrad;
+                ctx.beginPath();
+                ctx.arc(0, 2, 13, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = '#880000';
+                ctx.lineWidth = 1;
+                ctx.stroke();
 
                 // Leaf
-                ctx.fillStyle = '#00aa00';
+                ctx.fillStyle = '#44aa44';
                 ctx.beginPath();
-                ctx.ellipse(3, -8, 4, 6, 0.5, 0, Math.PI * 2);
+                ctx.ellipse(5, -10, 6, 8, 0.6, 0, Math.PI * 2);
                 ctx.fill();
+                // Leaf vein
+                ctx.strokeStyle = '#228822';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(2, -10);
+                ctx.lineTo(8, -10);
+                ctx.stroke();
 
                 // Stem
-                ctx.fillStyle = '#663300';
-                ctx.fillRect(-1, -10, 2, 5);
+                ctx.fillStyle = '#553311';
+                ctx.fillRect(-2, -14, 4, 8);
+                ctx.strokeStyle = '#331100';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(-2, -14, 4, 8);
 
                 // Shine
-                ctx.fillStyle = 'rgba(255,255,255,0.4)';
+                ctx.fillStyle = 'rgba(255,255,255,0.5)';
                 ctx.beginPath();
-                ctx.arc(-4, -2, 4, 0, Math.PI * 2);
+                ctx.ellipse(-5, -3, 4, 6, -0.3, 0, Math.PI * 2);
                 ctx.fill();
 
                 ctx.restore();
@@ -891,18 +1025,38 @@
             }
 
             update() {
+                // Store old position
+                const oldX = this.x;
+                const oldY = this.y;
+
                 this.x += this.vx;
                 this.y += this.vy;
                 this.frame++;
 
-                // Bounce off walls
-                if (this.x < offsetX + 10 || this.x > offsetX + playAreaWidth - 10) {
+                // Check grid position for dirt collision
+                const gridX = Math.floor((this.x - offsetX) / TILE_SIZE);
+                const gridY = Math.floor((this.y - offsetY) / TILE_SIZE);
+
+                // Bounce off dirt or walls
+                if (gridX < 0 || gridX >= GRID_COLS || gridY < 0 || gridY >= GRID_ROWS) {
+                    // Hit edge
+                    if (this.x < offsetX || this.x > offsetX + playAreaWidth) {
+                        this.vx *= -1;
+                        this.x = oldX;
+                    }
+                    if (this.y < offsetY || this.y > offsetY + playAreaHeight) {
+                        this.vy *= -1;
+                        this.y = oldY;
+                    }
+                    this.bounces++;
+                } else if (grid[gridY] && grid[gridY][gridX] === TILE_DIRT) {
+                    // Hit dirt - bounce back
                     this.vx *= -1;
-                    this.bounces++;
-                }
-                if (this.y < offsetY + 10 || this.y > offsetY + playAreaHeight - 10) {
                     this.vy *= -1;
+                    this.x = oldX;
+                    this.y = oldY;
                     this.bounces++;
+                    playSound('dig');
                 }
 
                 // Return to player after many bounces
