@@ -1,0 +1,4 @@
+pygame>=2.0.0
+python-nmap>=0.7.1
+numpy>=1.21.0
+pathfinding>=1.0.0
