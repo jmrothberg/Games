@@ -90,6 +90,25 @@ Classic alien invasion arcade action!
 
 ---
 
+### JMR's Space Invaders 1978 (BEST VERSION)
+**File:** `Invaders_Qwen3-Coder_next_BESTEVER.html`
+
+Enhanced classic Space Invaders with authentic 1978 arcade feel!
+
+- **Controls:**
+  - Arrow keys or A/D to move
+  - Space to shoot
+  - Touch: Tap sides to move, tap center to fire
+- **Features:**
+  - Authentic retro styling with glow effects
+  - Multiple alien types
+  - Sound effects
+  - Mobile touch support
+
+**Play:** `https://raw.githack.com/jmrothberg/Games/main/Invaders_Qwen3-Coder_next_BESTEVER.html`
+
+---
+
 ### JMR's Mr. Do!
 **File:** `mrdo.html` (Version 1)
 
@@ -176,6 +195,7 @@ A Doom-inspired first-person game.
 | Pac-Man | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/pacman.html) |
 | Iron Dome | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/missile.html) |
 | Space Invaders | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/invaders.html) |
+| Space Invaders 1978 (BEST) | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/Invaders_Qwen3-Coder_next_BESTEVER.html) |
 | Mr. Do! | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/mrdo.html) |
 | 3D Tank Battle | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/3D_Tank_Battle.html) |
 | Tank Battle (Python) | Desktop | Download & run with Python |
