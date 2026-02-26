@@ -103,12 +103,20 @@ else:
     print("MLX skipped (Apple Silicon only)")
 
 # Try to import vLLM for GPU acceleration
-# NOTE: vLLM works on 4 GPU Ubuntu systems with proper PyTorch/CUDA setup
+# NOTE: vLLM works on x86 and ARM (e.g. DGX Spark Blackwell) with proper PyTorch/CUDA setup
 try:
     import vllm
     from vllm import LLM, SamplingParams
-    VLLM_AVAILABLE = True
-    print("vLLM available - Note: May override CUDA PyTorch with CPU version for compatibility")
+    # vLLM only makes sense on GPU - disable if no CUDA available
+    import torch as _torch_check
+    if not _torch_check.cuda.is_available():
+        VLLM_AVAILABLE = False
+        print(f"vLLM installed (v{vllm.__version__}) but disabled - no CUDA GPU (torch {_torch_check.__version__} is cpu-only)")
+        print("  Install CUDA-enabled PyTorch to use vLLM")
+    else:
+        VLLM_AVAILABLE = True
+        print(f"vLLM available (v{vllm.__version__}) with CUDA support")
+    del _torch_check
 except ImportError:
     VLLM_AVAILABLE = False
     print("vLLM not available. Install with: pip install vllm")
@@ -4393,7 +4401,24 @@ def clear_gpu_memory():
                 print("✅ GPU memory clearing attempted (stats unavailable)")
 
         else:
-            print("ℹ️ No CUDA GPUs available - nothing to clear")
+            # Check if GPU exists but PyTorch CUDA support is missing (e.g. cpu-only torch on DGX Spark)
+            import subprocess, shutil
+            if shutil.which("nvidia-smi"):
+                try:
+                    result = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                                            capture_output=True, text=True, timeout=5)
+                    if result.returncode == 0 and result.stdout.strip():
+                        gpu_name = result.stdout.strip()
+                        print(f"ℹ️ GPU detected ({gpu_name}) but torch.cuda.is_available()=False")
+                        print(f"   PyTorch version: {torch.__version__} - may need CUDA-enabled build")
+                        print(f"   GC cleanup only (no CUDA cache to clear)")
+                        gc.collect()
+                    else:
+                        print("ℹ️ No CUDA GPUs available - nothing to clear")
+                except Exception:
+                    print("ℹ️ No CUDA GPUs available - nothing to clear")
+            else:
+                print("ℹ️ No CUDA GPUs available - nothing to clear")
 
     except Exception as e:
         print(f"⚠️ GPU cleanup warning: {e}")
@@ -5384,17 +5409,11 @@ GREAT GRAPHICS & ANIMATION:
             Radiobutton(backend_select_frame, text="MLX", variable=self.backend_var, value="mlx", command=self.change_backend).pack(side=tk.LEFT, padx=5)
         else:
             Label(backend_select_frame, text="(MLX not available)", fg="gray").pack(side=tk.LEFT, padx=5)
-        # Check if running on ARM (vLLM works on 4 GPU Ubuntu systems)
-        import platform
-        is_arm = platform.machine() == 'aarch64'
-
-        if VLLM_AVAILABLE and not is_arm:
+        # vLLM backend - works on x86 and ARM (e.g. DGX Spark Blackwell) with CUDA
+        if VLLM_AVAILABLE:
             Radiobutton(backend_select_frame, text="vLLM", variable=self.backend_var, value="vllm", command=self.change_backend).pack(side=tk.LEFT, padx=5)
         else:
-            if is_arm:
-                Label(backend_select_frame, text="(vLLM disabled on ARM)", fg="gray").pack(side=tk.LEFT, padx=5)
-            else:
-                Label(backend_select_frame, text="(vLLM not available - requires CUDA)", fg="gray").pack(side=tk.LEFT, padx=5)
+            Label(backend_select_frame, text="(vLLM not available - requires CUDA)", fg="gray").pack(side=tk.LEFT, padx=5)
         if TRANSFORMERS_AVAILABLE:
             Radiobutton(backend_select_frame, text="Transformers", variable=self.backend_var, value="transformers", command=self.change_backend).pack(side=tk.LEFT, padx=5)
         else:
@@ -9010,13 +9029,9 @@ Based on the above context, please answer: {input_text}"""
                 self.llama_cpp_model = None
 
         elif backend == "vllm":
-            import platform
-            is_arm = platform.machine() == 'aarch64'
-            if not VLLM_AVAILABLE or is_arm:
-                if is_arm:
-                    self.display_status_message("vLLM not available. Please install vLLM and ensure CUDA is available: pip install vllm torch")
-                else:
-                    self.display_status_message("vLLM not available. Please install vLLM and ensure CUDA is available: pip install vllm torch")
+            # vLLM works on x86 and ARM (e.g. DGX Spark Blackwell) with CUDA
+            if not VLLM_AVAILABLE:
+                self.display_status_message("vLLM not available. Please install vLLM and ensure CUDA is available: pip install vllm torch")
                 self.backend_var.set("ollama")  # Revert to Ollama
                 return
 
@@ -9150,11 +9165,7 @@ Based on the above context, please answer: {input_text}"""
         elif backend == "mlx":
             self.load_mlx_model()
         elif backend == "vllm":
-            import platform
-            is_arm = platform.machine() == 'aarch64'
-            if is_arm:
-                self.display_status_message("vLLM not available. Please install vLLM and ensure CUDA is available: pip install vllm torch")
-                return
+            # vLLM works on x86 and ARM (e.g. DGX Spark Blackwell) with CUDA
             self.load_vllm_model()
         elif backend == "transformers":
             self.load_transformers_model()
@@ -9182,12 +9193,8 @@ Based on the above context, please answer: {input_text}"""
         elif backend == "mlx":
             self.refresh_mlx_models()
         elif backend == "vllm":
-            import platform
-            is_arm = platform.machine() == 'aarch64'
-            if not is_arm:
-                self.refresh_vllm_models()
-            else:
-                self.display_status_message("vLLM is disabled on ARM systems")
+            # vLLM works on x86 and ARM (e.g. DGX Spark Blackwell) with CUDA
+            self.refresh_vllm_models()
         elif backend == "transformers":
             self.refresh_transformers_models()
         elif backend == "claude":
@@ -9522,12 +9529,7 @@ Based on the above context, please answer: {input_text}"""
             self.root.after(0, lambda: self.display_status_message(f"Failed to load MLX model: {helpful_msg}"))
 
     def load_vllm_model(self):
-        """Load the selected vLLM model"""
-        import platform
-        is_arm = platform.machine() == 'aarch64'
-        if is_arm:
-            self.display_status_message("vLLM not available. Please install vLLM and ensure CUDA is available: pip install vllm torch")
-            return
+        """Load the selected vLLM model - works on x86 and ARM (e.g. DGX Spark Blackwell) with CUDA"""
         if not VLLM_AVAILABLE:
             self.display_status_message("vLLM not available. Please install vLLM and ensure CUDA is available: pip install vllm torch")
             return
