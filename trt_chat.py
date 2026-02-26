@@ -230,23 +230,47 @@ class ChatApp(App):
         start = time.time()
 
         try:
+            # Try TRT-LLM first; fall back to Transformers if it can't compile the model
+            _used_trtllm = False
             if TRTLLM_AVAILABLE:
-                self.trt_llm = TRT_LLM(model=str(model_path))
-                self.loaded_model_name = name
-                elapsed = time.time() - start
-                self.app.call_from_thread(log.write,
-                    f"[green]Loaded {name} via TensorRT-LLM in {elapsed:.1f}s[/]")
-            elif TRANSFORMERS_AVAILABLE:
+                try:
+                    self.trt_llm = TRT_LLM(model=str(model_path))
+                    self.loaded_model_name = name
+                    elapsed = time.time() - start
+                    self.app.call_from_thread(log.write,
+                        f"[green]Loaded {name} via TensorRT-LLM in {elapsed:.1f}s[/]")
+                    _used_trtllm = True
+                except Exception as _trt_err:
+                    self.trt_llm = None
+                    self.app.call_from_thread(log.write,
+                        f"[yellow]TRT-LLM failed ({_trt_err}), falling back to Transformers[/]")
+
+            if not _used_trtllm and TRANSFORMERS_AVAILABLE:
                 tokenizer = AutoTokenizer.from_pretrained(str(model_path), trust_remote_code=True)
-                # Let transformers auto-detect dtype/quantization from config.
-                # Only force bfloat16 for models with no dtype AND no quantization set.
-                import json as _json
+                import json as _json, os as _os
                 _cfg = _json.load(open(model_path / "config.json"))
-                _has_dtype_or_quant = _cfg.get("torch_dtype") is not None or _cfg.get("quantization_config") is not None
+                # Determine the correct dtype to avoid float32 explosion on large models.
+                # "auto" in config or missing dtype → transformers silently uses float32 → 2× memory.
+                # Rule: quantized models (4-bit/8-bit/FP8) use "auto" so their quantization config
+                # is respected; full-precision models are forced to bfloat16.
+                _quant = _cfg.get("quantization_config") is not None
+                _dtype_str = _cfg.get("torch_dtype")  # e.g. "bfloat16", "float16", "auto", or None
+                if _quant:
+                    _load_dtype = "auto"  # let quantization config handle it
+                elif _dtype_str and _dtype_str not in ("auto", None):
+                    _load_dtype = getattr(torch, _dtype_str, torch.bfloat16)  # use config value explicitly
+                else:
+                    _load_dtype = torch.bfloat16  # safe default, never float32
+                # SAFETENSORS_FAST_GPU=1: load shards directly into GPU memory,
+                # skipping the CPU-intermediate copy that doubles peak usage on
+                # unified-memory systems (DGX Spark: CPU+GPU share 128 GB).
+                _os.environ["SAFETENSORS_FAST_GPU"] = "1"
+                self.app.call_from_thread(log.write,
+                    f"[dim]dtype={_load_dtype}, quant={_quant}[/]")
                 model = AutoModelForCausalLM.from_pretrained(
                     str(model_path),
                     device_map={"": "cuda:0"},
-                    torch_dtype="auto" if _has_dtype_or_quant else torch.bfloat16,
+                    torch_dtype=_load_dtype,
                     trust_remote_code=True,
                     low_cpu_mem_usage=True,
                 )
@@ -272,7 +296,9 @@ class ChatApp(App):
             self.app.call_from_thread(self.update_gpu_bar)
 
         except Exception as e:
+            import traceback
             self.app.call_from_thread(log.write, f"[red]Failed to load {name}: {e}[/]")
+            self.app.call_from_thread(log.write, f"[red]{traceback.format_exc()}[/]")
             self.app.call_from_thread(self.update_status, "No model loaded")
             self.model = None
             self.tokenizer = None
