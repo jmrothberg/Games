@@ -7147,6 +7147,11 @@ Based on the above context, please answer: {input_text}"""
                 "This model doesn't support images (text-only). Image will be ignored.")
 
         # ---------- Standard text-only path ----------
+        if not self.mlx_model or not self.mlx_tokenizer:
+            error_msg = "Text-only MLX model not available (this model loaded as VLM only). Cannot fall back to text generation."
+            self.append_to_chat(f"\n[{error_msg}]")
+            return error_msg
+
         full_response = ""
         assistant_response_start = None  # Track where assistant response starts in chat display
         has_thinking_tags = False  # Track if response contains thinking tags
@@ -7314,8 +7319,8 @@ Based on the above context, please answer: {input_text}"""
                 ],
             })
 
-        # Apply the VLM chat template
-        prompt = vlm_apply_chat_template(self.mlx_vlm_processor, config=self.mlx_vlm_model.config, messages=messages)
+        # Apply the VLM chat template — positional arg is 'prompt' (the messages list)
+        prompt = vlm_apply_chat_template(self.mlx_vlm_processor, config=self.mlx_vlm_model.config, prompt=messages)
 
         # Stream generation
         full_response = ""
