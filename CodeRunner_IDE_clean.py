@@ -102,6 +102,19 @@ else:
     MLX_AVAILABLE = False
     print("MLX skipped (Apple Silicon only)")
 
+# Try to import mlx-vlm for vision-language models (macOS only)
+if platform.system() == "Darwin":
+    try:
+        from mlx_vlm import load as vlm_load, stream_generate as vlm_stream_generate
+        from mlx_vlm import apply_chat_template as vlm_apply_chat_template
+        MLX_VLM_AVAILABLE = True
+        print("mlx-vlm available for vision-language models")
+    except ImportError:
+        MLX_VLM_AVAILABLE = False
+        print("mlx-vlm not available. Install with: pip install mlx-vlm")
+else:
+    MLX_VLM_AVAILABLE = False
+
 # Try to import vLLM for GPU acceleration
 # NOTE: vLLM works on x86 and ARM (e.g. DGX Spark Blackwell) with proper PyTorch/CUDA setup
 try:
@@ -1482,10 +1495,50 @@ def get_available_transformers_models():
 #
 # ============================================================================
 
+def is_mlx_vlm_model(model_path):
+    """Check if an MLX model is a vision-language model by inspecting its config.json.
+
+    Returns True if the model has vision capabilities, False otherwise.
+    Never raises — returns False on any error.
+    """
+    try:
+        config_path = os.path.join(model_path, "config.json")
+        if not os.path.exists(config_path):
+            return False
+
+        import json
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+
+        # Check for vision_config key (most VLMs like Qwen2-VL, LLaVA)
+        if "vision_config" in config:
+            return True
+
+        # Check for image_token_id (some VLMs)
+        if "image_token_id" in config:
+            return True
+
+        # Check model_type for VL/vision indicators
+        model_type = config.get("model_type", "").lower()
+        if any(tag in model_type for tag in ["_vl", "_vision", "llava", "pixtral"]):
+            return True
+
+        # Check architectures for VL/Vision/Llava
+        architectures = config.get("architectures", [])
+        for arch in architectures:
+            arch_lower = arch.lower()
+            if any(tag in arch_lower for tag in ["vl", "vision", "llava", "pixtral"]):
+                return True
+
+        return False
+    except Exception:
+        return False
+
+
 def get_available_mlx_models():
     """
     Get list of available MLX models on macOS.
-    Returns list of model paths or empty list if not available.
+    Returns list of (model_path, is_vlm) tuples or empty list if not available.
 
     NOTE: Now includes support for MiniMax models (mlx-community/MiniMax-M2-mlx-8bit-gs32)
     """
@@ -1506,19 +1559,22 @@ def get_available_mlx_models():
         ]
 
         model_dirs = []
+        vlm_flags = {}  # {path: bool} — True if VLM
         for mlx_models_dir in possible_dirs:
             if mlx_models_dir.exists() and mlx_models_dir.is_dir():
                 for item in mlx_models_dir.iterdir():
                     if item.is_dir():
                         safetensors_files = list(item.glob("*.safetensors"))
                         if safetensors_files:
-                            model_dirs.append(str(item))
+                            path_str = str(item)
+                            model_dirs.append(path_str)
+                            vlm_flags[path_str] = is_mlx_vlm_model(path_str)
 
-        return model_dirs
+        return model_dirs, vlm_flags
 
     except Exception as e:
         print(f"Error detecting MLX models: {str(e)}")
-        return []
+        return [], {}
 
 def get_available_models():
     """Get list of available Ollama models"""
@@ -4531,6 +4587,10 @@ class OllamaGUI:
         self.mlx_tokenizer = None  # Will hold MLX tokenizer
         self.available_mlx_models = []  # List of available MLX models
         self.selected_mlx_path = StringVar()  # Currently selected MLX model path
+        self.mlx_is_vlm = False  # Whether the loaded MLX model is a vision-language model
+        self.mlx_vlm_model = None  # Will hold loaded mlx-vlm model
+        self.mlx_vlm_processor = None  # Will hold mlx-vlm processor
+        self.mlx_model_vlm_flags = {}  # {path: bool} cache for VLM detection
 
         # vLLM backend variables
         self.vllm_model = None  # Will hold loaded vLLM model
@@ -4874,12 +4934,13 @@ GREAT GRAPHICS & ANIMATION:
         # Load available MLX models if MLX is available
         if MLX_AVAILABLE:
             try:
-                self.available_mlx_models = get_available_mlx_models()
+                self.available_mlx_models, self.mlx_model_vlm_flags = get_available_mlx_models()
                 if self.available_mlx_models:
                     self.selected_mlx_path.set(self.available_mlx_models[0])
             except Exception as e:
                 print(f"Error finding MLX models: {str(e)}")
                 self.available_mlx_models = []
+                self.mlx_model_vlm_flags = {}
 
         # Load available Claude models
         try:
@@ -6382,10 +6443,10 @@ Based on the above context, please answer: {input_text}"""
 
             elif backend == "mlx":
                 # Use MLX backend
-                if not self.mlx_model:
+                if not self.mlx_model and not self.mlx_vlm_model:
                     raise Exception("No MLX model loaded. Please load a model first.")
 
-                full_response = self.stream_mlx_response(display_message)
+                full_response = self.stream_mlx_response(display_message, has_image=has_image, image_data=image_data)
 
             elif backend == "vllm":
                 # Use vLLM backend
@@ -7066,11 +7127,26 @@ Based on the above context, please answer: {input_text}"""
         )
         return sampler, procs
 
-    def stream_mlx_response(self, display_message=None):
+    def stream_mlx_response(self, display_message=None, has_image=False, image_data=None):
         """Stream response using MLX backend
 
         Supports all MLX models including MiniMax models (mlx-community/MiniMax-M2-mlx-8bit-gs32).
+        When has_image=True and a VLM model is loaded, uses mlx-vlm for vision processing.
         """
+        # ---------- VLM image path ----------
+        if has_image and image_data and self.mlx_is_vlm and self.mlx_vlm_model and MLX_VLM_AVAILABLE:
+            try:
+                return self._stream_mlx_vlm_response(display_message, image_data)
+            except Exception as vlm_err:
+                self.display_status_message(
+                    f"Image processing failed ({vlm_err}) — retrying without image...")
+                # Fall through to text-only generation below
+
+        if has_image and image_data and not self.mlx_is_vlm:
+            self.display_status_message(
+                "This model doesn't support images (text-only). Image will be ignored.")
+
+        # ---------- Standard text-only path ----------
         full_response = ""
         assistant_response_start = None  # Track where assistant response starts in chat display
         has_thinking_tags = False  # Track if response contains thinking tags
@@ -7199,6 +7275,94 @@ Based on the above context, please answer: {input_text}"""
             error_msg = f"Error during MLX generation: {str(e)}"
             self.append_to_chat(f"\n[{error_msg}]")
             return error_msg
+
+    def _stream_mlx_vlm_response(self, display_message, image_data):
+        """Stream a VLM response using mlx-vlm with an attached image.
+
+        Converts base64 image_data to a PIL Image, builds a chat-template prompt
+        with the image placeholder, and streams the generation.
+        Returns the full response text.
+        """
+        import base64
+        from io import BytesIO
+        from PIL import Image
+
+        # Decode the base64 image data into a PIL Image
+        if image_data.startswith("data:"):
+            # Strip data URI prefix (e.g. "data:image/png;base64,...")
+            image_data = image_data.split(",", 1)[1]
+        raw_bytes = base64.b64decode(image_data)
+        pil_image = Image.open(BytesIO(raw_bytes)).convert("RGB")
+
+        # Build messages list
+        messages = []
+        if self.system_message and self.system_message.get('content'):
+            messages.append({"role": "system", "content": self.system_message['content']})
+
+        # Add conversation history (text only — prior images are not resent)
+        for msg in self.messages:
+            if msg['role'] in ['user', 'assistant']:
+                messages.append({"role": msg['role'], "content": msg['content']})
+
+        # Current user message with image placeholder
+        if display_message:
+            messages.append({
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "text", "text": display_message},
+                ],
+            })
+
+        # Apply the VLM chat template
+        prompt = vlm_apply_chat_template(self.mlx_vlm_processor, config=self.mlx_vlm_model.config, messages=messages)
+
+        # Stream generation
+        full_response = ""
+        assistant_response_start = None
+        in_thinking_block = False
+        pending_buffer = ""
+        token_count = 0
+
+        for response_chunk in vlm_stream_generate(
+            self.mlx_vlm_model,
+            self.mlx_vlm_processor,
+            prompt=prompt,
+            image=pil_image,
+            max_tokens=int(self.max_tokens_var.get()),
+            temperature=self.temperature.get(),
+        ):
+            if self.stop_generation:
+                break
+
+            token_count += 1
+            if token_count % 500 == 0:
+                mx.metal.clear_cache()
+
+            chunk_text = response_chunk.text
+            full_response += chunk_text
+
+            # Handle thinking filtering
+            if self.hide_thinking.get():
+                display_text, in_thinking_block, pending_buffer = self._process_chunk_with_thinking(
+                    chunk_text, in_thinking_block, pending_buffer
+                )
+                if assistant_response_start is None and display_text.strip():
+                    assistant_response_start = self.chat_display.index(tk.END)
+                if display_text:
+                    self.append_to_chat(display_text)
+            else:
+                if assistant_response_start is None and chunk_text.strip():
+                    assistant_response_start = self.chat_display.index(tk.END)
+                self.append_to_chat(chunk_text)
+
+        # Clean up
+        if "<|im_end|>" in full_response:
+            clean_response = full_response.split("<|im_end|>")[0].strip()
+        else:
+            clean_response = full_response.strip()
+
+        return clean_response
 
     def _process_chunk_with_thinking(self, chunk_text, in_thinking_block, pending_buffer):
         """Process a chunk of text with proper thinking tag handling.
@@ -8745,9 +8909,12 @@ Based on the above context, please answer: {input_text}"""
                         break
                 self.model_status_label.config(text=f"Model selected: {selected_model} - click 'Load Model' to load")
             elif backend == "mlx":
-                # For MLX models, update the selected_mlx_path
+                # For MLX models, strip [VL]/[TX] tag and update selected_mlx_path
+                stripped_name = selected_model
+                if stripped_name.startswith("[VL] ") or stripped_name.startswith("[TX] "):
+                    stripped_name = stripped_name[5:]
                 for path in self.available_mlx_models:
-                    if os.path.basename(path) == selected_model:
+                    if os.path.basename(path) == stripped_name:
                         self.selected_mlx_path.set(path)
                         break
                 self.model_status_label.config(text=f"Model selected: {selected_model} - click 'Load Model' to load")
@@ -8869,7 +9036,7 @@ Based on the above context, please answer: {input_text}"""
             return
 
         try:
-            self.available_mlx_models = get_available_mlx_models()
+            self.available_mlx_models, self.mlx_model_vlm_flags = get_available_mlx_models()
 
             if self.available_mlx_models:
                 # If current selection is still valid, keep it
@@ -8877,9 +9044,20 @@ Based on the above context, please answer: {input_text}"""
                 if current_path not in self.available_mlx_models:
                     self.selected_mlx_path.set(self.available_mlx_models[0])
 
-            self.display_status_message(f"Found {len(self.available_mlx_models)} MLX models")
+            vlm_count = sum(1 for v in self.mlx_model_vlm_flags.values() if v)
+            self.display_status_message(f"Found {len(self.available_mlx_models)} MLX models ({vlm_count} VLM, {len(self.available_mlx_models) - vlm_count} text-only)")
         except Exception as e:
             self.display_status_message(f"Error refreshing MLX models: {str(e)}")
+
+    def _refresh_mlx_dropdown_tags(self):
+        """Rebuild MLX dropdown values to match current vlm_flags (e.g. after a VLM load failure)."""
+        if self.backend_var.get() != "mlx":
+            return
+        mlx_display_names = []
+        for p in self.available_mlx_models:
+            tag = "[VL] " if self.mlx_model_vlm_flags.get(p, False) else "[TX] "
+            mlx_display_names.append(tag + os.path.basename(p))
+        self.model_dropdown['values'] = mlx_display_names
 
     def change_claude_model(self, event=None):
         """Handle Claude model selection change"""
@@ -9011,14 +9189,19 @@ Based on the above context, please answer: {input_text}"""
                 self.backend_var.set("ollama")  # Revert to Ollama
                 return
 
-            # Populate dropdown with MLX models (display names only)
-            mlx_display_names = [os.path.basename(p) for p in self.available_mlx_models]
+            # Populate dropdown with MLX models — tag [VL] or [TX]
+            mlx_display_names = []
+            for p in self.available_mlx_models:
+                tag = "[VL] " if self.mlx_model_vlm_flags.get(p, False) else "[TX] "
+                mlx_display_names.append(tag + os.path.basename(p))
             self.model_dropdown['values'] = mlx_display_names
             # Show max tokens controls for MLX
             self.max_tokens_frame.pack(fill=tk.X, pady=(0, 10))
 
             if self.mlx_model:
-                model_name = os.path.basename(self.selected_mlx_path.get())
+                model_path = self.selected_mlx_path.get()
+                tag = "[VL] " if self.mlx_model_vlm_flags.get(model_path, False) else "[TX] "
+                model_name = tag + os.path.basename(model_path)
                 self.model_var.set(model_name)
                 self.model_status_label.config(text=f"Loaded: {model_name}", fg="green")
             else:
@@ -9462,10 +9645,13 @@ Based on the above context, please answer: {input_text}"""
             return
 
         # Clear any previously loaded local models before loading new one
-        if self.mlx_model:
+        if self.mlx_model or self.mlx_vlm_model:
             self.display_status_message("Unloading previous MLX model...")
             self.mlx_model = None
             self.mlx_tokenizer = None
+            self.mlx_vlm_model = None
+            self.mlx_vlm_processor = None
+            self.mlx_is_vlm = False
         if self.llama_cpp_model:
             self.display_status_message("Unloading llama-cpp model...")
             self.llama_cpp_model = None
@@ -9484,7 +9670,11 @@ Based on the above context, please answer: {input_text}"""
         threading.Thread(target=self._load_mlx_model_thread, args=(model_path,)).start()
 
     def _load_mlx_model_thread(self, model_path):
-        """Load MLX model in background thread"""
+        """Load MLX model in background thread.
+
+        If the model is detected as a VLM and mlx-vlm is available, attempts
+        vlm_load first. Falls back to text-only mlx_lm.load on any failure.
+        """
         try:
             # Clean up any existing model first to avoid conflicts
             if hasattr(self, 'mlx_model') and self.mlx_model:
@@ -9495,27 +9685,69 @@ Based on the above context, please answer: {input_text}"""
                     pass  # Ignore cleanup errors
                 self.mlx_model = None
                 self.mlx_tokenizer = None
+            if hasattr(self, 'mlx_vlm_model') and self.mlx_vlm_model:
+                try:
+                    del self.mlx_vlm_model
+                    del self.mlx_vlm_processor
+                except:
+                    pass
+                self.mlx_vlm_model = None
+                self.mlx_vlm_processor = None
+            self.mlx_is_vlm = False
 
-            # Load MLX model and tokenizer
-            # Try loading normally first (works for most models)
-            # If TokenizersBackend error occurs, retry with trust_remote_code=True
+            model_name = os.path.basename(model_path)
+            is_vlm = self.mlx_model_vlm_flags.get(model_path, False)
+
+            # Attempt VLM loading if model is flagged as VLM and mlx-vlm is available
+            if is_vlm and MLX_VLM_AVAILABLE:
+                try:
+                    self.root.after(0, lambda: self.display_status_message(
+                        f"Loading VLM model: {model_name} (vision-language)..."))
+                    self.mlx_vlm_model, self.mlx_vlm_processor = vlm_load(model_path)
+                    self.mlx_is_vlm = True
+
+                    # Also load as text-only mlx_lm for non-image queries (faster)
+                    try:
+                        self.mlx_model, self.mlx_tokenizer = load(model_path)
+                    except Exception:
+                        # If text-only load fails, we'll use VLM path for everything
+                        self.mlx_model = None
+                        self.mlx_tokenizer = None
+
+                    tag = "[VL] "
+                    self.root.after(0, lambda: self.model_status_label.config(
+                        text=f"Loaded: {tag}{model_name}", fg="green"))
+                    self.root.after(0, lambda: self.load_model_btn.config(state=tk.NORMAL, text="Load Model"))
+                    self.root.after(0, lambda: self.display_status_message(
+                        f"Successfully loaded VLM model: {model_name} (vision + text)"))
+                    return
+                except Exception as vlm_error:
+                    # VLM load failed — fall back to text-only
+                    self.mlx_vlm_model = None
+                    self.mlx_vlm_processor = None
+                    self.mlx_is_vlm = False
+                    # Correct the flags cache so dropdown matches reality
+                    self.mlx_model_vlm_flags[model_path] = False
+                    self.root.after(0, self._refresh_mlx_dropdown_tags)
+                    vlm_err_msg = f"VLM load failed for {model_name} ({vlm_error}), loading as text-only..."
+                    self.root.after(0, lambda msg=vlm_err_msg: self.display_status_message(msg))
+
+            # Standard text-only loading (original logic)
             try:
                 self.mlx_model, self.mlx_tokenizer = load(model_path)
             except Exception as first_error:
                 error_str = str(first_error)
                 # Only use trust_remote_code if we get a TokenizersBackend error
-                # This ensures models that work normally continue to work
                 if "TokenizersBackend" in error_str or "tokenizer" in error_str.lower():
                     self.mlx_model, self.mlx_tokenizer = load(model_path, tokenizer_config={"trust_remote_code": True})
                 else:
-                    # Re-raise if it's a different error
                     raise
 
             # Update UI on successful load
-            model_name = os.path.basename(model_path)
-            self.root.after(0, lambda: self.model_status_label.config(text=f"Loaded: {model_name}", fg="green"))
+            tag = "[TX] "
+            self.root.after(0, lambda: self.model_status_label.config(text=f"Loaded: {tag}{model_name}", fg="green"))
             self.root.after(0, lambda: self.load_model_btn.config(state=tk.NORMAL, text="Load Model"))
-            self.root.after(0, lambda: self.display_status_message(f"Successfully loaded MLX model: {model_name}"))
+            self.root.after(0, lambda: self.display_status_message(f"Successfully loaded MLX model: {model_name} (text-only)"))
 
         except Exception as e:
             error_msg = str(e)
