@@ -247,12 +247,324 @@ LANGCHAIN_SPLITTERS_AVAILABLE = False
 
 import glob
 import requests  # For Claude API calls and web search
+import queue  # For MCP client response queues
 
 # LangChain imports removed (code-only version)
 LANGCHAIN_COMMUNITY_AVAILABLE = False
 from pathlib import Path
 import time
 import sys
+
+# =============================================================================
+# MCP (Model Context Protocol) Client — embedded from obedient_beast/mcp_client.py
+# Manages MCP server subprocesses for tool calling (Brave Search, fetch, etc.)
+# =============================================================================
+try:
+    from dataclasses import dataclass, field
+    from typing import Optional as _Optional
+
+    @dataclass
+    class MCPTool:
+        """Represents a tool from an MCP server."""
+        server: str
+        name: str
+        description: str
+        input_schema: dict
+
+    @dataclass
+    class MCPServer:
+        """Represents a running MCP server subprocess."""
+        name: str
+        command: list
+        process: _Optional[subprocess.Popen] = None
+        tools: list = field(default_factory=list)
+        request_id: int = 0
+        response_queue: queue.Queue = field(default_factory=queue.Queue)
+        reader_thread: _Optional[threading.Thread] = None
+
+    class MCPClient:
+        """Client for managing multiple MCP servers via JSON-RPC 2.0 over stdio."""
+
+        def __init__(self, config_file):
+            self.config_file = Path(config_file)
+            self.servers: dict = {}
+
+        def load_config(self) -> dict:
+            if not self.config_file.exists():
+                return {"servers": {}}
+            return json.loads(self.config_file.read_text())
+
+        def start_servers(self):
+            config = self.load_config()
+            for name, server_config in config.get("servers", {}).items():
+                if not server_config.get("enabled", True):
+                    continue
+                try:
+                    self._start_server(name, server_config)
+                    print(f"[MCP] Started server: {name}")
+                except Exception as e:
+                    print(f"[MCP] Failed to start {name}: {e}")
+
+        def _start_server(self, name: str, config: dict):
+            command = config["command"]
+            if isinstance(command, str):
+                command = command.split()
+            env = os.environ.copy()
+            for key, value in config.get("env", {}).items():
+                env[key] = value
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                text=True,
+                bufsize=1
+            )
+            server = MCPServer(name=name, command=command, process=process)
+
+            def read_responses():
+                while True:
+                    try:
+                        line = process.stdout.readline()
+                        if not line:
+                            break
+                        response = json.loads(line)
+                        server.response_queue.put(response)
+                    except Exception as e:
+                        if process.poll() is not None:
+                            break
+                        print(f"[MCP] {name} read error: {e}")
+
+            server.reader_thread = threading.Thread(target=read_responses, daemon=True)
+            server.reader_thread.start()
+            self.servers[name] = server
+            self._initialize(name)
+            self._discover_tools(name)
+
+        def _send_request(self, server_name: str, method: str, params: dict = None) -> dict:
+            server = self.servers.get(server_name)
+            if not server or not server.process:
+                raise RuntimeError(f"Server {server_name} not running")
+            server.request_id += 1
+            request = {"jsonrpc": "2.0", "id": server.request_id, "method": method}
+            if params:
+                request["params"] = params
+            server.process.stdin.write(json.dumps(request) + "\n")
+            server.process.stdin.flush()
+            timeout = 60  # Allow extra time for first-run npm downloads
+            deadline = time.time() + timeout
+            while True:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    raise TimeoutError(f"No response from {server_name} after {timeout}s")
+                try:
+                    response = server.response_queue.get(timeout=remaining)
+                    if "id" not in response:
+                        continue
+                    return response
+                except queue.Empty:
+                    raise TimeoutError(f"No response from {server_name} after {timeout}s")
+
+        def _initialize(self, server_name: str):
+            self._send_request(server_name, "initialize", {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "coderunner-ide", "version": "1.0.0"}
+            })
+            server = self.servers[server_name]
+            notification = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+            server.process.stdin.write(json.dumps(notification) + "\n")
+            server.process.stdin.flush()
+
+        def _discover_tools(self, server_name: str):
+            response = self._send_request(server_name, "tools/list")
+            server = self.servers[server_name]
+            server.tools = []
+            for tool_data in response.get("result", {}).get("tools", []):
+                tool = MCPTool(
+                    server=server_name,
+                    name=tool_data["name"],
+                    description=tool_data.get("description", ""),
+                    input_schema=tool_data.get("inputSchema", {})
+                )
+                server.tools.append(tool)
+
+        def list_tools(self):
+            all_tools = []
+            for server in self.servers.values():
+                all_tools.extend(server.tools)
+            return all_tools
+
+        def call_tool(self, server_name: str, tool_name: str, arguments: dict) -> str:
+            response = self._send_request(server_name, "tools/call", {
+                "name": tool_name, "arguments": arguments
+            })
+            result = response.get("result", {})
+            content = result.get("content", [])
+            if isinstance(content, list):
+                text_parts = []
+                for item in content:
+                    if item.get("type") == "text":
+                        text_parts.append(item.get("text", ""))
+                    elif item.get("type") == "image":
+                        text_parts.append(f"[Image: {item.get('mimeType', 'image')}]")
+                return "\n".join(text_parts) or str(result)
+            return str(result)
+
+        def stop_servers(self):
+            for name, server in self.servers.items():
+                if server.process:
+                    try:
+                        server.process.terminate()
+                        server.process.wait(timeout=5)
+                    except Exception as e:
+                        print(f"[MCP] Error stopping {name}: {e}")
+                        try:
+                            server.process.kill()
+                        except Exception:
+                            pass
+            self.servers = {}
+
+    MCP_AVAILABLE = True
+except Exception as _mcp_err:
+    MCP_AVAILABLE = False
+    print(f"MCP client not available: {_mcp_err}")
+
+MAX_AGENT_TURNS = 5  # Maximum tool-call agent loop iterations per user message
+
+# =============================================================================
+# Helper: fetch an image URL and save to Generated_games/assets/
+# =============================================================================
+_ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Generated_games", "assets")
+
+def fetch_image_as_file(url, max_bytes=5*1024*1024):
+    """Download an image from *url*, save to Generated_games/assets/, return the relative path.
+
+    The returned path is relative to Generated_games/ (e.g. "assets/sprite_abc123.png")
+    so HTML files in Generated_games/ can reference it directly as a src attribute.
+    """
+    try:
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        data = resp.content
+        if len(data) > max_bytes:
+            return f"Error: image too large ({len(data)} bytes, max {max_bytes})"
+
+        # Detect extension from Content-Type or URL
+        mime = resp.headers.get("Content-Type", "").split(";")[0].strip()
+        ext_map = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif",
+                   "image/webp": ".webp", "image/svg+xml": ".svg"}
+        ext = ext_map.get(mime, "")
+        if not ext:
+            url_ext = url.rsplit(".", 1)[-1].lower().split("?")[0]
+            ext = f".{url_ext}" if url_ext in ("png", "jpg", "jpeg", "gif", "webp", "svg") else ".png"
+
+        # Ensure assets directory exists
+        os.makedirs(_ASSETS_DIR, exist_ok=True)
+
+        # Generate a short unique filename
+        short_id = uuid.uuid4().hex[:8]
+        # Try to derive a readable name from the URL
+        url_name = url.rsplit("/", 1)[-1].split("?")[0].split("#")[0]
+        url_name = re.sub(r'[^a-zA-Z0-9_-]', '_', url_name)[:40]
+        filename = f"{url_name}_{short_id}{ext}"
+        filepath = os.path.join(_ASSETS_DIR, filename)
+
+        with open(filepath, "wb") as f:
+            f.write(data)
+
+        # Return path relative to Generated_games/ so HTML can use it directly
+        return f"assets/{filename}"
+    except Exception as e:
+        return f"Error fetching image: {e}"
+
+# =============================================================================
+# MCP-aware tool definitions for LLMs
+# =============================================================================
+def get_mcp_tool_definitions(api_type="openai", mcp_client=None):
+    """Build tool definitions from MCP servers + local helpers.
+
+    Returns a list formatted for either OpenAI (Ollama/llama-cpp) or Claude API.
+    Falls back to the legacy web_search tool when MCP is unavailable.
+    """
+    tools = []
+
+    if mcp_client:
+        for mcp_tool in mcp_client.list_tools():
+            prefixed_name = f"mcp_{mcp_tool.server}_{mcp_tool.name}"
+            if api_type == "claude":
+                tools.append({
+                    "name": prefixed_name,
+                    "description": f"[MCP:{mcp_tool.server}] {mcp_tool.description}",
+                    "input_schema": mcp_tool.input_schema
+                })
+            else:
+                tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": prefixed_name,
+                        "description": f"[MCP:{mcp_tool.server}] {mcp_tool.description}",
+                        "parameters": mcp_tool.input_schema
+                    }
+                })
+
+    # Add local fetch_image tool
+    if api_type == "claude":
+        tools.append({
+            "name": "fetch_image",
+            "description": "Download an image from a URL and save it to the assets/ folder. Returns a relative file path (e.g. 'assets/sprite_abc123.png') that can be used directly in HTML src attributes. The HTML file and assets folder live in the same directory.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "The URL of the image to download"}
+                },
+                "required": ["url"]
+            }
+        })
+    else:
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": "fetch_image",
+                "description": "Download an image from a URL and save it to the assets/ folder. Returns a relative file path (e.g. 'assets/sprite_abc123.png') that can be used directly in HTML src attributes. The HTML file and assets folder live in the same directory.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "The URL of the image to download"}
+                    },
+                    "required": ["url"]
+                }
+            }
+        })
+
+    # Fallback: if no MCP tools, add legacy web_search
+    if not mcp_client or not mcp_client.servers:
+        if api_type == "claude":
+            tools.append({
+                "name": "web_search",
+                "description": "Search the web for current information about any topic.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string", "description": "The search query."}},
+                    "required": ["query"]
+                }
+            })
+        else:
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": "web_search",
+                    "description": "Search the web for current information about any topic.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string", "description": "The search query."}},
+                        "required": ["query"]
+                    }
+                }
+            })
+
+    return tools
 
 # Default model to use
 model = 'qwen3:235b'
@@ -4389,6 +4701,19 @@ def cleanup_handler(signum, frame):
     print("\n🧹 Cleaning up CodeRunner resources...")
 
     try:
+        # Stop MCP servers if running
+        if MCP_AVAILABLE:
+            try:
+                # Find the app instance and stop its MCP client
+                import gc
+                for obj in gc.get_referrers(OllamaGUI):
+                    if isinstance(obj, OllamaGUI) and hasattr(obj, 'mcp_client') and obj.mcp_client:
+                        obj.mcp_client.stop_servers()
+                        print("✅ MCP servers stopped")
+                        break
+            except Exception:
+                pass
+
         # Clear GPU memory first
         clear_gpu_memory()
 
@@ -4566,6 +4891,11 @@ class OllamaGUI:
         self.last_run_code = None
         self.last_run_stdout = None
         self.last_run_stderr = None
+
+        # MCP (Model Context Protocol) client for tool-calling agent loop
+        self.mcp_client = None
+        self._mcp_initialized = False
+        self._pending_tool_results = []  # Collected tool calls from streaming
         
         # Backend selection
         # Default backend: MLX on macOS, Transformers on Linux
@@ -6417,64 +6747,116 @@ Based on the above context, please answer: {input_text}"""
             # Prepare display for assistant's response
             self.display_message(assistant_label, "", end=False)
             
-            # Choose backend and get response
+            # Choose backend and get response — with agent loop for tool calls
             backend = self.backend_var.get()
             model_to_use = None  # Initialize to avoid NameError in exception handler
-            
-            if backend == "llama_cpp":
-                # Use GGUF backend
-                if not self.llama_cpp_model:
-                    raise Exception("No GGUF model loaded. Please load a model first.")
-                    
-                full_response = self.stream_llama_cpp_response(has_image, image_data, display_message)
-                
-            elif backend == "claude":
-                # Use Claude API backend
-                if not self.claude_model_var.get():
-                    raise Exception("No Claude model selected. Please select a model first.")
-                    
-                full_response = self.stream_claude_response(has_image, image_data, display_message, image_media_type)
-                
-            elif backend == "openai":
-                # Use OpenAI API backend
-                if not self.model_var.get():
-                    raise Exception("No OpenAI model selected. Please select a model first.")
-                full_response = self.stream_openai_response(display_message)
+            search_enabled = hasattr(self, 'search_mode') and self.search_mode.get()
 
-            elif backend == "mlx":
-                # Use MLX backend
-                if not self.mlx_model and not self.mlx_vlm_model:
-                    raise Exception("No MLX model loaded. Please load a model first.")
+            for _agent_turn in range(MAX_AGENT_TURNS):
+                # Clear pending tool results before each turn
+                self._pending_tool_results = []
 
-                full_response = self.stream_mlx_response(display_message, has_image=has_image, image_data=image_data)
+                if backend == "llama_cpp":
+                    if not self.llama_cpp_model:
+                        raise Exception("No GGUF model loaded. Please load a model first.")
+                    full_response = self.stream_llama_cpp_response(
+                        has_image and _agent_turn == 0, image_data if _agent_turn == 0 else None, display_message)
 
-            elif backend == "vllm":
-                # Use vLLM backend
-                if not hasattr(self, 'vllm_model') or not self.vllm_model:
-                    raise Exception("No vLLM model loaded. Please load a model first.")
+                elif backend == "claude":
+                    if not self.claude_model_var.get():
+                        raise Exception("No Claude model selected. Please select a model first.")
+                    full_response = self.stream_claude_response(
+                        has_image and _agent_turn == 0, image_data if _agent_turn == 0 else None,
+                        display_message, image_media_type)
 
-                full_response = self.stream_vllm_response(display_message)
+                elif backend == "openai":
+                    if not self.model_var.get():
+                        raise Exception("No OpenAI model selected. Please select a model first.")
+                    full_response = self.stream_openai_response(display_message)
 
-            elif backend == "transformers":
-                # Use Transformers backend
-                if not self.transformers_model or not self.transformers_tokenizer:
-                    raise Exception("No Transformers model loaded. Please load a model first.")
+                elif backend == "mlx":
+                    if not self.mlx_model and not self.mlx_vlm_model:
+                        raise Exception("No MLX model loaded. Please load a model first.")
+                    full_response = self.stream_mlx_response(
+                        display_message, has_image=has_image and _agent_turn == 0,
+                        image_data=image_data if _agent_turn == 0 else None)
 
-                full_response = self.stream_transformers_response(display_message)
+                elif backend == "vllm":
+                    if not hasattr(self, 'vllm_model') or not self.vllm_model:
+                        raise Exception("No vLLM model loaded. Please load a model first.")
+                    full_response = self.stream_vllm_response(display_message)
 
+                elif backend == "transformers":
+                    if not self.transformers_model or not self.transformers_tokenizer:
+                        raise Exception("No Transformers model loaded. Please load a model first.")
+                    full_response = self.stream_transformers_response(display_message)
 
-            else:
-                # Use Ollama backend (default)
-                model_to_use = self.model_var.get()
-                
-                # Stream the response - using appropriate method based on image presence
-                if has_image and image_data:
-                    # For multimodal, we need to use the direct API
-                    full_response = self.stream_multimodal_response(model_to_use, image_data, display_message)
                 else:
-                    # For text-only, use the Ollama Python client
-                    full_response = self.stream_text_response(model_to_use)
-            
+                    # Ollama backend (default)
+                    model_to_use = self.model_var.get()
+                    if has_image and image_data and _agent_turn == 0:
+                        full_response = self.stream_multimodal_response(model_to_use, image_data, display_message)
+                    else:
+                        full_response = self.stream_text_response(model_to_use)
+
+                # --- Agent loop: if no tool calls or search off, break ---
+                if not self._pending_tool_results or not search_enabled or self.stop_generation:
+                    break
+
+                # Execute tool calls and build tool-result messages
+                self.display_chat_system_message(f"--- Agent turn {_agent_turn + 1}: executing {len(self._pending_tool_results)} tool call(s) ---")
+
+                # Record assistant response so far
+                self.messages.append({'role': 'assistant', 'content': full_response or ''})
+
+                if backend == "claude":
+                    # Claude format: assistant content has tool_use blocks, user sends tool_result
+                    assistant_content = []
+                    if full_response:
+                        assistant_content.append({"type": "text", "text": full_response})
+                    tool_result_content = []
+                    for tc in self._pending_tool_results:
+                        assistant_content.append({
+                            "type": "tool_use", "id": tc['id'],
+                            "name": tc['name'], "input": tc['arguments']
+                        })
+                        result_text = self._execute_tool_call(tc['name'], tc['arguments'])
+                        self.add_to_search_results(f"Tool: {tc['name']}\n\n{result_text[:2000]}")
+                        tool_result_content.append({
+                            "type": "tool_result", "tool_use_id": tc['id'],
+                            "content": result_text[:8000]
+                        })
+                    # Replace last assistant message with structured content
+                    self.messages[-1] = {"role": "assistant", "content": assistant_content}
+                    self.messages.append({"role": "user", "content": tool_result_content})
+                else:
+                    # OpenAI / Ollama format: assistant has tool_calls, then role=tool messages
+                    tool_calls_list = []
+                    for tc in self._pending_tool_results:
+                        tool_calls_list.append({
+                            "id": tc['id'],
+                            "type": "function",
+                            "function": {"name": tc['name'], "arguments": json.dumps(tc['arguments'])}
+                        })
+                    # Replace last assistant message with tool_calls
+                    self.messages[-1] = {
+                        "role": "assistant",
+                        "content": full_response or '',
+                        "tool_calls": tool_calls_list
+                    }
+                    for tc in self._pending_tool_results:
+                        result_text = self._execute_tool_call(tc['name'], tc['arguments'])
+                        self.add_to_search_results(f"Tool: {tc['name']}\n\n{result_text[:2000]}")
+                        self.messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc['id'],
+                            "content": result_text[:8000]
+                        })
+
+                # Show continuation in chat
+                self.append_to_chat(f"\n\n")
+                self.display_message(assistant_label, "", end=False)
+
             # If we stopped generation early
             if self.stop_generation:
                 # Chat is now always editable
@@ -6721,9 +7103,9 @@ Based on the above context, please answer: {input_text}"""
             
             # Add tools if search mode is enabled
             if hasattr(self, 'search_mode') and self.search_mode.get():
-                api_params["tools"] = [get_web_search_tool_definition()]
+                api_params["tools"] = get_mcp_tool_definitions("openai", self.mcp_client)
                 self.display_chat_system_message("🔍 Web search tools enabled")
-            
+
             # Start streaming with ollama Python client
             try:
                 stream = ollama.chat(**api_params)
@@ -6735,7 +7117,7 @@ Based on the above context, please answer: {input_text}"""
                     stream = ollama.chat(**api_params)
                 else:
                     raise
-            
+
             # Initialize thinking state tracking
             in_thinking_block = False
             pending_buffer = ""
@@ -6750,30 +7132,24 @@ Based on the above context, please answer: {input_text}"""
                         pass
                     break
 
-                # Check for tool calls in the chunk
+                # Check for tool calls in the chunk — collect for agent loop
                 if 'message' in chunk and 'tool_calls' in chunk['message'] and chunk['message']['tool_calls']:
-                    # Handle tool calls
                     tool_calls = chunk['message']['tool_calls']
                     for tool_call in tool_calls:
-                        if tool_call.get('function', {}).get('name') == 'web_search':
+                        func_name = tool_call.get('function', {}).get('name', '')
+                        arguments = tool_call.get('function', {}).get('arguments', {})
+                        if isinstance(arguments, str):
                             try:
-                                # Handle both string and dict arguments
-                                arguments = tool_call['function']['arguments']
-                                if isinstance(arguments, str):
-                                    query = json.loads(arguments)['query']
-                                else:
-                                    query = arguments.get('query', '')
-                                self.display_chat_system_message(f"🔍 Search executed: {query}")
-
-                                # Execute search and add to search results window
-                                search_results = safe_web_search(query)
-                                self.add_to_search_results(f"Query: {query}\n\n{search_results}")
-
-                                # In semi-automatic mode, we don't add tool responses to messages
-                                # The search results will be included in the next user message instead
-                                # Search results notification handled by add_to_search_results
-                            except Exception as e:
-                                self.add_to_debug_console(f"❌ Error handling tool call: {e}")
+                                arguments = json.loads(arguments)
+                            except json.JSONDecodeError:
+                                arguments = {}
+                        self.display_chat_system_message(f"🔍 Tool call: {func_name}({json.dumps(arguments)[:100]})")
+                        self._pending_tool_results.append({
+                            'name': func_name,
+                            'arguments': arguments,
+                            'id': tool_call.get('id', str(uuid.uuid4())),
+                            'backend': 'ollama'
+                        })
 
                 chunk_text = chunk['message'].get('content', '')
                 if chunk_text:  # Only add if there's actual content
@@ -6962,7 +7338,7 @@ Based on the above context, please answer: {input_text}"""
 
                 # Add tools if search mode is enabled
                 if hasattr(self, 'search_mode') and self.search_mode.get():
-                    api_params["tools"] = [get_web_search_tool_definition()]
+                    api_params["tools"] = get_mcp_tool_definitions("openai", self.mcp_client)
                     self.display_chat_system_message("🔍 Web search tools enabled")
 
                 try:
@@ -6975,29 +7351,29 @@ Based on the above context, please answer: {input_text}"""
                     else:
                         self.display_chat_system_message(f"❌ Model error: {str(e)[:100]}...")
                         return ""
-                
+
                 # Process streaming response
                 for chunk in response:
                     if self.stop_generation:
                         break
-                    
+
                     # Check if the response is finished
                     if chunk.get('choices') and chunk['choices'][0].get('finish_reason'):
                         finish_reason = chunk['choices'][0]['finish_reason']
                         if finish_reason == 'length':
                             self.append_to_chat(f"\n[Response truncated - reached {max_tokens} token limit]")
                         break
-                    
+
                     if 'choices' in chunk and chunk['choices']:
                         delta = chunk['choices'][0].get('delta', {})
                         if 'content' in delta:
                             chunk_text = delta['content']
                             full_response += chunk_text
-                            
+
                             # Always stream everything during generation
                             self.append_to_chat(chunk_text)
                             last_visible_update = len(full_response)
-                                
+
             else:
                 # Text-only response using create_chat_completion
                 max_tokens = int(self.max_tokens_var.get())
@@ -7024,7 +7400,7 @@ Based on the above context, please answer: {input_text}"""
 
                 # Add tools if search mode is enabled
                 if hasattr(self, 'search_mode') and self.search_mode.get():
-                    api_params["tools"] = [get_web_search_tool_definition()]
+                    api_params["tools"] = get_mcp_tool_definitions("openai", self.mcp_client)
                     self.display_chat_system_message("🔍 Web search tools enabled")
 
                 try:
@@ -7037,52 +7413,44 @@ Based on the above context, please answer: {input_text}"""
                     else:
                         self.display_chat_system_message(f"❌ Model error: {str(e)[:100]}...")
                         return ""
-                
+
                 # Process streaming response
                 for chunk in response:
                     if self.stop_generation:
                         break
-                    
+
                     # Check if the response is finished
                     if chunk.get('choices') and chunk['choices'][0].get('finish_reason'):
                         finish_reason = chunk['choices'][0]['finish_reason']
                         if finish_reason == 'length':
                             self.append_to_chat(f"\n[Response truncated - reached {max_tokens} token limit]")
                         break
-                    
+
                     if 'choices' in chunk and chunk['choices']:
                         delta = chunk['choices'][0].get('delta', {})
-                        
-                        # Check for tool calls in llama-cpp response
+
+                        # Check for tool calls in llama-cpp response — collect for agent loop
                         if 'tool_calls' in delta and delta['tool_calls']:
                             for tool_call in delta['tool_calls']:
-                                if tool_call.get('function', {}).get('name') == 'web_search':
+                                func_name = tool_call.get('function', {}).get('name', '')
+                                arguments = tool_call.get('function', {}).get('arguments', {})
+                                if isinstance(arguments, str):
                                     try:
-                                        # Handle both string and dict arguments
-                                        arguments = tool_call['function']['arguments']
-                                        if isinstance(arguments, str):
-                                            query_data = json.loads(arguments)
-                                            query = query_data.get('query', '')
-                                        else:
-                                            query = arguments.get('query', '')
-                                        tool_id = tool_call.get('id', '')
-                                        
-                                        self.display_chat_system_message(f"🔍 Search executed: {query}")
-                                        
-                                        # Execute search and add to search results window
-                                        search_results = safe_web_search(query)
-                                        self.add_to_search_results(f"Query: {query}\n\n{search_results}")
-                                        
-                                        # In semi-automatic mode, we don't add tool responses to messages
-                                        # The search results will be included in the next user message instead
-                                        # Search results notification handled by add_to_search_results
+                                        arguments = json.loads(arguments)
                                     except json.JSONDecodeError:
-                                        self.add_to_debug_console(f"⚠️ Could not parse tool call arguments: {tool_call['function']['arguments']}")
-                        
+                                        arguments = {}
+                                self.display_chat_system_message(f"🔍 Tool call: {func_name}({json.dumps(arguments)[:100]})")
+                                self._pending_tool_results.append({
+                                    'name': func_name,
+                                    'arguments': arguments,
+                                    'id': tool_call.get('id', str(uuid.uuid4())),
+                                    'backend': 'llama_cpp'
+                                })
+
                         if 'content' in delta:
                             chunk_text = delta['content']
                             full_response += chunk_text
-                            
+
                             # Always stream everything during generation
                             self.append_to_chat(chunk_text)
                             last_visible_update = len(full_response)
@@ -7158,30 +7526,54 @@ Based on the above context, please answer: {input_text}"""
         try:
             # Format messages for MLX model
             # Check if tokenizer has a chat_template (e.g., Devstral-2-123B-Instruct)
+            mlx_tools_enabled = hasattr(self, 'search_mode') and self.search_mode.get()
+
             if hasattr(self.mlx_tokenizer, 'chat_template') and self.mlx_tokenizer.chat_template is not None:
                 # Build messages list for chat template
                 messages = []
-                
+
                 # Add system message if available
                 if self.system_message and self.system_message.get('content'):
                     messages.append({"role": "system", "content": self.system_message['content']})
-                
-                # Add conversation history
+
+                # Add conversation history (including tool results as user messages for MLX)
                 for msg in self.messages:
                     if msg['role'] in ['user', 'assistant']:
-                        messages.append({"role": msg['role'], "content": msg['content']})
-                
+                        content = msg.get('content', '')
+                        if isinstance(content, str):
+                            messages.append({"role": msg['role'], "content": content})
+                    elif msg.get('role') == 'tool':
+                        # MLX doesn't have a tool role — inject as user message
+                        messages.append({"role": "user", "content": f"[Tool result]: {msg.get('content', '')}"})
+
                 # Add current user message
                 if display_message:
                     messages.append({"role": "user", "content": display_message})
                 elif self.messages and self.messages[-1]['role'] == 'user':
                     # Already in messages, don't duplicate
                     pass
-                
-                # Apply chat template
-                prompt = self.mlx_tokenizer.apply_chat_template(
-                    messages, add_generation_prompt=True, tokenize=False
-                )
+
+                # Build tool definitions for Qwen3 chat template (if search enabled)
+                mlx_tool_defs = None
+                if mlx_tools_enabled:
+                    mlx_tool_defs = []
+                    for td in get_mcp_tool_definitions("openai", self.mcp_client):
+                        mlx_tool_defs.append(td)
+                    self.display_chat_system_message("🔍 Web search tools enabled (MLX text parsing)")
+
+                # Apply chat template — pass tools if available (Qwen3 templates support this)
+                try:
+                    template_kwargs = {"add_generation_prompt": True, "tokenize": False}
+                    if mlx_tool_defs:
+                        template_kwargs["tools"] = mlx_tool_defs
+                    prompt = self.mlx_tokenizer.apply_chat_template(
+                        messages, **template_kwargs
+                    )
+                except TypeError:
+                    # Fallback: tokenizer doesn't accept tools kwarg
+                    prompt = self.mlx_tokenizer.apply_chat_template(
+                        messages, add_generation_prompt=True, tokenize=False
+                    )
             else:
                 # Use standard formatting for models without chat_template
                 prompt = self.format_messages_for_mlx(display_message)
@@ -7271,6 +7663,30 @@ Based on the above context, please answer: {input_text}"""
                 clean_response = response.split("<|im_end|>")[0].strip()
             else:
                 clean_response = response.strip()
+
+            # Parse tool calls from MLX text output (Qwen3 format: <tool_call>...</tool_call>)
+            if mlx_tools_enabled and '<tool_call>' in clean_response:
+                import re as _re
+                tool_call_pattern = _re.compile(r'<tool_call>\s*(\{.*?\})\s*</tool_call>', _re.DOTALL)
+                for match in tool_call_pattern.finditer(clean_response):
+                    try:
+                        tc_data = json.loads(match.group(1))
+                        tc_name = tc_data.get('name', '')
+                        tc_args = tc_data.get('arguments', {})
+                        if isinstance(tc_args, str):
+                            tc_args = json.loads(tc_args)
+                        self.display_chat_system_message(f"🔍 Tool call: {tc_name}({json.dumps(tc_args)[:100]})")
+                        self._pending_tool_results.append({
+                            'name': tc_name,
+                            'arguments': tc_args,
+                            'id': str(uuid.uuid4()),
+                            'backend': 'mlx'
+                        })
+                    except (json.JSONDecodeError, KeyError) as e:
+                        self.add_to_debug_console(f"⚠️ Could not parse MLX tool call: {e}")
+
+                # Strip tool_call blocks from the clean response text
+                clean_response = tool_call_pattern.sub('', clean_response).strip()
 
             # Thinking content is now filtered in real-time during streaming
 
@@ -8073,21 +8489,21 @@ Based on the above context, please answer: {input_text}"""
             
             # Add tools if search mode is enabled
             if hasattr(self, 'search_mode') and self.search_mode.get():
-                data["tools"] = [get_web_search_tool_definition(api_type="claude")]
+                data["tools"] = get_mcp_tool_definitions("claude", self.mcp_client)
                 self.display_chat_system_message("🔍 Web search tools enabled")
-            
+
             # Make streaming request
-            response = requests.post("https://api.anthropic.com/v1/messages", 
+            response = requests.post("https://api.anthropic.com/v1/messages",
                                    headers=headers, json=data, stream=True)
-            
+
             if response.status_code != 200:
                 raise Exception(f"Claude API error: {response.status_code} - {response.text}")
-            
+
             # Process streaming response
             for line in response.iter_lines():
                 if self.stop_generation:
                     break
-                    
+
                 if line:
                     line = line.decode('utf-8')
                     if line.startswith('data: '):
@@ -8095,56 +8511,46 @@ Based on the above context, please answer: {input_text}"""
                             data_str = line[6:]  # Remove 'data: ' prefix
                             if data_str.strip() == '[DONE]':
                                 break
-                            
+
                             data_json = json.loads(data_str)
-                            
-                            # Handle tool calls in Claude
+
+                            # Handle tool calls in Claude — collect for agent loop
                             if data_json.get('type') == 'content_block_start':
                                 content_block = data_json.get('content_block', {})
                                 if content_block.get('type') == 'tool_use':
                                     tool_name = content_block.get('name')
                                     tool_id = content_block.get('id', '')
-                                    if tool_name == 'web_search':
-                                        # Store tool info for when we get the complete input
-                                        self.pending_tool_call = {
-                                            'name': tool_name,
-                                            'id': tool_id,
-                                            'input': ''
-                                        }
-                                        # Tool call started - will report when complete
-                            
+                                    # Store tool info for when we get the complete input
+                                    self._claude_pending_tool = {
+                                        'name': tool_name,
+                                        'id': tool_id,
+                                        'input': ''
+                                    }
+
                             # Handle tool input chunks
                             if data_json.get('type') == 'content_block_delta':
                                 delta = data_json.get('delta', {})
                                 if delta.get('type') == 'input_json_delta':
-                                    # Accumulate tool input
-                                    if hasattr(self, 'pending_tool_call'):
-                                        self.pending_tool_call['input'] += delta.get('partial_json', '')
-                            
-                            # Handle tool completion
+                                    if hasattr(self, '_claude_pending_tool') and self._claude_pending_tool:
+                                        self._claude_pending_tool['input'] += delta.get('partial_json', '')
+
+                            # Handle tool completion — collect for agent loop
                             if data_json.get('type') == 'content_block_stop':
-                                if hasattr(self, 'pending_tool_call') and self.pending_tool_call:
+                                if hasattr(self, '_claude_pending_tool') and self._claude_pending_tool:
                                     try:
-                                        # Parse the complete tool input
-                                        tool_input = json.loads(self.pending_tool_call['input'])
-                                        query = tool_input.get('query', '')
-                                        tool_id = self.pending_tool_call['id']
-                                        
-                                        self.display_chat_system_message(f"🔍 Search executed: {query}")
-                                        
-                                        # Execute search and add to search results window
-                                        search_results = safe_web_search(query)
-                                        self.add_to_search_results(f"Query: {query}\n\n{search_results}")
-                                        
-                                        # In semi-automatic mode, we don't add tool responses to messages
-                                        # The search results will be included in the next user message instead
-                                        # Search results notification handled by add_to_search_results
-                                        
-                                        # Clear pending tool call
-                                        self.pending_tool_call = None
+                                        tool_input = json.loads(self._claude_pending_tool['input']) if self._claude_pending_tool['input'] else {}
+                                        tool_name = self._claude_pending_tool['name']
+                                        tool_id = self._claude_pending_tool['id']
+                                        self.display_chat_system_message(f"🔍 Tool call: {tool_name}({json.dumps(tool_input)[:100]})")
+                                        self._pending_tool_results.append({
+                                            'name': tool_name,
+                                            'arguments': tool_input,
+                                            'id': tool_id,
+                                            'backend': 'claude'
+                                        })
                                     except Exception as e:
                                         self.add_to_debug_console(f"❌ Error parsing tool input: {e}")
-                                        self.pending_tool_call = None
+                                    self._claude_pending_tool = None
                             
                             if data_json.get('type') == 'content_block_delta':
                                 delta = data_json.get('delta', {})
@@ -8879,12 +9285,105 @@ Based on the above context, please answer: {input_text}"""
             self.prompt_editor.delete("1.0", tk.END)
             self.prompt_editor.insert(tk.END, new_content)
     
+    def _ensure_mcp_initialized(self):
+        """Lazy-init MCP client on first use of web search toggle."""
+        if self._mcp_initialized:
+            return
+        self._mcp_initialized = True
+
+        if not MCP_AVAILABLE:
+            self.display_status_message("MCP not available — using DuckDuckGo fallback")
+            return
+
+        config_path = os.path.join(os.path.dirname(__file__), "config", "mcp_coderunner.json")
+        if not os.path.exists(config_path):
+            self.display_status_message(f"MCP config not found at {config_path} — using DuckDuckGo fallback")
+            return
+
+        try:
+            self.display_status_message("Starting MCP servers...")
+            self.mcp_client = MCPClient(config_path)
+            self.mcp_client.start_servers()
+            tools = self.mcp_client.list_tools()
+            n_servers = len(self.mcp_client.servers)
+            self.display_status_message(f"MCP initialized: {len(tools)} tools from {n_servers} servers")
+            for t in tools:
+                self.add_to_debug_console(f"  MCP tool: {t.server}/{t.name}")
+        except Exception as e:
+            self.display_status_message(f"MCP init failed: {e} — using DuckDuckGo fallback")
+            self.add_to_debug_console(f"MCP init error: {e}")
+            self.mcp_client = None
+
     def toggle_search_mode(self):
         """Toggle web search mode on/off"""
         is_enabled = self.search_mode.get()
         status = "enabled" if is_enabled else "disabled"
         self.display_status_message(f"Web search mode {status}")
         self.add_to_debug_console(f"Web search mode: {status}")
+
+        if is_enabled:
+            self._ensure_mcp_initialized()
+            # In HTML mode, tell the LLM it can search for and embed images
+            if self.system_mode.get() == "html_programmer":
+                addendum = ("\n\nWhen web search is enabled you have access to tools: "
+                            "brave_web_search (search the web), fetch (fetch a URL), "
+                            "and fetch_image (download an image and save it locally). "
+                            "To use real images in HTML: first search for image URLs, then call "
+                            "fetch_image for each URL. It returns a relative path like 'assets/sprite_abc.png' "
+                            "that you can use directly in <img src='assets/sprite_abc.png'>.")
+                if addendum not in self.system_message.get('content', ''):
+                    self.system_message['content'] += addendum
+                    if self.messages and self.messages[0].get('role') == 'system':
+                        self.messages[0]['content'] = self.system_message['content']
+        else:
+            # Strip the search addendum when toggling off
+            content = self.system_message.get('content', '')
+            marker = "\n\nWhen web search is enabled you have access to tools:"
+            idx = content.find(marker)
+            if idx != -1:
+                self.system_message['content'] = content[:idx]
+                if self.messages and self.messages[0].get('role') == 'system':
+                    self.messages[0]['content'] = self.system_message['content']
+
+    def _execute_tool_call(self, name, arguments):
+        """Execute a tool call and return the result as text.
+
+        Routes to MCP servers, local helpers, or DuckDuckGo fallback.
+        """
+        try:
+            # Local helper: fetch_image → saves to Generated_games/assets/
+            if name == "fetch_image":
+                url = arguments.get("url", "")
+                self.display_status_message(f"Fetching image: {url[:80]}...")
+                result = fetch_image_as_file(url)
+                if not result.startswith("Error"):
+                    self.display_status_message(f"Saved: {result}")
+                return result
+
+            # Legacy web_search → route to brave-search MCP or DuckDuckGo
+            if name == "web_search":
+                query = arguments.get("query", "")
+                if self.mcp_client and "brave-search" in self.mcp_client.servers:
+                    self.display_status_message(f"Brave search: {query[:60]}...")
+                    return self.mcp_client.call_tool("brave-search", "brave_web_search", {"query": query})
+                else:
+                    self.display_status_message(f"DuckDuckGo search: {query[:60]}...")
+                    return safe_web_search(query)
+
+            # MCP tool: mcp_<server>_<toolname>
+            if name.startswith("mcp_") and self.mcp_client:
+                parts = name.split("_", 2)
+                if len(parts) >= 3:
+                    server_name = parts[1]
+                    tool_name = parts[2]
+                    self.display_status_message(f"MCP {server_name}/{tool_name}...")
+                    return self.mcp_client.call_tool(server_name, tool_name, arguments)
+
+            return f"Unknown tool: {name}"
+        except Exception as e:
+            error_msg = f"Tool error ({name}): {e}"
+            self.add_to_debug_console(error_msg)
+            return error_msg
 
     def toggle_sampling_controls(self):
         """Toggle visibility of sampling controls (temperature, top_p, top_k)"""

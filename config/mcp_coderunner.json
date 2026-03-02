@@ -1,0 +1,17 @@
+{
+  "servers": {
+    "brave-search": {
+      "enabled": true,
+      "command": "npx -y @modelcontextprotocol/server-brave-search",
+      "tier": "cloud",
+      "env": {
+        "BRAVE_API_KEY": "BSA_RItMbh9nmgrLmO7N2aHRnlwA7GS"
+      }
+    },
+    "fetch": {
+      "enabled": true,
+      "command": "/Users/jonathanrothberg/Library/Python/3.11/bin/mcp-server-fetch",
+      "tier": "essential"
+    }
+  }
+}
