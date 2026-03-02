@@ -7514,9 +7514,15 @@ Based on the above context, please answer: {input_text}"""
             self.display_status_message(
                 "This model doesn't support images (text-only). Image will be ignored.")
 
+        # ---------- VLM text-only fallback ----------
+        # When a VLM-only model is loaded and there's no image, use the VLM
+        # model for text generation (VLM models handle text-only prompts fine).
+        if (not self.mlx_model or not self.mlx_tokenizer) and self.mlx_vlm_model and MLX_VLM_AVAILABLE:
+            return self._stream_mlx_vlm_text_only(display_message)
+
         # ---------- Standard text-only path ----------
         if not self.mlx_model or not self.mlx_tokenizer:
-            error_msg = "Text-only MLX model not available (this model loaded as VLM only). Cannot fall back to text generation."
+            error_msg = "Text-only MLX model not available. Please load a model first."
             self.display_status_message(error_msg)
             return error_msg
 
@@ -7797,6 +7803,116 @@ Based on the above context, please answer: {input_text}"""
             clean_response = full_response.split("<|im_end|>")[0].strip()
         else:
             clean_response = full_response.strip()
+
+        return clean_response
+
+    def _stream_mlx_vlm_text_only(self, display_message):
+        """Stream a text-only response using the VLM model (no image).
+
+        VLM models can generate text without an image — we just build the
+        prompt with num_images=0 and skip the image argument.
+        """
+        # Build messages list
+        messages = []
+        if self.system_message and self.system_message.get('content'):
+            messages.append({"role": "system", "content": self.system_message['content']})
+
+        for msg in self.messages:
+            if msg['role'] in ['user', 'assistant']:
+                content = msg.get('content', '')
+                if isinstance(content, str):
+                    messages.append({"role": msg['role'], "content": content})
+            elif msg.get('role') == 'tool':
+                messages.append({"role": "user", "content": f"[Tool result]: {msg.get('content', '')}"})
+
+        if display_message:
+            messages.append({"role": "user", "content": display_message})
+
+        # Build tool definitions for Qwen3 chat template (if search enabled)
+        mlx_tools_enabled = hasattr(self, 'search_mode') and self.search_mode.get()
+        mlx_tool_defs = None
+        if mlx_tools_enabled:
+            mlx_tool_defs = get_mcp_tool_definitions("openai", self.mcp_client)
+            self.display_chat_system_message("🔍 Web search tools enabled (MLX/VLM text parsing)")
+
+        # Apply chat template — num_images=0 for text-only
+        try:
+            template_kwargs = {"num_images": 0}
+            if mlx_tool_defs:
+                template_kwargs["tools"] = mlx_tool_defs
+            prompt = vlm_apply_chat_template(
+                self.mlx_vlm_processor, config=self.mlx_vlm_model.config,
+                prompt=messages, **template_kwargs
+            )
+        except TypeError:
+            # Fallback: some VLM templates may not accept num_images=0
+            prompt = vlm_apply_chat_template(
+                self.mlx_vlm_processor, config=self.mlx_vlm_model.config,
+                prompt=messages, num_images=1
+            )
+
+        self.display_status_message(f"VLM text-only prompt: {len(prompt)} chars")
+
+        # Stream generation (no image argument)
+        full_response = ""
+        in_thinking_block = False
+        pending_buffer = ""
+        token_count = 0
+
+        for response_chunk in vlm_stream_generate(
+            self.mlx_vlm_model,
+            self.mlx_vlm_processor,
+            prompt=prompt,
+            max_tokens=int(self.max_tokens_var.get()),
+            temperature=self.temperature.get(),
+        ):
+            if self.stop_generation:
+                break
+
+            token_count += 1
+            if token_count % 500 == 0:
+                mx.metal.clear_cache()
+
+            chunk_text = response_chunk.text
+            full_response += chunk_text
+
+            # Handle thinking filtering
+            if self.hide_thinking.get():
+                display_text, in_thinking_block, pending_buffer = self._process_chunk_with_thinking(
+                    chunk_text, in_thinking_block, pending_buffer
+                )
+                if display_text:
+                    self.append_to_chat(display_text)
+            else:
+                self.append_to_chat(chunk_text)
+
+        # Clean up
+        if "<|im_end|>" in full_response:
+            clean_response = full_response.split("<|im_end|>")[0].strip()
+        else:
+            clean_response = full_response.strip()
+
+        # Parse tool calls from text output (Qwen3 format)
+        if mlx_tools_enabled and '<tool_call>' in clean_response:
+            import re as _re
+            tool_call_pattern = _re.compile(r'<tool_call>\s*(\{.*?\})\s*</tool_call>', _re.DOTALL)
+            for match in tool_call_pattern.finditer(clean_response):
+                try:
+                    tc_data = json.loads(match.group(1))
+                    tc_name = tc_data.get('name', '')
+                    tc_args = tc_data.get('arguments', {})
+                    if isinstance(tc_args, str):
+                        tc_args = json.loads(tc_args)
+                    self.display_chat_system_message(f"🔍 Tool call: {tc_name}({json.dumps(tc_args)[:100]})")
+                    self._pending_tool_results.append({
+                        'name': tc_name,
+                        'arguments': tc_args,
+                        'id': str(uuid.uuid4()),
+                        'backend': 'mlx'
+                    })
+                except (json.JSONDecodeError, KeyError) as e:
+                    self.add_to_debug_console(f"⚠️ Could not parse MLX tool call: {e}")
+            clean_response = tool_call_pattern.sub('', clean_response).strip()
 
         return clean_response
 
