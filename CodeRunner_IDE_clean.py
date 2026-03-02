@@ -7670,29 +7670,9 @@ Based on the above context, please answer: {input_text}"""
             else:
                 clean_response = response.strip()
 
-            # Parse tool calls from MLX text output (Qwen3 format: <tool_call>...</tool_call>)
-            if mlx_tools_enabled and '<tool_call>' in clean_response:
-                import re as _re
-                tool_call_pattern = _re.compile(r'<tool_call>\s*(\{.*?\})\s*</tool_call>', _re.DOTALL)
-                for match in tool_call_pattern.finditer(clean_response):
-                    try:
-                        tc_data = json.loads(match.group(1))
-                        tc_name = tc_data.get('name', '')
-                        tc_args = tc_data.get('arguments', {})
-                        if isinstance(tc_args, str):
-                            tc_args = json.loads(tc_args)
-                        self.display_chat_system_message(f"🔍 Tool call: {tc_name}({json.dumps(tc_args)[:100]})")
-                        self._pending_tool_results.append({
-                            'name': tc_name,
-                            'arguments': tc_args,
-                            'id': str(uuid.uuid4()),
-                            'backend': 'mlx'
-                        })
-                    except (json.JSONDecodeError, KeyError) as e:
-                        self.add_to_debug_console(f"⚠️ Could not parse MLX tool call: {e}")
-
-                # Strip tool_call blocks from the clean response text
-                clean_response = tool_call_pattern.sub('', clean_response).strip()
+            # Parse tool calls from MLX text output
+            if mlx_tools_enabled:
+                clean_response = self._parse_mlx_tool_calls(clean_response)
 
             # Thinking content is now filtered in real-time during streaming
 
@@ -7892,27 +7872,9 @@ Based on the above context, please answer: {input_text}"""
         else:
             clean_response = full_response.strip()
 
-        # Parse tool calls from text output (Qwen3 format)
-        if mlx_tools_enabled and '<tool_call>' in clean_response:
-            import re as _re
-            tool_call_pattern = _re.compile(r'<tool_call>\s*(\{.*?\})\s*</tool_call>', _re.DOTALL)
-            for match in tool_call_pattern.finditer(clean_response):
-                try:
-                    tc_data = json.loads(match.group(1))
-                    tc_name = tc_data.get('name', '')
-                    tc_args = tc_data.get('arguments', {})
-                    if isinstance(tc_args, str):
-                        tc_args = json.loads(tc_args)
-                    self.display_chat_system_message(f"🔍 Tool call: {tc_name}({json.dumps(tc_args)[:100]})")
-                    self._pending_tool_results.append({
-                        'name': tc_name,
-                        'arguments': tc_args,
-                        'id': str(uuid.uuid4()),
-                        'backend': 'mlx'
-                    })
-                except (json.JSONDecodeError, KeyError) as e:
-                    self.add_to_debug_console(f"⚠️ Could not parse MLX tool call: {e}")
-            clean_response = tool_call_pattern.sub('', clean_response).strip()
+        # Parse tool calls from text output
+        if mlx_tools_enabled:
+            clean_response = self._parse_mlx_tool_calls(clean_response)
 
         return clean_response
 
@@ -9461,10 +9423,72 @@ Based on the above context, please answer: {input_text}"""
                 if self.messages and self.messages[0].get('role') == 'system':
                     self.messages[0]['content'] = self.system_message['content']
 
+    def _parse_mlx_tool_calls(self, response_text):
+        """Parse tool calls from MLX text output, handling multiple formats.
+
+        Supports:
+        - Qwen3 JSON: <tool_call>{"name":..., "arguments":...}</tool_call>
+        - XML format: <tool><name>...</name><arguments><key>k</key><value>v</value>...</arguments></tool>
+
+        Populates self._pending_tool_results and returns response with tool blocks stripped.
+        """
+        import re as _re
+
+        # --- Format 1: Qwen3 JSON <tool_call> blocks ---
+        json_pattern = _re.compile(r'<tool_call>\s*(\{.*?\})\s*</tool_call>', _re.DOTALL)
+        for match in json_pattern.finditer(response_text):
+            try:
+                tc_data = json.loads(match.group(1))
+                tc_name = tc_data.get('name', '')
+                tc_args = tc_data.get('arguments', {})
+                if isinstance(tc_args, str):
+                    tc_args = json.loads(tc_args)
+                self.display_chat_system_message(f"🔍 Tool call: {tc_name}({json.dumps(tc_args)[:100]})")
+                self._pending_tool_results.append({
+                    'name': tc_name, 'arguments': tc_args,
+                    'id': str(uuid.uuid4()), 'backend': 'mlx'
+                })
+            except (json.JSONDecodeError, KeyError) as e:
+                self.add_to_debug_console(f"⚠️ Could not parse <tool_call> JSON: {e}")
+        response_text = json_pattern.sub('', response_text)
+
+        # --- Format 2: XML <tool> blocks (some VLM models) ---
+        # Matches: <tool><name>tool_name</name><arguments><key>k</key><value>v</value>...</arguments></tool>
+        xml_tool_pattern = _re.compile(r'<tools?>\s*(.*?)\s*</tools?>', _re.DOTALL)
+        xml_single = _re.compile(r'<tool>\s*(.*?)\s*</tool>', _re.DOTALL)
+        xml_name = _re.compile(r'<name>\s*(.*?)\s*</name>', _re.DOTALL)
+        xml_kv = _re.compile(r'<key>\s*(.*?)\s*</key>\s*<value>\s*(.*?)\s*</value>', _re.DOTALL)
+
+        for tools_match in xml_tool_pattern.finditer(response_text):
+            tools_block = tools_match.group(1)
+            # Could contain multiple <tool> blocks or be a single tool
+            tool_blocks = xml_single.findall(tools_block)
+            if not tool_blocks:
+                tool_blocks = [tools_block]  # Treat the whole thing as one tool
+
+            for tool_block in tool_blocks:
+                name_match = xml_name.search(tool_block)
+                if not name_match:
+                    continue
+                tc_name = name_match.group(1).strip()
+                tc_args = {}
+                for kv_match in xml_kv.finditer(tool_block):
+                    tc_args[kv_match.group(1).strip()] = kv_match.group(2).strip()
+                self.display_chat_system_message(f"🔍 Tool call: {tc_name}({json.dumps(tc_args)[:100]})")
+                self._pending_tool_results.append({
+                    'name': tc_name, 'arguments': tc_args,
+                    'id': str(uuid.uuid4()), 'backend': 'mlx'
+                })
+        response_text = xml_tool_pattern.sub('', response_text)
+
+        return response_text.strip()
+
     def _execute_tool_call(self, name, arguments):
         """Execute a tool call and return the result as text.
 
         Routes to MCP servers, local helpers, or DuckDuckGo fallback.
+        Handles both prefixed (mcp_brave-search_brave_web_search) and
+        bare tool names (brave_web_search) from different model formats.
         """
         try:
             # Local helper: fetch_image → saves to Generated_games/assets/
@@ -9494,6 +9518,14 @@ Based on the above context, please answer: {input_text}"""
                     tool_name = parts[2]
                     self.display_status_message(f"MCP {server_name}/{tool_name}...")
                     return self.mcp_client.call_tool(server_name, tool_name, arguments)
+
+            # Bare tool name (model didn't use mcp_ prefix) → search MCP servers
+            if self.mcp_client:
+                for server in self.mcp_client.servers.values():
+                    for tool in server.tools:
+                        if tool.name == name:
+                            self.display_status_message(f"MCP {server.name}/{name}...")
+                            return self.mcp_client.call_tool(server.name, name, arguments)
 
             return f"Unknown tool: {name}"
         except Exception as e:
