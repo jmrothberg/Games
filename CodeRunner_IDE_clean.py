@@ -7289,16 +7289,24 @@ Based on the above context, please answer: {input_text}"""
         Returns the full response text.
         """
         import base64
-        from io import BytesIO
+        import tempfile
         from PIL import Image
 
-        # Decode the base64 image data into a PIL Image
+        # Decode base64 image data and save to a temp file —
+        # vlm_stream_generate expects a file path string, not a PIL Image
         if image_data.startswith("data:"):
-            # Strip data URI prefix (e.g. "data:image/png;base64,...")
             image_data = image_data.split(",", 1)[1]
         raw_bytes = base64.b64decode(image_data)
-        pil_image = Image.open(BytesIO(raw_bytes)).convert("RGB")
+
+        temp_img = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        temp_img.write(raw_bytes)
+        temp_img.close()
+        image_path = temp_img.name
+
+        # Log dimensions for the user
+        pil_image = Image.open(image_path)
         self.display_status_message(f"Image attached: {pil_image.size[0]}x{pil_image.size[1]} — sending to VLM...")
+        pil_image.close()
 
         # Build messages list — vlm_apply_chat_template expects plain string content
         # and inserts image tokens automatically via get_message_json for the first user message
@@ -7334,7 +7342,7 @@ Based on the above context, please answer: {input_text}"""
             self.mlx_vlm_model,
             self.mlx_vlm_processor,
             prompt=prompt,
-            image=pil_image,
+            image=image_path,
             max_tokens=int(self.max_tokens_var.get()),
             temperature=self.temperature.get(),
         ):
@@ -7361,6 +7369,12 @@ Based on the above context, please answer: {input_text}"""
                 if assistant_response_start is None and chunk_text.strip():
                     assistant_response_start = self.chat_display.index(tk.END)
                 self.append_to_chat(chunk_text)
+
+        # Clean up temp image file
+        try:
+            os.unlink(image_path)
+        except OSError:
+            pass
 
         # Clean up
         if "<|im_end|>" in full_response:
