@@ -7149,7 +7149,7 @@ Based on the above context, please answer: {input_text}"""
         # ---------- Standard text-only path ----------
         if not self.mlx_model or not self.mlx_tokenizer:
             error_msg = "Text-only MLX model not available (this model loaded as VLM only). Cannot fall back to text generation."
-            self.append_to_chat(f"\n[{error_msg}]")
+            self.display_status_message(error_msg)
             return error_msg
 
         full_response = ""
@@ -7299,7 +7299,8 @@ Based on the above context, please answer: {input_text}"""
         raw_bytes = base64.b64decode(image_data)
         pil_image = Image.open(BytesIO(raw_bytes)).convert("RGB")
 
-        # Build messages list
+        # Build messages list — vlm_apply_chat_template expects plain string content
+        # and inserts image tokens automatically via get_message_json for the first user message
         messages = []
         if self.system_message and self.system_message.get('content'):
             messages.append({"role": "system", "content": self.system_message['content']})
@@ -7309,18 +7310,15 @@ Based on the above context, please answer: {input_text}"""
             if msg['role'] in ['user', 'assistant']:
                 messages.append({"role": msg['role'], "content": msg['content']})
 
-        # Current user message with image placeholder
+        # Current user message (plain text — image token inserted by apply_chat_template)
         if display_message:
-            messages.append({
-                "role": "user",
-                "content": [
-                    {"type": "image"},
-                    {"type": "text", "text": display_message},
-                ],
-            })
+            messages.append({"role": "user", "content": display_message})
 
-        # Apply the VLM chat template — positional arg is 'prompt' (the messages list)
-        prompt = vlm_apply_chat_template(self.mlx_vlm_processor, config=self.mlx_vlm_model.config, prompt=messages)
+        # Apply the VLM chat template — num_images=1 tells it to insert image placeholder
+        prompt = vlm_apply_chat_template(
+            self.mlx_vlm_processor, config=self.mlx_vlm_model.config,
+            prompt=messages, num_images=1
+        )
 
         # Stream generation
         full_response = ""
