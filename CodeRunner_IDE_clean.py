@@ -9443,6 +9443,7 @@ Based on the above context, please answer: {input_text}"""
         Supports:
         - Qwen3 JSON: <tool_call>{"name":..., "arguments":...}</tool_call>
         - XML format: <tool><name>...</name><arguments><key>k</key><value>v</value>...</arguments></tool>
+        - HTML-style: <fetch_image url="..." /> or <brave_web_search query="..." />
 
         Populates self._pending_tool_results and returns response with tool blocks stripped.
         """
@@ -9467,7 +9468,6 @@ Based on the above context, please answer: {input_text}"""
         response_text = json_pattern.sub('', response_text)
 
         # --- Format 2: XML <tool> blocks (some VLM models) ---
-        # Matches: <tool><name>tool_name</name><arguments><key>k</key><value>v</value>...</arguments></tool>
         xml_tool_pattern = _re.compile(r'<tools?>\s*(.*?)\s*</tools?>', _re.DOTALL)
         xml_single = _re.compile(r'<tool>\s*(.*?)\s*</tool>', _re.DOTALL)
         xml_name = _re.compile(r'<name>\s*(.*?)\s*</name>', _re.DOTALL)
@@ -9475,11 +9475,9 @@ Based on the above context, please answer: {input_text}"""
 
         for tools_match in xml_tool_pattern.finditer(response_text):
             tools_block = tools_match.group(1)
-            # Could contain multiple <tool> blocks or be a single tool
             tool_blocks = xml_single.findall(tools_block)
             if not tool_blocks:
-                tool_blocks = [tools_block]  # Treat the whole thing as one tool
-
+                tool_blocks = [tools_block]
             for tool_block in tool_blocks:
                 name_match = xml_name.search(tool_block)
                 if not name_match:
@@ -9494,6 +9492,35 @@ Based on the above context, please answer: {input_text}"""
                     'id': str(uuid.uuid4()), 'backend': 'mlx'
                 })
         response_text = xml_tool_pattern.sub('', response_text)
+
+        # --- Format 3: HTML-style self-closing tags ---
+        # Matches: <fetch_image url="..." alt="..." /> or <brave_web_search query="..." />
+        # Known tool names to look for
+        known_tools = {'fetch_image', 'brave_web_search', 'web_search', 'fetch'}
+        if self.mcp_client:
+            for server in self.mcp_client.servers.values():
+                for tool in server.tools:
+                    known_tools.add(tool.name)
+
+        for tool_name in known_tools:
+            html_pattern = _re.compile(
+                r'<' + _re.escape(tool_name) + r'\s+([^>]*?)\s*/?\s*>', _re.DOTALL
+            )
+            attr_pattern = _re.compile(r'(\w+)\s*=\s*"([^"]*)"')
+            for match in html_pattern.finditer(response_text):
+                tc_args = {}
+                for attr_match in attr_pattern.finditer(match.group(1)):
+                    key = attr_match.group(1)
+                    val = attr_match.group(2)
+                    if key not in ('alt', 'class', 'id', 'style'):  # skip presentational attrs
+                        tc_args[key] = val
+                if tc_args:
+                    self.display_chat_system_message(f"🔍 Tool call: {tool_name}({json.dumps(tc_args)[:100]})")
+                    self._pending_tool_results.append({
+                        'name': tool_name, 'arguments': tc_args,
+                        'id': str(uuid.uuid4()), 'backend': 'mlx'
+                    })
+            response_text = html_pattern.sub('', response_text)
 
         return response_text.strip()
 
