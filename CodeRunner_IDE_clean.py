@@ -9,7 +9,7 @@
 #   2. Click "Move to IDE" to load code into the editor (first time)
 #   3. Press F5 to Run, or F6 for Run & Fix
 #   4. For manual fixes: type what's wrong in chat, click "LLM Fix"
-#   5. Review diff → Accept (Ctrl+Enter) or Reject (Escape)
+
 #   6. Repeat!
 #
 # KEY POINT: After the first "Move to IDE", edits always show as a DIFF.
@@ -9401,27 +9401,41 @@ Based on the above context, please answer: {input_text}"""
 
         if is_enabled:
             self._ensure_mcp_initialized()
-            # In HTML mode, tell the LLM it can search for and embed images
+            # In HTML mode, replace "no external files" rules and tell LLM about tools
             if self.system_mode.get() == "html_programmer":
+                # Remove the restrictive lines about external files
+                content = self.system_message.get('content', '')
+                content = content.replace(
+                    "5. DO NOT USE EXTERNAL SOUND FILES UNLESS specified by the user JUST comment in code where they would go, but make sure works without.\n"
+                    "6. DO NOT USE EXTERNAL IMAGE FILES create YOUR OWN images using Canvas drawing.\n",
+                    "5. You MAY use external image files — use the fetch_image tool to download them.\n"
+                    "6. DO NOT USE EXTERNAL SOUND FILES UNLESS specified by the user.\n"
+                )
                 addendum = ("\n\nWhen web search is enabled you have access to tools: "
                             "brave_web_search (search the web), fetch (fetch a URL), "
                             "and fetch_image (download an image and save it locally). "
                             "To use real images in HTML: first search for image URLs, then call "
                             "fetch_image for each URL. It returns a relative path like 'assets/sprite_abc.png' "
                             "that you can use directly in <img src='assets/sprite_abc.png'>.")
-                if addendum not in self.system_message.get('content', ''):
-                    self.system_message['content'] += addendum
+                if addendum not in content:
+                    content += addendum
+                self.system_message['content'] = content
+                if self.messages and self.messages[0].get('role') == 'system':
+                    self.messages[0]['content'] = content
+        else:
+            # Restore original HTML system prompt rules and strip the search addendum
+            if self.system_mode.get() == "html_programmer":
+                self.system_message['content'] = html_system_message
+                if self.messages and self.messages[0].get('role') == 'system':
+                    self.messages[0]['content'] = html_system_message
+            else:
+                content = self.system_message.get('content', '')
+                marker = "\n\nWhen web search is enabled you have access to tools:"
+                idx = content.find(marker)
+                if idx != -1:
+                    self.system_message['content'] = content[:idx]
                     if self.messages and self.messages[0].get('role') == 'system':
                         self.messages[0]['content'] = self.system_message['content']
-        else:
-            # Strip the search addendum when toggling off
-            content = self.system_message.get('content', '')
-            marker = "\n\nWhen web search is enabled you have access to tools:"
-            idx = content.find(marker)
-            if idx != -1:
-                self.system_message['content'] = content[:idx]
-                if self.messages and self.messages[0].get('role') == 'system':
-                    self.messages[0]['content'] = self.system_message['content']
 
     def _parse_mlx_tool_calls(self, response_text):
         """Parse tool calls from MLX text output, handling multiple formats.
