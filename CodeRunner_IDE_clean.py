@@ -7298,6 +7298,7 @@ Based on the above context, please answer: {input_text}"""
             image_data = image_data.split(",", 1)[1]
         raw_bytes = base64.b64decode(image_data)
         pil_image = Image.open(BytesIO(raw_bytes)).convert("RGB")
+        self.display_status_message(f"Image attached: {pil_image.size[0]}x{pil_image.size[1]} — sending to VLM...")
 
         # Build messages list — vlm_apply_chat_template expects plain string content
         # and inserts image tokens automatically via get_message_json for the first user message
@@ -7319,6 +7320,8 @@ Based on the above context, please answer: {input_text}"""
             self.mlx_vlm_processor, config=self.mlx_vlm_model.config,
             prompt=messages, num_images=1
         )
+
+        self.display_status_message(f"VLM prompt: {len(prompt)} chars — streaming response with image...")
 
         # Stream generation
         full_response = ""
