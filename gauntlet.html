@@ -7,15 +7,11 @@
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { background: #000; overflow: hidden; font-family: 'Courier New', monospace; touch-action: none; }
-canvas { display: block; margin: 0 auto; image-rendering: pixelated; cursor: crosshair; }
-#ui-overlay {
-  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-  pointer-events: none; z-index: 10;
-}
+canvas { display: block; margin: 0 auto; image-rendering: pixelated; }
 #title-screen, #char-select, #game-over-screen, #win-screen {
   position: absolute; top: 0; left: 0; width: 100%; height: 100%;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  background: rgba(0,0,0,0.92); z-index: 20; pointer-events: all;
+  background: rgba(0,0,0,0.95); z-index: 20;
 }
 #title-screen h1 { color: #ff4; font-size: 2.5em; text-shadow: 0 0 20px #f80; margin-bottom: 0.1em; text-align: center; }
 #title-screen h2 { color: #fa0; font-size: 1.2em; margin-bottom: 1em; text-align: center; }
@@ -23,14 +19,14 @@ canvas { display: block; margin: 0 auto; image-rendering: pixelated; cursor: cro
 .btn {
   background: linear-gradient(180deg, #543, #321); color: #ff4; border: 2px solid #a82;
   padding: 12px 36px; font-size: 1.2em; font-family: 'Courier New', monospace;
-  cursor: pointer; margin: 10px; pointer-events: all; border-radius: 4px;
+  cursor: pointer; margin: 10px; border-radius: 4px;
 }
 .btn:hover { background: linear-gradient(180deg, #765, #432); border-color: #fc4; }
 #char-select { flex-wrap: wrap; }
 #char-select h2 { color: #ff4; font-size: 1.5em; margin-bottom: 15px; width: 100%; text-align: center; }
 .char-card {
   background: linear-gradient(180deg, #222, #111); border: 2px solid #555;
-  padding: 10px; margin: 6px; width: 160px; cursor: pointer; pointer-events: all;
+  padding: 10px; margin: 6px; width: 160px; cursor: pointer;
   text-align: center; border-radius: 6px; transition: all 0.2s;
 }
 .char-card:hover { border-color: #ff4; transform: scale(1.05); }
@@ -39,26 +35,14 @@ canvas { display: block; margin: 0 auto; image-rendering: pixelated; cursor: cro
 .stat-bar { display: flex; align-items: center; margin: 2px 0; font-size: 0.65em; }
 .stat-label { color: #888; width: 55px; text-align: right; margin-right: 4px; }
 .stat-fill { height: 6px; border-radius: 3px; }
-.char-icon { font-size: 2.5em; margin-bottom: 4px; }
+.char-preview { width: 48px; height: 48px; margin: 4px auto; image-rendering: pixelated; }
 #game-over-screen h1 { color: #f44; font-size: 2.5em; text-shadow: 0 0 20px #f00; }
 #win-screen h1 { color: #4f4; font-size: 2.5em; text-shadow: 0 0 20px #0f0; }
 .hidden { display: none !important; }
-#mobile-controls {
-  position: absolute; bottom: 10px; left: 0; width: 100%; display: none;
-  justify-content: center; gap: 10px; z-index: 15; pointer-events: none;
-}
-.mobile-btn {
-  width: 60px; height: 60px; background: rgba(255,255,255,0.15);
-  border: 2px solid rgba(255,255,255,0.3); border-radius: 50%;
-  color: #fff; font-size: 1.5em; display: flex; align-items: center;
-  justify-content: center; pointer-events: all; user-select: none;
-}
 </style>
 </head>
 <body>
-
 <canvas id="game"></canvas>
-<div id="ui-overlay"></div>
 
 <div id="title-screen">
   <h1>GAUNTLET</h1>
@@ -69,7 +53,7 @@ canvas { display: block; margin: 0 auto; image-rendering: pixelated; cursor: cro
   <br>
   <button class="btn" onclick="showCharSelect()">START QUEST</button>
   <br>
-  <p style="color:#666; font-size:0.7em;">Click/tap to move &bull; Auto-attack nearest enemy</p>
+  <p style="color:#666; font-size:0.7em;">Arrow keys/WASD to move &bull; Space/Z to shoot</p>
   <p style="color:#666; font-size:0.7em;">Originally by Epyx (1990) for Atari Lynx &bull; Reconstructed tribute</p>
 </div>
 
@@ -91,194 +75,567 @@ canvas { display: block; margin: 0 auto; image-rendering: pixelated; cursor: cro
   <button class="btn" onclick="showTitle()">TITLE</button>
 </div>
 
-<div id="mobile-controls">
-  <div class="mobile-btn" id="btn-potion">🧪</div>
-</div>
-
 <script>
 // ============================================================
-// GAUNTLET: THE THIRD ENCOUNTER - Browser Reconstruction
+// GAUNTLET: THE THIRD ENCOUNTER - Authentic Browser Reconstruction
 // ============================================================
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 
 // --- CONSTANTS ---
-const TILE = 32;
-const MAP_W = 32;
+const TILE = 16;
+const MAP_W = 40;
 const MAP_H = 40;
-const VIEW_TILES_X = 12;
-const VIEW_TILES_Y = 16;
 const TOTAL_LEVELS = 40;
+const HUD_HEIGHT = 80; // bottom status panel
 
 // Tile types
 const T = {
   FLOOR: 0, WALL: 1, DOOR: 2, EXIT: 3, FOOD: 4, POTION: 5,
-  TREASURE: 6, KEY: 7, TRAP: 8, PLANT: 9, HEDGE: 10, STAR_GEM: 11
+  TREASURE: 6, KEY: 7, TRAP: 8, TREE: 9, HEDGE: 10, STAR_GEM: 11,
+  GENERATOR: 12, WATER: 13, PATH: 14
 };
+
+// --- PIXEL ART SPRITE DATA ---
+// Each sprite is a small 2D array of palette indices, drawn at TILE size
+// Palette: 0=transparent, 1=black, 2=darkgreen, 3=green, 4=lightgreen,
+// 5=brown, 6=tan, 7=grey, 8=lightgrey, 9=red, 10=blue, 11=yellow,
+// 12=white, 13=orange, 14=purple, 15=pink, 16=darkgrey
+
+const PALETTE = [
+  null,         // 0 transparent
+  '#000000',    // 1 black
+  '#1a5c1a',    // 2 dark green
+  '#2d8b2d',    // 3 green
+  '#5cba5c',    // 4 light green
+  '#6b3a1a',    // 5 brown
+  '#c4a44a',    // 6 tan/gold
+  '#707070',    // 7 grey
+  '#aaaaaa',    // 8 light grey
+  '#cc2222',    // 9 red
+  '#2244cc',    // 10 blue
+  '#dddd22',    // 11 yellow
+  '#ffffff',    // 12 white
+  '#dd8822',    // 13 orange
+  '#8833aa',    // 14 purple
+  '#dd55aa',    // 15 pink
+  '#444444',    // 16 dark grey
+  '#336633',    // 17 mid green
+  '#88cc44',    // 18 yellow-green
+  '#ddaa77',    // 19 skin
+  '#8b6914',    // 20 dark gold
+];
+
+// Pre-rendered sprite canvases cache
+const spriteCache = {};
+
+function createSpriteCanvas(data, w, h) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const cx = c.getContext('2d');
+  const pw = w / data[0].length;
+  const ph = h / data.length;
+  for (let y = 0; y < data.length; y++) {
+    for (let x = 0; x < data[y].length; x++) {
+      const idx = data[y][x];
+      if (idx === 0) continue;
+      cx.fillStyle = PALETTE[idx];
+      cx.fillRect(x * pw, y * ph, pw + 0.5, ph + 0.5);
+    }
+  }
+  return c;
+}
+
+// Sprite definitions (8x8 pixel art scaled to 16x16)
+const SPRITE_DATA = {
+  // Player warrior - down facing
+  player_down: [
+    [0,0,0,9,9,0,0,0],
+    [0,0,9,19,19,9,0,0],
+    [0,0,1,12,12,1,0,0],
+    [0,10,10,10,10,10,10,0],
+    [0,9,10,10,10,10,9,0],
+    [0,0,10,10,10,10,0,0],
+    [0,0,5,0,0,5,0,0],
+    [0,0,5,0,0,5,0,0],
+  ],
+  player_up: [
+    [0,0,0,9,9,0,0,0],
+    [0,0,9,9,9,9,0,0],
+    [0,0,10,10,10,10,0,0],
+    [0,10,10,10,10,10,10,0],
+    [0,9,10,10,10,10,9,0],
+    [0,0,10,10,10,10,0,0],
+    [0,0,5,0,0,5,0,0],
+    [0,0,5,0,0,5,0,0],
+  ],
+  player_left: [
+    [0,0,9,9,0,0,0,0],
+    [0,9,19,19,9,0,0,0],
+    [0,1,12,1,0,0,0,0],
+    [10,10,10,10,10,0,0,0],
+    [9,10,10,10,10,0,0,0],
+    [0,10,10,10,0,0,0,0],
+    [0,5,0,5,0,0,0,0],
+    [0,5,0,5,0,0,0,0],
+  ],
+  player_right: [
+    [0,0,0,0,9,9,0,0],
+    [0,0,0,9,19,19,9,0],
+    [0,0,0,0,1,12,1,0],
+    [0,0,0,10,10,10,10,10],
+    [0,0,0,10,10,10,10,9],
+    [0,0,0,0,10,10,10,0],
+    [0,0,0,0,5,0,5,0],
+    [0,0,0,0,5,0,5,0],
+  ],
+  // Walk frames (legs apart)
+  player_down_walk: [
+    [0,0,0,9,9,0,0,0],
+    [0,0,9,19,19,9,0,0],
+    [0,0,1,12,12,1,0,0],
+    [0,10,10,10,10,10,10,0],
+    [0,9,10,10,10,10,9,0],
+    [0,0,10,10,10,10,0,0],
+    [0,5,0,0,0,0,5,0],
+    [0,5,0,0,0,0,5,0],
+  ],
+  player_up_walk: [
+    [0,0,0,9,9,0,0,0],
+    [0,0,9,9,9,9,0,0],
+    [0,0,10,10,10,10,0,0],
+    [0,10,10,10,10,10,10,0],
+    [0,9,10,10,10,10,9,0],
+    [0,0,10,10,10,10,0,0],
+    [0,5,0,0,0,0,5,0],
+    [0,5,0,0,0,0,5,0],
+  ],
+  // Ghost enemy
+  ghost: [
+    [0,0,12,12,12,12,0,0],
+    [0,12,12,12,12,12,12,0],
+    [12,12,1,12,12,1,12,12],
+    [12,12,1,12,12,1,12,12],
+    [12,12,12,12,12,12,12,12],
+    [12,12,12,12,12,12,12,12],
+    [12,0,12,12,12,12,0,12],
+    [0,0,12,0,0,12,0,0],
+  ],
+  // Spider enemy
+  spider: [
+    [1,0,0,0,0,0,0,1],
+    [0,1,0,1,1,0,1,0],
+    [0,0,1,1,1,1,0,0],
+    [1,1,9,1,1,9,1,1],
+    [0,0,1,1,1,1,0,0],
+    [1,1,1,1,1,1,1,1],
+    [1,0,0,1,1,0,0,1],
+    [0,0,0,0,0,0,0,0],
+  ],
+  // Scorpion enemy (prominent in screenshots)
+  scorpion: [
+    [0,13,0,0,0,0,0,0],
+    [0,0,13,0,0,0,0,0],
+    [6,0,13,6,6,0,0,0],
+    [0,6,6,6,6,6,6,0],
+    [6,6,6,6,6,6,6,6],
+    [0,6,6,6,6,6,6,0],
+    [6,0,0,6,6,0,0,6],
+    [0,0,0,0,0,0,0,0],
+  ],
+  // Frog enemy
+  frog: [
+    [0,0,3,0,0,3,0,0],
+    [0,3,12,3,3,12,3,0],
+    [3,3,3,3,3,3,3,3],
+    [3,3,3,3,3,3,3,3],
+    [0,3,3,3,3,3,3,0],
+    [0,0,3,3,3,3,0,0],
+    [0,3,0,0,0,0,3,0],
+    [3,0,0,0,0,0,0,3],
+  ],
+  // Slime enemy
+  slime: [
+    [0,0,0,0,0,0,0,0],
+    [0,0,0,3,3,0,0,0],
+    [0,0,3,4,4,3,0,0],
+    [0,3,3,12,3,12,3,0],
+    [0,3,3,3,3,3,3,0],
+    [3,3,3,3,3,3,3,3],
+    [3,3,3,3,3,3,3,3],
+    [0,3,3,3,3,3,3,0],
+  ],
+  // Monk enemy
+  monk: [
+    [0,0,5,5,5,5,0,0],
+    [0,5,19,19,19,19,5,0],
+    [0,0,1,19,19,1,0,0],
+    [0,5,5,5,5,5,5,0],
+    [0,5,5,5,5,5,5,0],
+    [0,0,5,5,5,5,0,0],
+    [0,0,5,0,0,5,0,0],
+    [0,0,5,0,0,5,0,0],
+  ],
+  // Shark (land shark)
+  shark: [
+    [0,0,0,0,7,0,0,0],
+    [0,0,0,7,7,0,0,0],
+    [0,0,7,7,7,7,0,0],
+    [0,7,7,1,7,7,7,0],
+    [7,7,7,7,7,7,7,7],
+    [0,7,12,12,12,12,7,0],
+    [0,0,7,7,7,7,0,0],
+    [0,0,0,8,8,0,0,0],
+  ],
+  // Lobster
+  lobster: [
+    [9,0,0,0,0,0,0,9],
+    [9,9,0,0,0,0,9,9],
+    [0,0,9,9,9,9,0,0],
+    [0,9,1,9,9,1,9,0],
+    [0,9,9,9,9,9,9,0],
+    [0,0,9,9,9,9,0,0],
+    [0,9,0,9,9,0,9,0],
+    [9,0,0,0,0,0,0,9],
+  ],
+  // Cactus
+  cactus: [
+    [0,0,0,3,3,0,0,0],
+    [0,0,3,3,3,3,0,0],
+    [0,3,3,3,3,3,0,0],
+    [0,0,3,3,3,0,3,0],
+    [0,0,3,3,3,3,3,0],
+    [0,0,3,3,3,0,0,0],
+    [0,0,5,5,5,0,0,0],
+    [0,5,5,5,5,5,0,0],
+  ],
+  // Boulder
+  boulder: [
+    [0,0,7,7,7,7,0,0],
+    [0,7,8,8,7,7,7,0],
+    [7,8,8,7,7,16,7,7],
+    [7,8,7,7,7,16,7,7],
+    [7,7,7,7,16,16,7,7],
+    [7,7,7,16,16,7,7,7],
+    [0,7,7,7,7,7,7,0],
+    [0,0,7,7,7,7,0,0],
+  ],
+  // Generator (enemy spawner)
+  generator: [
+    [0,1,1,1,1,1,1,0],
+    [1,16,7,7,7,7,16,1],
+    [1,7,9,7,7,9,7,1],
+    [1,7,7,9,9,7,7,1],
+    [1,7,7,9,9,7,7,1],
+    [1,7,9,7,7,9,7,1],
+    [1,16,7,7,7,7,16,1],
+    [0,1,1,1,1,1,1,0],
+  ],
+  // Key item
+  key: [
+    [0,0,0,0,0,0,0,0],
+    [0,0,6,6,6,0,0,0],
+    [0,6,0,0,0,6,0,0],
+    [0,6,0,0,0,6,0,0],
+    [0,0,6,6,6,0,0,0],
+    [0,0,0,6,0,0,0,0],
+    [0,0,0,6,6,0,0,0],
+    [0,0,0,6,0,0,0,0],
+  ],
+  // Food (meat/drumstick)
+  food: [
+    [0,0,0,0,0,0,0,0],
+    [0,0,0,13,13,0,0,0],
+    [0,0,13,13,13,13,0,0],
+    [0,13,13,13,13,13,0,0],
+    [0,0,13,13,13,0,0,0],
+    [0,0,0,5,0,0,0,0],
+    [0,0,0,0,5,0,0,0],
+    [0,0,0,0,0,0,0,0],
+  ],
+  // Potion
+  potion: [
+    [0,0,0,0,0,0,0,0],
+    [0,0,0,8,8,0,0,0],
+    [0,0,0,7,7,0,0,0],
+    [0,0,14,14,14,14,0,0],
+    [0,14,14,15,14,14,14,0],
+    [0,14,14,14,14,14,14,0],
+    [0,0,14,14,14,14,0,0],
+    [0,0,0,0,0,0,0,0],
+  ],
+  // Treasure chest
+  treasure: [
+    [0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0],
+    [0,6,6,6,6,6,6,0],
+    [0,6,11,6,6,11,6,0],
+    [0,20,20,11,11,20,20,0],
+    [0,5,5,5,5,5,5,0],
+    [0,5,11,5,5,11,5,0],
+    [0,5,5,5,5,5,5,0],
+  ],
+  // Exit stairs
+  exit_stairs: [
+    [3,3,3,3,3,3,3,3],
+    [3,1,1,1,1,1,1,3],
+    [3,1,7,7,7,7,1,3],
+    [3,1,7,8,8,7,1,3],
+    [3,1,7,8,16,7,1,3],
+    [3,1,7,16,16,7,1,3],
+    [3,1,16,16,16,16,1,3],
+    [3,1,1,1,1,1,1,3],
+  ],
+  // Star gem
+  star_gem: [
+    [0,0,0,11,11,0,0,0],
+    [0,0,11,11,11,11,0,0],
+    [11,11,11,12,12,11,11,11],
+    [11,11,12,12,12,12,11,11],
+    [11,11,11,12,12,11,11,11],
+    [0,0,11,11,11,11,0,0],
+    [0,0,0,11,11,0,0,0],
+    [0,0,0,0,0,0,0,0],
+  ],
+};
+
+// Build sprite cache
+function initSprites() {
+  for (const [name, data] of Object.entries(SPRITE_DATA)) {
+    spriteCache[name] = createSpriteCanvas(data, TILE, TILE);
+  }
+  // Create colored player variants
+  CHARACTERS.forEach((c, i) => {
+    const colorMap = { 10: c.palIdx || 10 }; // remap blue to char color
+    ['down','up','left','right','down_walk','up_walk'].forEach(dir => {
+      const key = 'player_' + dir;
+      if (!SPRITE_DATA[key]) return;
+      const data = SPRITE_DATA[key].map(row => row.map(v => v));
+      spriteCache['char_' + i + '_' + dir] = createSpriteCanvas(data, TILE, TILE);
+    });
+  });
+}
 
 // Enemy types
 const ENEMIES = {
-  GHOST:     { name:'Ghost',     hp:15, speed:1.2, damage:5,  color:'#aaf', score:50,  char:'👻' },
-  SPIDER:    { name:'Spider',    hp:20, speed:1.5, damage:8,  color:'#a44', score:75,  char:'🕷' },
-  SCORPION:  { name:'Scorpion',  hp:25, speed:1.0, damage:12, color:'#fa0', score:100, char:'🦂' },
-  FROG:      { name:'Frog',      hp:35, speed:0.8, damage:10, color:'#4a4', score:80,  char:'🐸' },
-  CACTUS:    { name:'Cactus',    hp:30, speed:0.5, damage:15, color:'#4d4', score:90,  char:'🌵' },
-  SHARK:     { name:'Land Shark',hp:40, speed:1.3, damage:18, color:'#68f', score:150, char:'🦈' },
-  SLIME:     { name:'Slime',     hp:18, speed:0.6, damage:6,  color:'#8f4', score:40,  char:'🟢' },
-  MONK:      { name:'Monk',      hp:45, speed:0.9, damage:14, color:'#a86', score:120, char:'🧙' },
-  LOBSTER:   { name:'Lobster',   hp:50, speed:0.7, damage:20, color:'#f66', score:130, char:'🦞' },
-  BOULDER:   { name:'Boulder',   hp:60, speed:0.4, damage:25, color:'#888', score:60,  char:'🪨' },
+  GHOST:    { name:'Ghost',     hp:15, speed:1.0, damage:5,  score:50,  sprite:'ghost' },
+  SPIDER:   { name:'Spider',    hp:20, speed:1.3, damage:8,  score:75,  sprite:'spider' },
+  SCORPION: { name:'Scorpion',  hp:25, speed:0.9, damage:12, score:100, sprite:'scorpion' },
+  FROG:     { name:'Frog',      hp:35, speed:0.7, damage:10, score:80,  sprite:'frog' },
+  CACTUS:   { name:'Cactus',    hp:30, speed:0.4, damage:15, score:90,  sprite:'cactus' },
+  SHARK:    { name:'Land Shark',hp:40, speed:1.1, damage:18, score:150, sprite:'shark' },
+  SLIME:    { name:'Slime',     hp:18, speed:0.5, damage:6,  score:40,  sprite:'slime' },
+  MONK:     { name:'Monk',      hp:45, speed:0.8, damage:14, score:120, sprite:'monk' },
+  LOBSTER:  { name:'Lobster',   hp:50, speed:0.6, damage:20, score:130, sprite:'lobster' },
+  BOULDER:  { name:'Boulder',   hp:60, speed:0.3, damage:25, score:60,  sprite:'boulder' },
 };
 
 // Characters
 const CHARACTERS = [
-  { name:'Valkyrie', weapon:'Sword',    icon:'⚔️', color:'#4af',
-    speed:3, strength:8, shot:6, armor:8, desc:'Balanced warrior',
-    projColor:'#4af', projShape:'sword' },
-  { name:'Wizard',   weapon:'Magic',    icon:'🧙', color:'#a4f',
-    speed:4, strength:5, shot:9, armor:4, desc:'Powerful magic attacks',
-    projColor:'#a4f', projShape:'magic' },
-  { name:'Samurai',  weapon:'Katana',   icon:'🗡️', color:'#f44',
-    speed:5, strength:9, shot:7, armor:6, desc:'Fast & deadly blades',
-    projColor:'#f44', projShape:'blade' },
-  { name:'Android',  weapon:'Laser',    icon:'🤖', color:'#4ff',
-    speed:4, strength:6, shot:10,armor:7, desc:'Devastating laser shots',
-    projColor:'#0ff', projShape:'laser' },
-  { name:'Punk Rocker',weapon:'Guitar', icon:'🎸', color:'#f4f',
-    speed:6, strength:4, shot:5, armor:3, desc:'Fast but fragile',
-    projColor:'#f4f', projShape:'note' },
-  { name:'Gunfighter',weapon:'Bullets', icon:'🔫', color:'#fa4',
-    speed:5, strength:7, shot:8, armor:5, desc:'Rapid gunfire',
-    projColor:'#ff4', projShape:'bullet' },
-  { name:'Nerd',     weapon:'Books',    icon:'🤓', color:'#4f4',
-    speed:3, strength:3, shot:4, armor:2, desc:'Weak but clever',
-    projColor:'#4f4', projShape:'book' },
-  { name:'Pirate',   weapon:'Cutlass',  icon:'🏴‍☠️', color:'#f80',
-    speed:4, strength:7, shot:6, armor:6, desc:'Tough sea dog',
-    projColor:'#f80', projShape:'cutlass' },
+  { name:'Valkyrie', weapon:'Sword', color:'#4af', palIdx:10,
+    speed:3, strength:8, shot:6, armor:8, desc:'Balanced warrior' },
+  { name:'Wizard', weapon:'Magic', color:'#a4f', palIdx:14,
+    speed:4, strength:5, shot:9, armor:4, desc:'Powerful magic attacks' },
+  { name:'Samurai', weapon:'Katana', color:'#f44', palIdx:9,
+    speed:5, strength:9, shot:7, armor:6, desc:'Fast & deadly blades' },
+  { name:'Android', weapon:'Laser', color:'#4ff', palIdx:10,
+    speed:4, strength:6, shot:10, armor:7, desc:'Devastating laser shots' },
+  { name:'Punk Rocker', weapon:'Guitar', color:'#f4f', palIdx:15,
+    speed:6, strength:4, shot:5, armor:3, desc:'Fast but fragile' },
+  { name:'Gunfighter', weapon:'Bullets', color:'#fa4', palIdx:13,
+    speed:5, strength:7, shot:8, armor:5, desc:'Rapid gunfire' },
+  { name:'Nerd', weapon:'Books', color:'#4f4', palIdx:4,
+    speed:3, strength:3, shot:4, armor:2, desc:'Weak but clever' },
+  { name:'Pirate', weapon:'Cutlass', color:'#f80', palIdx:13,
+    speed:4, strength:7, shot:6, armor:6, desc:'Tough sea dog' },
 ];
 
 // --- GAME STATE ---
-let state = 'title'; // title, charselect, playing, gameover, win
+let state = 'title';
 let player = null;
 let enemies = [];
+let generators = [];
 let projectiles = [];
 let particles = [];
-let items = [];
 let map = [];
 let level = 1;
 let score = 0;
-let keys = 0;
 let camera = { x: 0, y: 0 };
-let mousePos = { x: 0, y: 0 };
-let mouseDown = false;
+let keysDown = {};
 let attackTimer = 0;
 let damageFlash = 0;
 let levelTransition = 0;
 let messages = [];
-let zoomTarget = null;
 let gameTime = 0;
-let isMobile = false;
+let lastPickedItem = null; // for HUD portrait
+let viewW, viewH, viewTilesX, viewTilesY;
+let hudScale = 1;
+
+// --- TILE CACHE ---
+let grassTileCache = null;
+let wallTileCache = null;
+let pathTileCache = null;
+
+function buildTileCaches() {
+  // Grass tile with pixel variation
+  grassTileCache = document.createElement('canvas');
+  grassTileCache.width = TILE; grassTileCache.height = TILE;
+  const gc = grassTileCache.getContext('2d');
+  gc.fillStyle = '#3a8a3a';
+  gc.fillRect(0, 0, TILE, TILE);
+  // Random grass pixels
+  const grassColors = ['#2d7a2d','#45994a','#3a8a3a','#358535','#4a9a4a','#2e7e2e'];
+  let gseed = 42;
+  for (let y = 0; y < TILE; y += 2) {
+    for (let x = 0; x < TILE; x += 2) {
+      gseed = (gseed * 16807 + 0) % 2147483647;
+      gc.fillStyle = grassColors[gseed % grassColors.length];
+      gc.fillRect(x, y, 2, 2);
+    }
+  }
+
+  // Wall tile - stone bricks
+  wallTileCache = document.createElement('canvas');
+  wallTileCache.width = TILE; wallTileCache.height = TILE;
+  const wc = wallTileCache.getContext('2d');
+  wc.fillStyle = '#666666';
+  wc.fillRect(0, 0, TILE, TILE);
+  // Brick pattern
+  wc.fillStyle = '#555555';
+  wc.fillRect(0, 0, TILE, 1);
+  wc.fillRect(0, 7, TILE, 1);
+  wc.fillRect(0, 0, 1, TILE);
+  wc.fillStyle = '#777777';
+  wc.fillRect(1, 1, 6, 6);
+  wc.fillRect(9, 1, 6, 6);
+  wc.fillRect(5, 8, 6, 6);
+  wc.fillRect(13, 8, 3, 6);
+  wc.fillRect(0, 8, 3, 6);
+  // Highlights
+  wc.fillStyle = '#888888';
+  wc.fillRect(1, 1, 6, 1);
+  wc.fillRect(1, 1, 1, 6);
+  wc.fillRect(9, 1, 6, 1);
+  wc.fillRect(9, 1, 1, 6);
+  wc.fillRect(5, 8, 6, 1);
+  wc.fillRect(5, 8, 1, 6);
+  // Shadows
+  wc.fillStyle = '#4a4a4a';
+  wc.fillRect(1, 6, 6, 1);
+  wc.fillRect(6, 1, 1, 6);
+  wc.fillRect(9, 6, 6, 1);
+  wc.fillRect(14, 1, 1, 6);
+
+  // Path tile
+  pathTileCache = document.createElement('canvas');
+  pathTileCache.width = TILE; pathTileCache.height = TILE;
+  const pc = pathTileCache.getContext('2d');
+  pc.fillStyle = '#5a8a3a';
+  pc.fillRect(0, 0, TILE, TILE);
+  const pathColors = ['#4a7a2a','#5a8a3a','#4e7e2e','#558535'];
+  let pseed = 77;
+  for (let y = 0; y < TILE; y += 2) {
+    for (let x = 0; x < TILE; x += 2) {
+      pseed = (pseed * 16807 + 0) % 2147483647;
+      pc.fillStyle = pathColors[pseed % pathColors.length];
+      pc.fillRect(x, y, 2, 2);
+    }
+  }
+}
 
 // --- RESIZE ---
 function resize() {
-  const aspect = VIEW_TILES_X / VIEW_TILES_Y;
-  let w = window.innerWidth;
-  let h = window.innerHeight;
-  if (w / h > aspect) {
-    canvas.height = h;
-    canvas.width = Math.floor(h * aspect);
-  } else {
-    canvas.width = w;
-    canvas.height = Math.floor(w / aspect);
-  }
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  // Target aspect ratio similar to Lynx screen (160x102 game + status bar)
+  // We want game area + HUD at bottom
+  const targetW = 256;
+  const targetH = 240;
+  const scale = Math.min(Math.floor(w / targetW), Math.floor(h / targetH)) || 1;
+  canvas.width = targetW;
+  canvas.height = targetH;
+  const displayW = targetW * scale;
+  const displayH = targetH * scale;
+  canvas.style.width = displayW + 'px';
+  canvas.style.height = displayH + 'px';
   canvas.style.position = 'absolute';
-  canvas.style.left = ((w - canvas.width) / 2) + 'px';
-  canvas.style.top = ((h - canvas.height) / 2) + 'px';
+  canvas.style.left = ((w - displayW) / 2) + 'px';
+  canvas.style.top = ((h - displayH) / 2) + 'px';
+
+  viewW = canvas.width;
+  viewH = canvas.height - HUD_HEIGHT;
+  viewTilesX = Math.ceil(viewW / TILE) + 1;
+  viewTilesY = Math.ceil(viewH / TILE) + 1;
 }
 window.addEventListener('resize', resize);
 resize();
 
-// --- DETECT MOBILE ---
-isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-
 // --- INPUT ---
-function getGamePos(clientX, clientY) {
-  const rect = canvas.getBoundingClientRect();
-  const sx = canvas.width / (VIEW_TILES_X * TILE);
-  const sy = canvas.height / (VIEW_TILES_Y * TILE);
-  return {
-    x: (clientX - rect.left) / sx + camera.x,
-    y: (clientY - rect.top) / sy + camera.y
-  };
-}
-
-canvas.addEventListener('mousedown', (e) => {
-  if (state !== 'playing') return;
-  mouseDown = true;
-  mousePos = getGamePos(e.clientX, e.clientY);
+document.addEventListener('keydown', (e) => {
+  keysDown[e.key.toLowerCase()] = true;
+  keysDown[e.code] = true;
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
 });
-canvas.addEventListener('mousemove', (e) => {
-  if (state !== 'playing') return;
-  mousePos = getGamePos(e.clientX, e.clientY);
+document.addEventListener('keyup', (e) => {
+  keysDown[e.key.toLowerCase()] = false;
+  keysDown[e.code] = false;
 });
-canvas.addEventListener('mouseup', () => { mouseDown = false; });
 
-canvas.addEventListener('touchstart', (e) => {
-  if (state !== 'playing') return;
-  e.preventDefault();
-  mouseDown = true;
-  const t = e.touches[0];
-  mousePos = getGamePos(t.clientX, t.clientY);
-}, { passive: false });
-canvas.addEventListener('touchmove', (e) => {
-  if (state !== 'playing') return;
-  e.preventDefault();
-  const t = e.touches[0];
-  mousePos = getGamePos(t.clientX, t.clientY);
-}, { passive: false });
+// Touch d-pad
+let touchDir = { x: 0, y: 0 };
+let touchFire = false;
+canvas.addEventListener('touchstart', handleTouch, { passive: false });
+canvas.addEventListener('touchmove', handleTouch, { passive: false });
 canvas.addEventListener('touchend', (e) => {
   e.preventDefault();
-  mouseDown = false;
+  touchDir = { x: 0, y: 0 };
+  touchFire = false;
 }, { passive: false });
 
-// Keyboard for potion
-document.addEventListener('keydown', (e) => {
-  if (state === 'playing' && (e.key === 'p' || e.key === ' ')) usePotion();
-});
-
-// Mobile potion button
-document.getElementById('btn-potion')?.addEventListener('touchstart', (e) => {
-  e.preventDefault(); usePotion();
-}, { passive: false });
-document.getElementById('btn-potion')?.addEventListener('click', () => usePotion());
+function handleTouch(e) {
+  e.preventDefault();
+  if (state !== 'playing') return;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  for (let i = 0; i < e.touches.length; i++) {
+    const tx = (e.touches[i].clientX - rect.left) * scaleX;
+    const ty = (e.touches[i].clientY - rect.top) * scaleY;
+    // Bottom half = d-pad, top area = game (tap to fire)
+    if (ty > viewH) {
+      // HUD area - use as d-pad
+      const cx = viewW / 4;
+      const cy = viewH + HUD_HEIGHT / 2;
+      touchDir.x = (tx - cx) / 30;
+      touchDir.y = (ty - cy) / 30;
+      const len = Math.sqrt(touchDir.x * touchDir.x + touchDir.y * touchDir.y);
+      if (len > 1) { touchDir.x /= len; touchDir.y /= len; }
+      if (len < 0.3) { touchDir.x = 0; touchDir.y = 0; }
+    } else {
+      touchFire = true;
+    }
+  }
+}
 
 // --- MAP GENERATION ---
 function generateMap(lvl) {
-  // Seeded pseudo-random for consistent levels
   let seed = lvl * 7919 + 1337;
-  function rand() {
-    seed = (seed * 16807 + 0) % 2147483647;
-    return (seed - 1) / 2147483646;
-  }
+  function rand() { seed = (seed * 16807 + 0) % 2147483647; return (seed - 1) / 2147483646; }
   function randInt(a, b) { return Math.floor(rand() * (b - a + 1)) + a; }
 
-  // Initialize with walls
   map = [];
   for (let y = 0; y < MAP_H; y++) {
     map[y] = [];
-    for (let x = 0; x < MAP_W; x++) {
-      map[y][x] = T.WALL;
-    }
+    for (let x = 0; x < MAP_W; x++) map[y][x] = T.WALL;
   }
 
   // Carve rooms
   const rooms = [];
-  const numRooms = randInt(8, 14);
+  const numRooms = randInt(8, 16);
   for (let i = 0; i < numRooms; i++) {
-    const rw = randInt(3, 8);
-    const rh = randInt(3, 8);
+    const rw = randInt(3, 9);
+    const rh = randInt(3, 9);
     const rx = randInt(1, MAP_W - rw - 1);
     const ry = randInt(1, MAP_H - rh - 1);
     rooms.push({ x: rx, y: ry, w: rw, h: rh });
@@ -290,27 +647,33 @@ function generateMap(lvl) {
   // Connect rooms with corridors
   for (let i = 1; i < rooms.length; i++) {
     const a = rooms[i - 1], b = rooms[i];
-    const ax = Math.floor(a.x + a.w / 2), ay = Math.floor(a.y + a.h / 2);
+    let cx = Math.floor(a.x + a.w / 2), cy = Math.floor(a.y + a.h / 2);
     const bx = Math.floor(b.x + b.w / 2), by = Math.floor(b.y + b.h / 2);
-    let cx = ax, cy = ay;
     while (cx !== bx) {
-      if (cy >= 0 && cy < MAP_H && cx >= 0 && cx < MAP_W) map[cy][cx] = T.FLOOR;
+      if (cy >= 0 && cy < MAP_H && cx >= 0 && cx < MAP_W) {
+        map[cy][cx] = T.FLOOR;
+        // Widen corridors
+        if (cy + 1 < MAP_H) map[cy + 1][cx] = T.FLOOR;
+      }
       cx += cx < bx ? 1 : -1;
     }
     while (cy !== by) {
-      if (cy >= 0 && cy < MAP_H && cx >= 0 && cx < MAP_W) map[cy][cx] = T.FLOOR;
+      if (cy >= 0 && cy < MAP_H && cx >= 0 && cx < MAP_W) {
+        map[cy][cx] = T.FLOOR;
+        if (cx + 1 < MAP_W) map[cy][cx + 1] = T.FLOOR;
+      }
       cy += cy < by ? 1 : -1;
     }
   }
 
-  // Add extra corridors for connectivity
-  for (let i = 0; i < 3; i++) {
+  // Extra corridors
+  for (let i = 0; i < 4; i++) {
     if (rooms.length < 2) break;
     const a = rooms[randInt(0, rooms.length - 1)];
     const b = rooms[randInt(0, rooms.length - 1)];
     if (a === b) continue;
-    let cx = Math.floor(a.x + a.w/2), cy = Math.floor(a.y + a.h/2);
-    const bx = Math.floor(b.x + b.w/2), by = Math.floor(b.y + b.h/2);
+    let cx = Math.floor(a.x + a.w / 2), cy = Math.floor(a.y + a.h / 2);
+    const bx = Math.floor(b.x + b.w / 2), by = Math.floor(b.y + b.h / 2);
     while (cx !== bx) {
       if (cy >= 0 && cy < MAP_H && cx >= 0 && cx < MAP_W) map[cy][cx] = T.FLOOR;
       cx += cx < bx ? 1 : -1;
@@ -321,20 +684,31 @@ function generateMap(lvl) {
     }
   }
 
-  // Place doors
-  items = [];
+  // Place trees along edges of open areas
+  for (let y = 1; y < MAP_H - 1; y++) {
+    for (let x = 1; x < MAP_W - 1; x++) {
+      if (map[y][x] !== T.FLOOR) continue;
+      // Tree on floor tiles adjacent to walls
+      let adjWalls = 0;
+      if (map[y-1][x] === T.WALL) adjWalls++;
+      if (map[y+1][x] === T.WALL) adjWalls++;
+      if (map[y][x-1] === T.WALL) adjWalls++;
+      if (map[y][x+1] === T.WALL) adjWalls++;
+      if (adjWalls >= 2 && rand() < 0.15) {
+        map[y][x] = T.TREE;
+      }
+    }
+  }
+
+  // Place doors between rooms
   let doorCount = randInt(2, 5);
   for (let i = 0; i < doorCount; i++) {
     for (let attempt = 0; attempt < 50; attempt++) {
       const x = randInt(1, MAP_W - 2), y = randInt(1, MAP_H - 2);
-      // Door should be between a wall pair and floor pair
       if (map[y][x] === T.FLOOR) {
         const hDoor = map[y][x-1] === T.WALL && map[y][x+1] === T.WALL;
-        const vDoor = map[y-1]?.[x] === T.WALL && map[y+1]?.[x] === T.WALL;
-        if (hDoor || vDoor) {
-          map[y][x] = T.DOOR;
-          break;
-        }
+        const vDoor = (map[y-1] && map[y-1][x] === T.WALL) && (map[y+1] && map[y+1][x] === T.WALL);
+        if (hDoor || vDoor) { map[y][x] = T.DOOR; break; }
       }
     }
   }
@@ -343,13 +717,9 @@ function generateMap(lvl) {
   const exitRoom = rooms[rooms.length - 1];
   const ex = Math.floor(exitRoom.x + exitRoom.w / 2);
   const ey = Math.floor(exitRoom.y + exitRoom.h / 2);
-  if (lvl < TOTAL_LEVELS) {
-    map[ey][ex] = T.EXIT;
-  } else {
-    map[ey][ex] = T.STAR_GEM;
-  }
+  map[ey][ex] = lvl < TOTAL_LEVELS ? T.EXIT : T.STAR_GEM;
 
-  // Place items throughout rooms
+  // Place items
   for (const room of rooms) {
     const numItems = randInt(0, 3);
     for (let i = 0; i < numItems; i++) {
@@ -357,69 +727,85 @@ function generateMap(lvl) {
       const iy = randInt(room.y, room.y + room.h - 1);
       if (map[iy][ix] !== T.FLOOR) continue;
       const r = rand();
-      if (r < 0.25) map[iy][ix] = T.FOOD;
-      else if (r < 0.40) map[iy][ix] = T.POTION;
-      else if (r < 0.70) map[iy][ix] = T.TREASURE;
-      else if (r < 0.85) map[iy][ix] = T.KEY;
+      if (r < 0.2) map[iy][ix] = T.FOOD;
+      else if (r < 0.35) map[iy][ix] = T.POTION;
+      else if (r < 0.6) map[iy][ix] = T.TREASURE;
+      else if (r < 0.8) map[iy][ix] = T.KEY;
       else map[iy][ix] = T.TRAP;
     }
   }
 
-  // Place hedges and plants for decoration
-  for (let i = 0; i < randInt(3, 8); i++) {
-    const x = randInt(1, MAP_W - 2), y = randInt(1, MAP_H - 2);
-    if (map[y][x] === T.FLOOR) map[y][x] = rand() < 0.5 ? T.HEDGE : T.PLANT;
-  }
-
-  // Place enemies
-  enemies = [];
-  const enemyTypes = getEnemyTypesForLevel(lvl);
-  const numEnemies = Math.min(8 + Math.floor(lvl * 1.5), 40);
-  for (let i = 0; i < numEnemies; i++) {
+  // Place generators (enemy spawners - key Gauntlet mechanic!)
+  generators = [];
+  const numGens = randInt(3, 5 + Math.floor(lvl / 5));
+  for (let i = 0; i < numGens; i++) {
     for (let attempt = 0; attempt < 50; attempt++) {
-      const room = rooms[randInt(0, rooms.length - 1)];
-      const ex2 = randInt(room.x, room.x + room.w - 1);
-      const ey2 = randInt(room.y, room.y + room.h - 1);
-      if (map[ey2][ex2] === T.FLOOR) {
-        // Don't spawn too close to player start
-        const startRoom = rooms[0];
-        const px = startRoom.x + Math.floor(startRoom.w / 2);
-        const py = startRoom.y + Math.floor(startRoom.h / 2);
-        const dist = Math.abs(ex2 - px) + Math.abs(ey2 - py);
-        if (dist < 5) continue;
-
-        const type = enemyTypes[randInt(0, enemyTypes.length - 1)];
-        const template = ENEMIES[type];
-        const scaleFactor = 1 + (lvl - 1) * 0.08;
-        enemies.push({
-          x: ex2 * TILE + TILE / 2,
-          y: ey2 * TILE + TILE / 2,
-          type: type,
-          hp: Math.floor(template.hp * scaleFactor),
-          maxHp: Math.floor(template.hp * scaleFactor),
-          speed: template.speed,
-          damage: Math.floor(template.damage * scaleFactor),
-          color: template.color,
-          score: template.score,
-          char: template.char,
-          name: template.name,
-          moveTimer: Math.random() * 60,
-          dirX: 0, dirY: 0,
-          hitFlash: 0,
+      const room = rooms[randInt(1, rooms.length - 1)];
+      const gx = randInt(room.x, room.x + room.w - 1);
+      const gy = randInt(room.y, room.y + room.h - 1);
+      if (map[gy][gx] === T.FLOOR) {
+        map[gy][gx] = T.GENERATOR;
+        const enemyTypes = getEnemyTypesForLevel(lvl);
+        generators.push({
+          x: gx, y: gy,
+          hp: 30 + lvl * 5,
+          maxHp: 30 + lvl * 5,
+          spawnType: enemyTypes[randInt(0, enemyTypes.length - 1)],
+          spawnTimer: 0,
+          spawnRate: Math.max(120, 300 - lvl * 5),
         });
         break;
       }
     }
   }
 
-  // Set player position in first room
+  // Place enemies
+  enemies = [];
+  const enemyTypes = getEnemyTypesForLevel(lvl);
+  const numEnemies = Math.min(6 + Math.floor(lvl * 1.2), 30);
   const startRoom = rooms[0];
-  if (player) {
-    player.x = (startRoom.x + Math.floor(startRoom.w / 2)) * TILE + TILE / 2;
-    player.y = (startRoom.y + Math.floor(startRoom.h / 2)) * TILE + TILE / 2;
+  const px = startRoom.x + Math.floor(startRoom.w / 2);
+  const py = startRoom.y + Math.floor(startRoom.h / 2);
+
+  for (let i = 0; i < numEnemies; i++) {
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const room = rooms[randInt(0, rooms.length - 1)];
+      const ex2 = randInt(room.x, room.x + room.w - 1);
+      const ey2 = randInt(room.y, room.y + room.h - 1);
+      if (map[ey2][ex2] !== T.FLOOR) continue;
+      if (Math.abs(ex2 - px) + Math.abs(ey2 - py) < 6) continue;
+      spawnEnemy(ex2, ey2, enemyTypes[randInt(0, enemyTypes.length - 1)], lvl);
+      break;
+    }
   }
 
+  // Set player position
+  if (player) {
+    player.x = px * TILE + TILE / 2;
+    player.y = py * TILE + TILE / 2;
+  }
   return { startRoom };
+}
+
+function spawnEnemy(tx, ty, type, lvl) {
+  const template = ENEMIES[type];
+  const scale = 1 + (lvl - 1) * 0.08;
+  enemies.push({
+    x: tx * TILE + TILE / 2,
+    y: ty * TILE + TILE / 2,
+    type: type,
+    hp: Math.floor(template.hp * scale),
+    maxHp: Math.floor(template.hp * scale),
+    speed: template.speed,
+    damage: Math.floor(template.damage * scale),
+    score: template.score,
+    sprite: template.sprite,
+    name: template.name,
+    moveTimer: Math.random() * 60,
+    dirX: 0, dirY: 0,
+    hitFlash: 0,
+    animFrame: 0,
+  });
 }
 
 function getEnemyTypesForLevel(lvl) {
@@ -437,43 +823,40 @@ function createPlayer(charIndex) {
   return {
     x: 0, y: 0,
     charIndex: charIndex,
-    hp: 100 + c.armor * 10,
-    maxHp: 100 + c.armor * 10,
-    speed: 1.5 + c.speed * 0.3,
+    hp: 2000 + c.armor * 500,
+    maxHp: 2000 + c.armor * 500,
+    speed: 1.0 + c.speed * 0.15,
     strength: c.strength,
     shotPower: c.shot,
     armor: c.armor,
-    potions: 2,
+    missiles: 6,
     keys: 0,
-    attackCooldown: Math.max(8, 25 - c.shot * 2),
-    attackRange: 200 + c.shot * 20,
+    potions: 2,
+    attackCooldown: Math.max(6, 20 - c.shot),
     color: c.color,
     name: c.name,
     weapon: c.weapon,
-    projColor: c.projColor,
-    projShape: c.projShape,
     invincible: 0,
     animFrame: 0,
-    facing: { x: 0, y: 1 },
+    walking: false,
+    facing: 'down', // up/down/left/right
+    facingX: 0,
+    facingY: 1,
   };
 }
 
 // --- PROJECTILES ---
-function fireProjectile(fromX, fromY, toX, toY, power, color, shape, isEnemy) {
-  const dx = toX - fromX, dy = toY - fromY;
-  const dist = Math.sqrt(dx * dx + dy * dy);
-  if (dist < 1) return;
-  const speed = isEnemy ? 3 : 5;
+function fireProjectile(fromX, fromY, dirX, dirY, power, color, isEnemy) {
+  const speed = isEnemy ? 2.5 : 4;
   projectiles.push({
     x: fromX, y: fromY,
-    vx: (dx / dist) * speed,
-    vy: (dy / dist) * speed,
+    vx: dirX * speed,
+    vy: dirY * speed,
     power: power,
     color: color,
-    shape: shape,
     isEnemy: isEnemy,
-    life: isEnemy ? 60 : 45,
-    size: isEnemy ? 3 : 4,
+    life: isEnemy ? 40 : 30,
+    size: 3,
   });
 }
 
@@ -487,37 +870,15 @@ function spawnParticles(x, y, color, count, speed) {
       vx: Math.cos(angle) * spd,
       vy: Math.sin(angle) * spd,
       color: color,
-      life: 20 + Math.random() * 20,
-      size: 2 + Math.random() * 3,
+      life: 15 + Math.random() * 15,
+      size: 1 + Math.random() * 2,
     });
   }
 }
 
-// --- MESSAGES ---
 function addMessage(text, color) {
-  messages.push({ text, color: color || '#fff', life: 120 });
-  if (messages.length > 5) messages.shift();
-}
-
-// --- USE POTION ---
-function usePotion() {
-  if (!player || state !== 'playing') return;
-  if (player.potions > 0) {
-    player.potions--;
-    // Potion bomb: damage all nearby enemies
-    const range = 120;
-    for (const e of enemies) {
-      const dx = e.x - player.x, dy = e.y - player.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist < range) {
-        e.hp -= 30 + player.shotPower * 3;
-        e.hitFlash = 10;
-        spawnParticles(e.x, e.y, '#ff0', 5, 3);
-      }
-    }
-    spawnParticles(player.x, player.y, '#f0f', 15, 4);
-    addMessage('POTION BOMB!', '#f0f');
-  }
+  messages.push({ text, color: color || '#fff', life: 90 });
+  if (messages.length > 4) messages.shift();
 }
 
 // --- COLLISION ---
@@ -527,11 +888,42 @@ function tileAt(px, py) {
   return map[ty][tx];
 }
 
+function isSolid(t) {
+  return t === T.WALL || t === T.TREE || t === T.HEDGE || t === T.GENERATOR || t === T.WATER;
+}
+
 function isWalkable(px, py, hasKeys) {
   const t = tileAt(px, py);
-  if (t === T.WALL || t === T.HEDGE) return false;
+  if (isSolid(t)) return false;
   if (t === T.DOOR && !hasKeys) return false;
   return true;
+}
+
+// --- USE POTION ---
+function usePotion() {
+  if (!player || state !== 'playing') return;
+  if (player.potions > 0) {
+    player.potions--;
+    const range = 80;
+    for (const e of enemies) {
+      const dx = e.x - player.x, dy = e.y - player.y;
+      if (Math.sqrt(dx * dx + dy * dy) < range) {
+        e.hp -= 30 + player.shotPower * 3;
+        e.hitFlash = 8;
+        spawnParticles(e.x, e.y, '#ff0', 4, 2);
+      }
+    }
+    // Also damage generators
+    for (const g of generators) {
+      const gx = g.x * TILE + TILE / 2, gy = g.y * TILE + TILE / 2;
+      const dx = gx - player.x, dy = gy - player.y;
+      if (Math.sqrt(dx * dx + dy * dy) < range) {
+        g.hp -= 20;
+      }
+    }
+    spawnParticles(player.x, player.y, '#f0f', 12, 3);
+    addMessage('POTION BOMB!', '#f0f');
+  }
 }
 
 // --- UPDATE ---
@@ -539,14 +931,10 @@ function update(dt) {
   if (state !== 'playing') return;
   gameTime += dt;
 
-  // Level transition effect
-  if (levelTransition > 0) {
-    levelTransition -= dt;
-    return;
-  }
+  if (levelTransition > 0) { levelTransition -= dt; return; }
 
-  // Health drain over time (slower)
-  player.hp -= dt * 0.3;
+  // Health drain over time
+  player.hp -= dt * 0.5;
   if (player.hp <= 0) {
     state = 'gameover';
     document.getElementById('game-over-screen').classList.remove('hidden');
@@ -555,85 +943,93 @@ function update(dt) {
     return;
   }
 
-  // Invincibility timer
   if (player.invincible > 0) player.invincible -= dt;
-
-  // Damage flash
   if (damageFlash > 0) damageFlash -= dt;
 
-  // Move player toward mouse/touch
-  if (mouseDown) {
-    const dx = mousePos.x - player.x;
-    const dy = mousePos.y - player.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    if (dist > 8) {
-      const moveX = (dx / dist) * player.speed;
-      const moveY = (dy / dist) * player.speed;
-      player.facing = { x: dx / dist, y: dy / dist };
+  // --- KEYBOARD MOVEMENT ---
+  let moveX = 0, moveY = 0;
+  if (keysDown['arrowleft'] || keysDown['a']) moveX -= 1;
+  if (keysDown['arrowright'] || keysDown['d']) moveX += 1;
+  if (keysDown['arrowup'] || keysDown['w']) moveY -= 1;
+  if (keysDown['arrowdown'] || keysDown['s']) moveY += 1;
 
-      // Try X then Y separately for wall sliding
-      const r = 10; // collision radius
-      let newX = player.x + moveX;
-      let newY = player.y + moveY;
-
-      if (isWalkable(newX - r, player.y - r, player.keys > 0) &&
-          isWalkable(newX + r, player.y - r, player.keys > 0) &&
-          isWalkable(newX - r, player.y + r, player.keys > 0) &&
-          isWalkable(newX + r, player.y + r, player.keys > 0)) {
-        player.x = newX;
-      }
-      if (isWalkable(player.x - r, newY - r, player.keys > 0) &&
-          isWalkable(player.x + r, newY - r, player.keys > 0) &&
-          isWalkable(player.x - r, newY + r, player.keys > 0) &&
-          isWalkable(player.x + r, newY + r, player.keys > 0)) {
-        player.y = newY;
-      }
-
-      player.animFrame += dt * 0.3;
-
-      // Check tile pickups
-      handleTilePickup();
-    }
+  // Touch movement
+  if (Math.abs(touchDir.x) > 0.2 || Math.abs(touchDir.y) > 0.2) {
+    moveX = touchDir.x; moveY = touchDir.y;
   }
 
-  // Auto-attack nearest enemy
+  player.walking = (moveX !== 0 || moveY !== 0);
+
+  if (player.walking) {
+    // Normalize diagonal
+    const len = Math.sqrt(moveX * moveX + moveY * moveY);
+    if (len > 0) { moveX /= len; moveY /= len; }
+
+    // Update facing direction
+    if (Math.abs(moveX) > Math.abs(moveY)) {
+      player.facing = moveX < 0 ? 'left' : 'right';
+    } else {
+      player.facing = moveY < 0 ? 'up' : 'down';
+    }
+    player.facingX = moveX;
+    player.facingY = moveY;
+
+    const spd = player.speed;
+    const newX = player.x + moveX * spd;
+    const newY = player.y + moveY * spd;
+    const r = 5; // collision radius
+
+    if (isWalkable(newX - r, player.y - r, player.keys > 0) &&
+        isWalkable(newX + r, player.y - r, player.keys > 0) &&
+        isWalkable(newX - r, player.y + r, player.keys > 0) &&
+        isWalkable(newX + r, player.y + r, player.keys > 0)) {
+      player.x = newX;
+    }
+    if (isWalkable(player.x - r, newY - r, player.keys > 0) &&
+        isWalkable(player.x + r, newY - r, player.keys > 0) &&
+        isWalkable(player.x - r, newY + r, player.keys > 0) &&
+        isWalkable(player.x + r, newY + r, player.keys > 0)) {
+      player.y = newY;
+    }
+
+    player.animFrame += dt * 0.2;
+    handleTilePickup();
+  }
+
+  // --- SHOOTING ---
   attackTimer -= dt;
-  if (attackTimer <= 0) {
-    let nearest = null, nearDist = player.attackRange;
-    for (const e of enemies) {
-      const d = Math.sqrt((e.x - player.x) ** 2 + (e.y - player.y) ** 2);
-      if (d < nearDist) { nearDist = d; nearest = e; }
-    }
-    if (nearest) {
-      fireProjectile(player.x, player.y, nearest.x, nearest.y,
-        player.strength + player.shotPower, player.projColor, player.projShape, false);
-      attackTimer = player.attackCooldown;
-    }
+  const wantFire = keysDown[' '] || keysDown['z'] || keysDown['x'] || touchFire;
+  if (wantFire && attackTimer <= 0 && player.missiles > 0) {
+    let fx = player.facingX, fy = player.facingY;
+    const flen = Math.sqrt(fx * fx + fy * fy);
+    if (flen > 0) { fx /= flen; fy /= flen; }
+    else { fx = 0; fy = 1; }
+    fireProjectile(player.x, player.y, fx, fy,
+      player.strength + player.shotPower, player.color, false);
+    player.missiles--;
+    attackTimer = player.attackCooldown;
   }
 
-  // Update projectiles
+  // --- UPDATE PROJECTILES ---
   for (let i = projectiles.length - 1; i >= 0; i--) {
     const p = projectiles[i];
     p.x += p.vx; p.y += p.vy;
     p.life -= dt;
 
-    // Wall collision
-    if (tileAt(p.x, p.y) === T.WALL || tileAt(p.x, p.y) === T.HEDGE) {
-      spawnParticles(p.x, p.y, p.color, 3, 1);
+    const t = tileAt(p.x, p.y);
+    if (isSolid(t) && t !== T.GENERATOR) {
+      spawnParticles(p.x, p.y, p.color, 2, 1);
       projectiles.splice(i, 1);
       continue;
     }
-
     if (p.life <= 0) { projectiles.splice(i, 1); continue; }
 
     if (p.isEnemy) {
-      // Hit player
       const dx = p.x - player.x, dy = p.y - player.y;
-      if (Math.sqrt(dx*dx + dy*dy) < 12 && player.invincible <= 0) {
-        const dmg = Math.max(1, p.power - player.armor);
-        player.hp -= dmg;
-        damageFlash = 8;
-        spawnParticles(player.x, player.y, '#f44', 5, 2);
+      if (Math.sqrt(dx * dx + dy * dy) < 8 && player.invincible <= 0) {
+        player.hp -= Math.max(1, p.power - player.armor);
+        damageFlash = 6;
+        spawnParticles(player.x, player.y, '#f44', 3, 1);
         projectiles.splice(i, 1);
       }
     } else {
@@ -641,75 +1037,111 @@ function update(dt) {
       for (let j = enemies.length - 1; j >= 0; j--) {
         const e = enemies[j];
         const dx = p.x - e.x, dy = p.y - e.y;
-        if (Math.sqrt(dx*dx + dy*dy) < 14) {
+        if (Math.sqrt(dx * dx + dy * dy) < 8) {
           e.hp -= p.power;
-          e.hitFlash = 8;
-          spawnParticles(e.x, e.y, e.color, 4, 2);
+          e.hitFlash = 6;
+          spawnParticles(e.x, e.y, '#ff0', 3, 2);
           projectiles.splice(i, 1);
           if (e.hp <= 0) {
             score += e.score;
-            spawnParticles(e.x, e.y, e.color, 10, 3);
+            spawnParticles(e.x, e.y, '#fa0', 8, 3);
             enemies.splice(j, 1);
           }
+          break;
+        }
+      }
+      // Hit generators
+      if (projectiles[i]) { // still alive
+        for (let g = generators.length - 1; g >= 0; g--) {
+          const gen = generators[g];
+          const gx = gen.x * TILE + TILE / 2, gy = gen.y * TILE + TILE / 2;
+          const dx = projectiles[i].x - gx, dy = projectiles[i].y - gy;
+          if (Math.sqrt(dx * dx + dy * dy) < 10) {
+            gen.hp -= projectiles[i].power;
+            spawnParticles(gx, gy, '#f80', 3, 2);
+            projectiles.splice(i, 1);
+            if (gen.hp <= 0) {
+              score += 200;
+              spawnParticles(gx, gy, '#ff0', 12, 4);
+              map[gen.y][gen.x] = T.FLOOR;
+              generators.splice(g, 1);
+              addMessage('GENERATOR DESTROYED!', '#ff4');
+            }
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // --- UPDATE GENERATORS ---
+  for (const g of generators) {
+    g.spawnTimer += dt;
+    if (g.spawnTimer >= g.spawnRate / 60 && enemies.length < 40) {
+      g.spawnTimer = 0;
+      // Spawn enemy adjacent to generator
+      const dirs = [[0,-1],[0,1],[-1,0],[1,0]];
+      for (const d of dirs) {
+        const sx = g.x + d[0], sy = g.y + d[1];
+        if (sx >= 0 && sx < MAP_W && sy >= 0 && sy < MAP_H && map[sy][sx] === T.FLOOR) {
+          spawnEnemy(sx, sy, g.spawnType, level);
+          spawnParticles(sx * TILE + TILE / 2, sy * TILE + TILE / 2, '#f80', 4, 2);
           break;
         }
       }
     }
   }
 
-  // Update enemies
+  // --- UPDATE ENEMIES ---
   for (const e of enemies) {
     e.moveTimer -= dt;
     if (e.hitFlash > 0) e.hitFlash -= dt;
+    e.animFrame += dt * 0.1;
 
     const dx = player.x - e.x, dy = player.y - e.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
-    // Chase player if within range
-    if (dist < 250) {
+    if (dist < 200) {
       if (e.moveTimer <= 0) {
         e.dirX = (dx / dist) * e.speed;
         e.dirY = (dy / dist) * e.speed;
-        e.moveTimer = 15 + Math.random() * 20;
+        e.moveTimer = 10 + Math.random() * 15;
       }
-
       const newEX = e.x + e.dirX;
       const newEY = e.y + e.dirY;
-      const r = 8;
-      if (tileAt(newEX, newEY) === T.FLOOR || tileAt(newEX, newEY) === T.TRAP) {
-        e.x = newEX;
-        e.y = newEY;
+      const t = tileAt(newEX, newEY);
+      if (!isSolid(t) && t !== T.DOOR) {
+        e.x = newEX; e.y = newEY;
       } else {
         e.dirX = -e.dirX; e.dirY = -e.dirY;
       }
 
-      // Melee damage to player
-      if (dist < 18 && player.invincible <= 0) {
+      // Melee damage
+      if (dist < 10 && player.invincible <= 0) {
         const dmg = Math.max(1, e.damage - player.armor * 0.5);
-        player.hp -= dmg * dt * 0.1;
+        player.hp -= dmg * dt * 0.15;
         if (Math.random() < dt * 0.05) {
-          damageFlash = 5;
-          spawnParticles(player.x, player.y, '#f44', 3, 1);
+          damageFlash = 4;
+          spawnParticles(player.x, player.y, '#f44', 2, 1);
         }
       }
 
-      // Ranged attack for some enemy types
-      if (dist > 60 && dist < 200 && Math.random() < dt * 0.008) {
+      // Ranged attack for some types
+      if (dist > 40 && dist < 160 && Math.random() < dt * 0.006) {
         if (['MONK','CACTUS','LOBSTER'].includes(e.type)) {
-          fireProjectile(e.x, e.y, player.x, player.y, e.damage * 0.6, e.color, 'enemy', true);
+          fireProjectile(e.x, e.y, dx / dist, dy / dist, e.damage * 0.5, '#f44', true);
         }
       }
     } else {
-      // Wander
       if (e.moveTimer <= 0) {
         const angle = Math.random() * Math.PI * 2;
-        e.dirX = Math.cos(angle) * e.speed * 0.5;
-        e.dirY = Math.sin(angle) * e.speed * 0.5;
-        e.moveTimer = 30 + Math.random() * 60;
+        e.dirX = Math.cos(angle) * e.speed * 0.4;
+        e.dirY = Math.sin(angle) * e.speed * 0.4;
+        e.moveTimer = 20 + Math.random() * 40;
       }
       const newEX = e.x + e.dirX;
       const newEY = e.y + e.dirY;
-      if (tileAt(newEX, newEY) === T.FLOOR) {
+      if (!isSolid(tileAt(newEX, newEY))) {
         e.x = newEX; e.y = newEY;
       } else {
         e.dirX = -e.dirX; e.dirY = -e.dirY;
@@ -717,13 +1149,12 @@ function update(dt) {
     }
   }
 
-  // Update particles
+  // --- UPDATE PARTICLES ---
   for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i];
     p.x += p.vx; p.y += p.vy;
-    p.vx *= 0.95; p.vy *= 0.95;
+    p.vx *= 0.93; p.vy *= 0.93;
     p.life -= dt;
-    p.size *= 0.97;
     if (p.life <= 0) particles.splice(i, 1);
   }
 
@@ -733,19 +1164,11 @@ function update(dt) {
     if (messages[i].life <= 0) messages.splice(i, 1);
   }
 
-  // Camera follow
-  camera.x = player.x - (VIEW_TILES_X * TILE) / 2;
-  camera.y = player.y - (VIEW_TILES_Y * TILE) / 2;
-  camera.x = Math.max(0, Math.min(MAP_W * TILE - VIEW_TILES_X * TILE, camera.x));
-  camera.y = Math.max(0, Math.min(MAP_H * TILE - VIEW_TILES_Y * TILE, camera.y));
-
-  // Find nearest item/enemy for zoom window
-  zoomTarget = null;
-  let bestZoomDist = 150;
-  for (const e of enemies) {
-    const d = Math.sqrt((e.x - player.x)**2 + (e.y - player.y)**2);
-    if (d < bestZoomDist && d > 30) { bestZoomDist = d; zoomTarget = { type:'enemy', obj:e }; }
-  }
+  // Camera follow (centered on player)
+  camera.x = player.x - viewW / 2;
+  camera.y = player.y - viewH / 2;
+  camera.x = Math.max(0, Math.min(MAP_W * TILE - viewW, camera.x));
+  camera.y = Math.max(0, Math.min(MAP_H * TILE - viewH, camera.y));
 }
 
 function handleTilePickup() {
@@ -756,38 +1179,43 @@ function handleTilePickup() {
 
   switch (tile) {
     case T.FOOD:
-      player.hp = Math.min(player.maxHp, player.hp + 25);
+      player.hp = Math.min(player.maxHp, player.hp + 100);
       score += 10;
-      addMessage('+25 HEALTH', '#4f4');
-      spawnParticles(player.x, player.y, '#4f4', 8, 2);
+      addMessage('+100 HEALTH', '#4f4');
+      lastPickedItem = 'food';
+      spawnParticles(player.x, player.y, '#4f4', 6, 2);
       map[ty][tx] = T.FLOOR;
       break;
     case T.POTION:
       player.potions++;
       score += 25;
       addMessage('+1 POTION', '#f4f');
-      spawnParticles(player.x, player.y, '#f4f', 8, 2);
+      lastPickedItem = 'potion';
+      spawnParticles(player.x, player.y, '#f4f', 6, 2);
       map[ty][tx] = T.FLOOR;
       break;
     case T.TREASURE:
       score += 100;
-      addMessage('+100 GOLD', '#ff4');
-      spawnParticles(player.x, player.y, '#ff4', 10, 3);
+      player.missiles += 3;
+      addMessage('+100 GOLD +3 MISSILES', '#ff4');
+      lastPickedItem = 'treasure';
+      spawnParticles(player.x, player.y, '#ff4', 8, 2);
       map[ty][tx] = T.FLOOR;
       break;
     case T.KEY:
       player.keys++;
       score += 20;
       addMessage('+1 KEY', '#fa0');
-      spawnParticles(player.x, player.y, '#fa0', 8, 2);
+      lastPickedItem = 'key';
+      spawnParticles(player.x, player.y, '#fa0', 6, 2);
       map[ty][tx] = T.FLOOR;
       break;
     case T.TRAP:
       if (player.invincible <= 0) {
-        player.hp -= 15;
-        damageFlash = 10;
-        addMessage('TRAP! -15 HP', '#f44');
-        spawnParticles(player.x, player.y, '#f44', 8, 3);
+        player.hp -= 50;
+        damageFlash = 8;
+        addMessage('TRAP! -50 HP', '#f44');
+        spawnParticles(player.x, player.y, '#f44', 6, 3);
       }
       map[ty][tx] = T.FLOOR;
       break;
@@ -796,7 +1224,7 @@ function handleTilePickup() {
         player.keys--;
         map[ty][tx] = T.FLOOR;
         addMessage('DOOR OPENED', '#fa0');
-        spawnParticles(player.x, player.y, '#fa0', 6, 2);
+        spawnParticles(player.x, player.y, '#fa0', 4, 2);
       }
       break;
     case T.EXIT:
@@ -807,19 +1235,7 @@ function handleTilePickup() {
       state = 'win';
       document.getElementById('win-screen').classList.remove('hidden');
       document.getElementById('win-score').textContent = 'Final Score: ' + score;
-      spawnParticles(player.x, player.y, '#ff4', 30, 5);
-      break;
-    case T.PLANT:
-      // Plants can spit you across the maze!
-      const destX = Math.random() * (MAP_W - 4) + 2;
-      const destY = Math.random() * (MAP_H - 4) + 2;
-      if (map[Math.floor(destY)]?.[Math.floor(destX)] === T.FLOOR) {
-        player.x = destX * TILE + TILE/2;
-        player.y = destY * TILE + TILE/2;
-        addMessage('PLANT SPITS YOU!', '#4d4');
-        spawnParticles(player.x, player.y, '#4d4', 10, 4);
-      }
-      map[ty][tx] = T.FLOOR;
+      spawnParticles(player.x, player.y, '#ff4', 20, 4);
       break;
   }
 }
@@ -833,500 +1249,414 @@ function nextLevel() {
     return;
   }
   addMessage('LEVEL ' + level, '#ff4');
-  levelTransition = 30;
+  levelTransition = 25;
   projectiles = [];
   particles = [];
   generateMap(level);
-  player.hp = Math.min(player.maxHp, player.hp + 15);
-  player.invincible = 60;
+  player.hp = Math.min(player.maxHp, player.hp + 50);
+  player.missiles += 3;
+  player.invincible = 45;
 }
 
 // --- DRAW ---
-const tileColors = {
-  [T.FLOOR]:   '#1a1a2e',
-  [T.WALL]:    '#2a2a3a',
-  [T.DOOR]:    '#8b4513',
-  [T.EXIT]:    '#44ff44',
-  [T.FOOD]:    '#1a1a2e',
-  [T.POTION]:  '#1a1a2e',
-  [T.TREASURE]:'#1a1a2e',
-  [T.KEY]:     '#1a1a2e',
-  [T.TRAP]:    '#1a1a2e',
-  [T.PLANT]:   '#1a1a2e',
-  [T.HEDGE]:   '#1a3a1a',
-  [T.STAR_GEM]:'#1a1a2e',
-};
-
 function draw() {
-  const vw = VIEW_TILES_X * TILE;
-  const vh = VIEW_TILES_Y * TILE;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Scale canvas
-  ctx.save();
-  ctx.scale(canvas.width / vw, canvas.height / vh);
+  if (state !== 'playing' && state !== 'gameover' && state !== 'win') return;
 
-  // Clear
-  ctx.fillStyle = '#0a0a15';
-  ctx.fillRect(0, 0, vw, vh);
-
-  if (state !== 'playing' && state !== 'gameover' && state !== 'win') {
-    ctx.restore();
-    return;
-  }
-
-  // Level transition flash
+  // Level transition
   if (levelTransition > 0) {
-    const t = levelTransition / 30;
-    ctx.fillStyle = `rgba(255,255,68,${t * 0.5})`;
-    ctx.fillRect(0, 0, vw, vh);
+    const t = levelTransition / 25;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, viewW, viewH);
     ctx.fillStyle = '#ff4';
-    ctx.font = 'bold 24px Courier New';
+    ctx.font = 'bold 16px Courier New';
     ctx.textAlign = 'center';
-    ctx.fillText('LEVEL ' + level, vw/2, vh/2);
-    ctx.restore();
+    ctx.fillText('LEVEL ' + level, viewW / 2, viewH / 2 - 4);
+    ctx.fillStyle = '#aaa';
+    ctx.font = '8px Courier New';
+    ctx.fillText('Get Ready!', viewW / 2, viewH / 2 + 10);
+    drawHUD();
     return;
   }
 
-  ctx.translate(-camera.x, -camera.y);
+  // Clip game area
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, viewW, viewH);
+  ctx.clip();
+
+  ctx.save();
+  ctx.translate(-Math.floor(camera.x), -Math.floor(camera.y));
 
   // Draw tiles
   const startTX = Math.max(0, Math.floor(camera.x / TILE));
   const startTY = Math.max(0, Math.floor(camera.y / TILE));
-  const endTX = Math.min(MAP_W, startTX + VIEW_TILES_X + 2);
-  const endTY = Math.min(MAP_H, startTY + VIEW_TILES_Y + 2);
+  const endTX = Math.min(MAP_W, startTX + viewTilesX + 1);
+  const endTY = Math.min(MAP_H, startTY + viewTilesY + 1);
 
   for (let y = startTY; y < endTY; y++) {
     for (let x = startTX; x < endTX; x++) {
       const tile = map[y][x];
       const px = x * TILE, py = y * TILE;
 
-      // Floor
-      ctx.fillStyle = tileColors[tile] || '#1a1a2e';
-      ctx.fillRect(px, py, TILE, TILE);
-
-      // Wall details
+      // Base tile
       if (tile === T.WALL) {
-        ctx.fillStyle = '#353550';
-        ctx.fillRect(px + 1, py + 1, TILE - 2, TILE - 2);
-        ctx.fillStyle = '#2a2a40';
-        ctx.fillRect(px + 3, py + 3, TILE - 6, TILE - 6);
-        // Brick pattern
-        ctx.strokeStyle = '#222238';
-        ctx.lineWidth = 0.5;
-        ctx.strokeRect(px + 2, py + 2, TILE/2 - 2, TILE/2 - 2);
-        ctx.strokeRect(px + TILE/2, py + TILE/2, TILE/2 - 2, TILE/2 - 2);
+        ctx.drawImage(wallTileCache, px, py);
+      } else if (tile === T.PATH) {
+        ctx.drawImage(pathTileCache, px, py);
+      } else {
+        // Everything else is on grass
+        ctx.drawImage(grassTileCache, px, py);
       }
 
-      // Floor tiles pattern
-      if (tile === T.FLOOR || (tile >= T.FOOD && tile <= T.TRAP) || tile === T.PLANT || tile === T.STAR_GEM) {
-        ctx.strokeStyle = '#151525';
-        ctx.lineWidth = 0.3;
-        ctx.strokeRect(px + 0.5, py + 0.5, TILE - 1, TILE - 1);
-      }
-
-      // Door
-      if (tile === T.DOOR) {
-        ctx.fillStyle = '#654321';
-        ctx.fillRect(px + 2, py + 2, TILE - 4, TILE - 4);
-        ctx.fillStyle = '#8b6914';
-        ctx.fillRect(px + 4, py + 4, TILE - 8, TILE - 8);
-        // Keyhole
-        ctx.fillStyle = '#222';
-        ctx.beginPath();
-        ctx.arc(px + TILE/2, py + TILE/2, 3, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillRect(px + TILE/2 - 1, py + TILE/2, 2, 6);
-      }
-
-      // Hedge
-      if (tile === T.HEDGE) {
-        ctx.fillStyle = '#2a5a2a';
-        ctx.fillRect(px + 1, py + 1, TILE - 2, TILE - 2);
-        ctx.fillStyle = '#3a7a3a';
-        for (let i = 0; i < 4; i++) {
-          ctx.beginPath();
-          ctx.arc(px + 6 + (i%2)*16, py + 8 + Math.floor(i/2)*14, 5, 0, Math.PI * 2);
-          ctx.fill();
+      // Overlays
+      if (tile === T.TREE) {
+        drawTree(ctx, px, py);
+      } else if (tile === T.HEDGE) {
+        drawHedge(ctx, px, py);
+      } else if (tile === T.DOOR) {
+        drawDoor(ctx, px, py);
+      } else if (tile === T.GENERATOR) {
+        ctx.drawImage(spriteCache.generator, px, py);
+        // HP bar for generators
+        const gen = generators.find(g => g.x === x && g.y === y);
+        if (gen && gen.hp < gen.maxHp) {
+          ctx.fillStyle = '#400';
+          ctx.fillRect(px + 2, py - 3, TILE - 4, 2);
+          ctx.fillStyle = '#f80';
+          ctx.fillRect(px + 2, py - 3, (TILE - 4) * (gen.hp / gen.maxHp), 2);
         }
+      } else if (tile === T.FOOD) {
+        ctx.drawImage(spriteCache.food, px, py);
+      } else if (tile === T.POTION) {
+        ctx.drawImage(spriteCache.potion, px, py);
+      } else if (tile === T.TREASURE) {
+        ctx.drawImage(spriteCache.treasure, px, py);
+      } else if (tile === T.KEY) {
+        ctx.drawImage(spriteCache.key, px, py);
+      } else if (tile === T.TRAP) {
+        // Subtle dark spots
+        ctx.fillStyle = 'rgba(80,20,20,0.3)';
+        ctx.fillRect(px + 3, py + 3, TILE - 6, TILE - 6);
+      } else if (tile === T.EXIT) {
+        ctx.drawImage(spriteCache.exit_stairs, px, py);
+      } else if (tile === T.STAR_GEM) {
+        // Pulsing glow
+        const glow = 0.4 + 0.4 * Math.sin(gameTime * 0.15);
+        ctx.globalAlpha = glow;
+        ctx.fillStyle = '#ff4';
+        ctx.fillRect(px - 2, py - 2, TILE + 4, TILE + 4);
+        ctx.globalAlpha = 1;
+        ctx.drawImage(spriteCache.star_gem, px, py);
+      } else if (tile === T.WATER) {
+        ctx.fillStyle = '#2244aa';
+        ctx.fillRect(px, py, TILE, TILE);
+        ctx.fillStyle = '#3355bb';
+        const woff = Math.sin(gameTime * 0.1 + x + y) * 2;
+        ctx.fillRect(px + 2, py + 4 + woff, TILE - 4, 2);
+        ctx.fillRect(px + 6, py + 10 - woff, TILE - 8, 2);
       }
-
-      // Items on floor
-      drawTileItem(tile, px, py);
     }
   }
 
   // Draw enemies
   for (const e of enemies) {
     const sx = e.x - camera.x, sy = e.y - camera.y;
-    if (sx < -TILE || sx > vw + TILE || sy < -TILE || sy > vh + TILE) continue;
+    if (sx < -TILE || sx > viewW + TILE || sy < -TILE || sy > viewH + TILE) continue;
 
-    // Shadow
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
-    ctx.beginPath();
-    ctx.ellipse(e.x, e.y + 10, 10, 5, 0, 0, Math.PI * 2);
-    ctx.fill();
+    const drawX = Math.floor(e.x - TILE / 2);
+    const drawY = Math.floor(e.y - TILE / 2);
 
-    // Body
-    ctx.fillStyle = e.hitFlash > 0 ? '#fff' : e.color;
-    ctx.beginPath();
-    ctx.arc(e.x, e.y, 12, 0, Math.PI * 2);
-    ctx.fill();
+    if (e.hitFlash > 0) {
+      ctx.globalAlpha = 0.5 + 0.5 * Math.sin(gameTime);
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(drawX, drawY, TILE, TILE);
+      ctx.globalAlpha = 1;
+    }
 
-    // Outline
-    ctx.strokeStyle = '#000';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-
-    // Eyes
-    ctx.fillStyle = '#000';
-    ctx.beginPath();
-    ctx.arc(e.x - 4, e.y - 3, 2, 0, Math.PI * 2);
-    ctx.arc(e.x + 4, e.y - 3, 2, 0, Math.PI * 2);
-    ctx.fill();
+    if (spriteCache[e.sprite]) {
+      ctx.drawImage(spriteCache[e.sprite], drawX, drawY);
+    }
 
     // HP bar
     if (e.hp < e.maxHp) {
-      const barW = 20;
+      const barW = 14;
       ctx.fillStyle = '#400';
-      ctx.fillRect(e.x - barW/2, e.y - 18, barW, 3);
+      ctx.fillRect(drawX + 1, drawY - 3, barW, 2);
       ctx.fillStyle = '#f44';
-      ctx.fillRect(e.x - barW/2, e.y - 18, barW * (e.hp / e.maxHp), 3);
+      ctx.fillRect(drawX + 1, drawY - 3, barW * (e.hp / e.maxHp), 2);
     }
   }
 
   // Draw projectiles
   for (const p of projectiles) {
-    ctx.fillStyle = p.color;
-    ctx.globalAlpha = Math.min(1, p.life / 10);
-
-    if (p.shape === 'laser') {
-      ctx.fillRect(p.x - 6, p.y - 1, 12, 2);
-      ctx.fillRect(p.x - 1, p.y - 6, 2, 12);
-    } else if (p.shape === 'magic') {
-      ctx.beginPath();
-      for (let i = 0; i < 5; i++) {
-        const a = (i / 5) * Math.PI * 2 - Math.PI/2;
-        const r = i % 2 === 0 ? 5 : 2;
-        if (i === 0) ctx.moveTo(p.x + Math.cos(a)*r, p.y + Math.sin(a)*r);
-        else ctx.lineTo(p.x + Math.cos(a)*r, p.y + Math.sin(a)*r);
-      }
-      ctx.closePath();
-      ctx.fill();
-    } else if (p.shape === 'bullet') {
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
-      ctx.fill();
-    } else {
-      // Default: diamond/blade
-      ctx.save();
-      ctx.translate(p.x, p.y);
-      ctx.rotate(Math.atan2(p.vy, p.vx));
-      ctx.beginPath();
-      ctx.moveTo(6, 0);
-      ctx.lineTo(0, 3);
-      ctx.lineTo(-6, 0);
-      ctx.lineTo(0, -3);
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
-    }
+    ctx.globalAlpha = Math.min(1, p.life / 8);
+    ctx.fillStyle = p.isEnemy ? '#f44' : p.color;
+    const px2 = Math.floor(p.x), py2 = Math.floor(p.y);
+    ctx.fillRect(px2 - 2, py2 - 2, 4, 4);
+    // Trail
+    ctx.fillStyle = p.isEnemy ? '#a22' : '#fff';
+    ctx.fillRect(px2 - p.vx * 0.5 - 1, py2 - p.vy * 0.5 - 1, 2, 2);
     ctx.globalAlpha = 1;
   }
 
   // Draw particles
   for (const p of particles) {
-    ctx.globalAlpha = Math.min(1, p.life / 10);
+    ctx.globalAlpha = Math.min(1, p.life / 8);
     ctx.fillStyle = p.color;
-    ctx.fillRect(p.x - p.size/2, p.y - p.size/2, p.size, p.size);
+    ctx.fillRect(Math.floor(p.x), Math.floor(p.y), Math.max(1, Math.floor(p.size)), Math.max(1, Math.floor(p.size)));
   }
   ctx.globalAlpha = 1;
 
   // Draw player
   if (player) {
-    // Shadow
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
-    ctx.beginPath();
-    ctx.ellipse(player.x, player.y + 12, 11, 5, 0, 0, Math.PI * 2);
-    ctx.fill();
+    const drawX = Math.floor(player.x - TILE / 2);
+    const drawY = Math.floor(player.y - TILE / 2);
 
-    // Invincibility glow
-    if (player.invincible > 0) {
-      ctx.strokeStyle = `rgba(255,255,68,${0.3 + 0.3 * Math.sin(gameTime * 0.5)})`;
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(player.x, player.y, 18, 0, Math.PI * 2);
-      ctx.stroke();
+    // Invincibility flash
+    if (player.invincible > 0 && Math.floor(gameTime * 3) % 2 === 0) {
+      ctx.globalAlpha = 0.5;
     }
 
-    // Body
-    const flashColor = damageFlash > 0 ? '#f44' : player.color;
-    ctx.fillStyle = flashColor;
-    ctx.beginPath();
-    ctx.arc(player.x, player.y, 13, 0, Math.PI * 2);
-    ctx.fill();
+    // Damage flash
+    if (damageFlash > 0) {
+      ctx.fillStyle = '#f44';
+      ctx.fillRect(drawX, drawY, TILE, TILE);
+    }
 
-    // Outline
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    // Face direction indicator
-    ctx.fillStyle = '#fff';
-    ctx.beginPath();
-    ctx.arc(player.x + player.facing.x * 6, player.y + player.facing.y * 6 - 2, 3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#000';
-    ctx.beginPath();
-    ctx.arc(player.x + player.facing.x * 6, player.y + player.facing.y * 6 - 2, 1.5, 0, Math.PI * 2);
-    ctx.fill();
+    // Draw sprite based on facing and walk animation
+    let spriteKey = 'player_' + player.facing;
+    if (player.walking && Math.floor(player.animFrame * 4) % 2 === 1) {
+      if (player.facing === 'down' || player.facing === 'up') {
+        spriteKey = 'player_' + player.facing + '_walk';
+      }
+    }
+    if (spriteCache[spriteKey]) {
+      ctx.drawImage(spriteCache[spriteKey], drawX, drawY);
+    }
+    ctx.globalAlpha = 1;
   }
 
   ctx.restore(); // undo translate
 
-  // --- HUD ---
-  drawHUD(vw, vh);
-
-  // --- Zoom Window ---
-  drawZoomWindow(vw, vh);
-
   // Damage overlay
   if (damageFlash > 0) {
-    ctx.fillStyle = `rgba(255,0,0,${damageFlash * 0.03})`;
-    ctx.fillRect(0, 0, vw, vh);
+    ctx.fillStyle = `rgba(255,0,0,${damageFlash * 0.04})`;
+    ctx.fillRect(0, 0, viewW, viewH);
   }
-
-  ctx.restore(); // undo scale
-}
-
-function drawTileItem(tile, px, py) {
-  const cx = px + TILE/2, cy = py + TILE/2;
-  const bob = Math.sin(gameTime * 0.1 + px + py) * 2;
-
-  switch (tile) {
-    case T.FOOD:
-      // Drumstick
-      ctx.fillStyle = '#c84';
-      ctx.beginPath();
-      ctx.ellipse(cx - 2, cy + bob - 2, 6, 5, 0.3, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#864';
-      ctx.fillRect(cx + 2, cy + bob, 6, 3);
-      break;
-    case T.POTION:
-      // Bottle
-      ctx.fillStyle = '#f4f';
-      ctx.fillRect(cx - 2, cy + bob - 8, 4, 4);
-      ctx.beginPath();
-      ctx.arc(cx, cy + bob, 6, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#faf';
-      ctx.beginPath();
-      ctx.arc(cx - 2, cy + bob - 2, 2, 0, Math.PI * 2);
-      ctx.fill();
-      break;
-    case T.TREASURE:
-      // Gold sack
-      ctx.fillStyle = '#da4';
-      ctx.beginPath();
-      ctx.arc(cx, cy + bob + 2, 7, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#fb4';
-      ctx.fillRect(cx - 3, cy + bob - 5, 6, 5);
-      ctx.fillStyle = '#fe8';
-      ctx.font = '8px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('$', cx, cy + bob + 5);
-      break;
-    case T.KEY:
-      // Key
-      ctx.fillStyle = '#fa0';
-      ctx.beginPath();
-      ctx.arc(cx - 3, cy + bob - 2, 5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#fc4';
-      ctx.beginPath();
-      ctx.arc(cx - 3, cy + bob - 2, 3, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#fa0';
-      ctx.fillRect(cx, cy + bob - 1, 8, 2);
-      ctx.fillRect(cx + 5, cy + bob, 2, 3);
-      ctx.fillRect(cx + 2, cy + bob, 2, 3);
-      break;
-    case T.TRAP:
-      // Hidden trap (subtle)
-      ctx.fillStyle = '#2a1a1a';
-      ctx.fillRect(px + 4, py + 4, TILE - 8, TILE - 8);
-      ctx.strokeStyle = '#3a2020';
-      ctx.lineWidth = 0.5;
-      ctx.strokeRect(px + 6, py + 6, TILE - 12, TILE - 12);
-      break;
-    case T.PLANT:
-      // Chomper plant
-      ctx.fillStyle = '#2a6a2a';
-      ctx.fillRect(cx - 2, cy + 4, 4, 8);
-      ctx.fillStyle = '#4a9a4a';
-      ctx.beginPath();
-      ctx.arc(cx, cy + bob - 2, 8, Math.PI, 0);
-      ctx.fill();
-      ctx.fillStyle = '#3a8a3a';
-      ctx.beginPath();
-      ctx.arc(cx, cy + bob + 2, 8, 0, Math.PI);
-      ctx.fill();
-      // Teeth
-      ctx.fillStyle = '#fff';
-      for (let i = -6; i <= 6; i += 4) {
-        ctx.fillRect(cx + i, cy + bob - 1, 2, 3);
-      }
-      break;
-    case T.EXIT:
-      // Stairs down
-      ctx.fillStyle = '#4f4';
-      ctx.globalAlpha = 0.5 + 0.3 * Math.sin(gameTime * 0.15);
-      ctx.fillRect(px + 4, py + 4, TILE - 8, TILE - 8);
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = '#2a2';
-      for (let i = 0; i < 4; i++) {
-        ctx.fillRect(px + 6 + i*2, py + 8 + i*5, TILE - 12 - i*4, 3);
-      }
-      ctx.fillStyle = '#fff';
-      ctx.font = '8px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('▼', cx, cy + 4);
-      break;
-    case T.STAR_GEM:
-      // Glowing star gem!
-      const glow = 0.5 + 0.5 * Math.sin(gameTime * 0.2);
-      ctx.fillStyle = `rgba(255,255,68,${glow * 0.3})`;
-      ctx.beginPath();
-      ctx.arc(cx, cy, 16, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#ff4';
-      ctx.beginPath();
-      for (let i = 0; i < 10; i++) {
-        const a = (i / 10) * Math.PI * 2 - Math.PI/2;
-        const r = i % 2 === 0 ? 10 : 5;
-        if (i === 0) ctx.moveTo(cx + Math.cos(a)*r, cy + Math.sin(a)*r + bob);
-        else ctx.lineTo(cx + Math.cos(a)*r, cy + Math.sin(a)*r + bob);
-      }
-      ctx.closePath();
-      ctx.fill();
-      ctx.fillStyle = '#fff';
-      ctx.beginPath();
-      ctx.arc(cx, cy + bob, 3, 0, Math.PI * 2);
-      ctx.fill();
-      break;
-  }
-}
-
-function drawHUD(vw, vh) {
-  if (!player) return;
-
-  // Top bar background
-  ctx.fillStyle = 'rgba(0,0,0,0.75)';
-  ctx.fillRect(0, 0, vw, 28);
-
-  // Character name and level
-  ctx.fillStyle = player.color;
-  ctx.font = 'bold 10px Courier New';
-  ctx.textAlign = 'left';
-  ctx.fillText(player.name, 4, 11);
-  ctx.fillStyle = '#aaa';
-  ctx.font = '9px Courier New';
-  ctx.fillText('Lv.' + level + '/40', 4, 22);
-
-  // HP bar
-  const hpX = 80, hpW = 80;
-  ctx.fillStyle = '#400';
-  ctx.fillRect(hpX, 4, hpW, 8);
-  const hpFrac = Math.max(0, player.hp / player.maxHp);
-  ctx.fillStyle = hpFrac > 0.5 ? '#4f4' : hpFrac > 0.25 ? '#fa0' : '#f44';
-  ctx.fillRect(hpX, 4, hpW * hpFrac, 8);
-  ctx.strokeStyle = '#888';
-  ctx.lineWidth = 0.5;
-  ctx.strokeRect(hpX, 4, hpW, 8);
-  ctx.fillStyle = '#fff';
-  ctx.font = '7px Courier New';
-  ctx.textAlign = 'center';
-  ctx.fillText(Math.ceil(Math.max(0, player.hp)) + '/' + player.maxHp, hpX + hpW/2, 11);
-
-  // Items
-  ctx.textAlign = 'left';
-  ctx.font = '9px Courier New';
-  const itemY = 20;
-  ctx.fillStyle = '#fa0';
-  ctx.fillText('🔑' + player.keys, hpX, itemY + 2);
-  ctx.fillStyle = '#f4f';
-  ctx.fillText('🧪' + player.potions, hpX + 35, itemY + 2);
-
-  // Score
-  ctx.textAlign = 'right';
-  ctx.fillStyle = '#ff4';
-  ctx.font = 'bold 10px Courier New';
-  ctx.fillText('⭐' + score, vw - 4, 11);
-
-  // Enemies remaining
-  ctx.fillStyle = '#f88';
-  ctx.font = '9px Courier New';
-  ctx.fillText('👾' + enemies.length, vw - 4, 22);
 
   // Messages
   ctx.textAlign = 'center';
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
-    ctx.globalAlpha = Math.min(1, msg.life / 30);
+    ctx.globalAlpha = Math.min(1, msg.life / 20);
+    ctx.fillStyle = '#000';
+    ctx.font = 'bold 7px Courier New';
+    ctx.fillText(msg.text, viewW / 2 + 1, 11 + i * 10 + 1);
     ctx.fillStyle = msg.color;
-    ctx.font = 'bold 10px Courier New';
-    ctx.fillText(msg.text, vw / 2, 42 + i * 14);
+    ctx.fillText(msg.text, viewW / 2, 11 + i * 10);
   }
   ctx.globalAlpha = 1;
 
-  // Controls hint at bottom
-  ctx.fillStyle = 'rgba(255,255,255,0.2)';
-  ctx.font = '7px Courier New';
-  ctx.textAlign = 'center';
-  ctx.fillText(isMobile ? 'TAP to move • POTION button for bomb' : 'CLICK to move • SPACE for potion bomb', vw/2, vh - 4);
+  ctx.restore(); // undo clip
+
+  // --- HUD ---
+  drawHUD();
 }
 
-function drawZoomWindow(vw, vh) {
-  // Zoom window in corner (like the original's 3D view)
-  const zw = 60, zh = 60;
-  const zx = vw - zw - 4, zy = 30;
+function drawTree(ctx, px, py) {
+  // Brown trunk
+  ctx.fillStyle = '#5a3a1a';
+  ctx.fillRect(px + 6, py + 10, 4, 6);
+  // Green canopy (circular-ish)
+  ctx.fillStyle = '#2a7a2a';
+  ctx.fillRect(px + 2, py + 2, 12, 10);
+  ctx.fillStyle = '#3a9a3a';
+  ctx.fillRect(px + 3, py + 1, 10, 10);
+  ctx.fillRect(px + 4, py, 8, 11);
+  // Highlights
+  ctx.fillStyle = '#4aba4a';
+  ctx.fillRect(px + 5, py + 2, 3, 3);
+  ctx.fillRect(px + 9, py + 4, 2, 2);
+}
 
-  ctx.fillStyle = 'rgba(0,0,0,0.7)';
-  ctx.fillRect(zx, zy, zw, zh);
-  ctx.strokeStyle = '#555';
+function drawHedge(ctx, px, py) {
+  ctx.fillStyle = '#2a6a2a';
+  ctx.fillRect(px, py, TILE, TILE);
+  ctx.fillStyle = '#3a8a3a';
+  ctx.fillRect(px + 1, py + 1, TILE - 2, TILE - 2);
+  ctx.fillStyle = '#4aaa4a';
+  ctx.fillRect(px + 3, py + 3, 3, 3);
+  ctx.fillRect(px + 9, py + 7, 3, 3);
+  ctx.fillRect(px + 5, py + 10, 3, 3);
+}
+
+function drawDoor(ctx, px, py) {
+  ctx.fillStyle = '#5a3a1a';
+  ctx.fillRect(px + 2, py + 1, TILE - 4, TILE - 2);
+  ctx.fillStyle = '#7a5a2a';
+  ctx.fillRect(px + 3, py + 2, TILE - 6, TILE - 4);
+  // Keyhole
+  ctx.fillStyle = '#222';
+  ctx.fillRect(px + 7, py + 6, 2, 2);
+  ctx.fillRect(px + 7, py + 8, 2, 3);
+  // Frame
+  ctx.fillStyle = '#4a2a0a';
+  ctx.fillRect(px + 2, py + 1, 1, TILE - 2);
+  ctx.fillRect(px + TILE - 3, py + 1, 1, TILE - 2);
+  ctx.fillRect(px + 2, py + 1, TILE - 4, 1);
+}
+
+// --- HUD (Bottom Status Panel - matches original Lynx layout) ---
+function drawHUD() {
+  if (!player) return;
+  const hx = 0, hy = viewH;
+
+  // Black background
+  ctx.fillStyle = '#000';
+  ctx.fillRect(hx, hy, viewW, HUD_HEIGHT);
+
+  // Border line at top
+  ctx.fillStyle = '#555';
+  ctx.fillRect(hx, hy, viewW, 1);
+
+  // --- LEFT SECTION: Large item portrait ---
+  const portraitW = 64;
+  const portraitH = HUD_HEIGHT - 4;
+  const portraitX = hx + 4;
+  const portraitY = hy + 2;
+
+  // Portrait background
+  ctx.fillStyle = '#111';
+  ctx.fillRect(portraitX, portraitY, portraitW, portraitH);
+  ctx.strokeStyle = '#444';
   ctx.lineWidth = 1;
-  ctx.strokeRect(zx, zy, zw, zh);
+  ctx.strokeRect(portraitX, portraitY, portraitW, portraitH);
 
-  ctx.fillStyle = '#444';
-  ctx.font = '6px Courier New';
-  ctx.textAlign = 'center';
-  ctx.fillText('ZOOM', zx + zw/2, zy + 8);
-
-  if (zoomTarget && zoomTarget.type === 'enemy') {
-    const e = zoomTarget.obj;
-    // Draw zoomed enemy
-    ctx.fillStyle = e.color;
-    ctx.beginPath();
-    ctx.arc(zx + zw/2, zy + zh/2 + 2, 16, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#000';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    // Eyes
-    ctx.fillStyle = '#000';
-    ctx.beginPath();
-    ctx.arc(zx + zw/2 - 5, zy + zh/2 - 2, 3, 0, Math.PI * 2);
-    ctx.arc(zx + zw/2 + 5, zy + zh/2 - 2, 3, 0, Math.PI * 2);
-    ctx.fill();
-    // Name
-    ctx.fillStyle = '#fff';
-    ctx.font = '6px Courier New';
-    ctx.fillText(e.name, zx + zw/2, zy + zh - 4);
+  // Draw last picked item or nearest enemy large
+  if (lastPickedItem && spriteCache[lastPickedItem]) {
+    // Draw item sprite scaled up 4x
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(spriteCache[lastPickedItem], portraitX + 8, portraitY + 8, 48, 48);
+    ctx.imageSmoothingEnabled = false;
   } else {
-    ctx.fillStyle = '#333';
-    ctx.font = '7px Courier New';
-    ctx.fillText('CLEAR', zx + zw/2, zy + zh/2 + 4);
+    // Draw player character large
+    const spriteKey = 'player_' + player.facing;
+    if (spriteCache[spriteKey]) {
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(spriteCache[spriteKey], portraitX + 8, portraitY + 8, 48, 48);
+    }
+  }
+
+  // --- Divider ---
+  ctx.fillStyle = '#444';
+  ctx.fillRect(portraitX + portraitW + 4, hy + 2, 1, HUD_HEIGHT - 4);
+
+  // --- RIGHT SECTION: Stats list ---
+  const statsX = portraitX + portraitW + 10;
+  const statsY = hy + 10;
+  const lineH = 11;
+
+  ctx.font = '8px Courier New';
+  ctx.textAlign = 'left';
+
+  // LIFE
+  ctx.fillStyle = '#4f4';
+  ctx.fillText('LIFE', statsX, statsY);
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'right';
+  ctx.fillText(Math.ceil(Math.max(0, player.hp)), statsX + 90, statsY);
+
+  // SPEED
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#4af';
+  ctx.fillText('SPEED', statsX, statsY + lineH);
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'right';
+  ctx.fillText(Math.floor(player.speed * 20), statsX + 90, statsY + lineH);
+
+  // STRENGTH
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#fa4';
+  ctx.fillText('STRENGTH', statsX, statsY + lineH * 2);
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'right';
+  ctx.fillText(player.strength, statsX + 90, statsY + lineH * 2);
+
+  // MISSILES
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#f4f';
+  ctx.fillText('MISSILES', statsX, statsY + lineH * 3);
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'right';
+  ctx.fillText(player.missiles, statsX + 90, statsY + lineH * 3);
+
+  // LEVEL
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#ff4';
+  ctx.fillText('LEVEL', statsX, statsY + lineH * 4);
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'right';
+  ctx.fillText(level, statsX + 90, statsY + lineH * 4);
+
+  // SCORE
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#fa0';
+  ctx.fillText('SCORE', statsX, statsY + lineH * 5);
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'right';
+  ctx.fillText(score, statsX + 90, statsY + lineH * 5);
+
+  // --- FAR RIGHT: Keys and potions + minimap ---
+  const rightX = viewW - 56;
+
+  // Keys
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#fa0';
+  ctx.font = '7px Courier New';
+  ctx.fillText('KEYS:' + player.keys, rightX, hy + 12);
+
+  // Potions
+  ctx.fillStyle = '#f4f';
+  ctx.fillText('POTS:' + player.potions, rightX, hy + 22);
+
+  // Enemies count
+  ctx.fillStyle = '#f88';
+  ctx.fillText('FOES:' + enemies.length, rightX, hy + 32);
+
+  // Mini-map
+  const mmX = rightX;
+  const mmY = hy + 38;
+  const mmW = 50;
+  const mmH = 36;
+  const mmScaleX = mmW / MAP_W;
+  const mmScaleY = mmH / MAP_H;
+
+  ctx.fillStyle = '#111';
+  ctx.fillRect(mmX, mmY, mmW, mmH);
+
+  for (let y = 0; y < MAP_H; y += 2) {
+    for (let x = 0; x < MAP_W; x += 2) {
+      const tile = map[y][x];
+      if (tile === T.WALL) continue; // skip walls (already black bg)
+      if (tile === T.EXIT || tile === T.STAR_GEM) ctx.fillStyle = '#4f4';
+      else if (tile === T.GENERATOR) ctx.fillStyle = '#f80';
+      else if (tile === T.DOOR) ctx.fillStyle = '#864';
+      else ctx.fillStyle = '#333';
+      ctx.fillRect(mmX + x * mmScaleX, mmY + y * mmScaleY, Math.max(1, mmScaleX * 2), Math.max(1, mmScaleY * 2));
+    }
+  }
+
+  // Player dot on minimap
+  ctx.fillStyle = '#ff4';
+  ctx.fillRect(mmX + (player.x / TILE) * mmScaleX - 1, mmY + (player.y / TILE) * mmScaleY - 1, 3, 2);
+
+  // Enemy dots
+  ctx.fillStyle = '#f44';
+  for (const e of enemies) {
+    ctx.fillRect(mmX + (e.x / TILE) * mmScaleX, mmY + (e.y / TILE) * mmScaleY, 1, 1);
   }
 }
 
@@ -1356,7 +1686,9 @@ function showCharSelect() {
     const card = document.createElement('div');
     card.className = 'char-card';
     card.innerHTML = `
-      <div class="char-icon">${c.icon}</div>
+      <div style="width:48px;height:48px;margin:4px auto;background:#111;border:1px solid #333;display:flex;align-items:center;justify-content:center;">
+        <canvas class="char-preview-canvas" width="16" height="16" style="width:48px;height:48px;image-rendering:pixelated;"></canvas>
+      </div>
       <div class="char-name" style="color:${c.color}">${c.name}</div>
       <div class="char-weapon">${c.weapon}</div>
       ${statBar('SPD', c.speed, 10, '#4af')}
@@ -1367,6 +1699,15 @@ function showCharSelect() {
     `;
     card.onclick = () => startGame(i);
     grid.appendChild(card);
+
+    // Draw character sprite on the preview canvas
+    setTimeout(() => {
+      const pc = card.querySelector('.char-preview-canvas');
+      if (pc && spriteCache['player_down']) {
+        const pctx = pc.getContext('2d');
+        pctx.drawImage(spriteCache['player_down'], 0, 0);
+      }
+    }, 10);
   });
   container.appendChild(grid);
 }
@@ -1387,6 +1728,7 @@ function startGame(charIndex) {
   state = 'playing';
   level = 1;
   score = 0;
+  lastPickedItem = null;
   player = createPlayer(charIndex);
   projectiles = [];
   particles = [];
@@ -1394,79 +1736,31 @@ function startGame(charIndex) {
   gameTime = 0;
   attackTimer = 0;
   generateMap(level);
-  player.invincible = 60;
+  player.invincible = 45;
   addMessage('LEVEL 1 - FIND THE EXIT!', '#ff4');
-  if (isMobile) document.getElementById('mobile-controls').style.display = 'flex';
+  addMessage('Destroy generators to stop enemy spawns!', '#aaa');
 }
 
 // --- GAME LOOP ---
 let lastTime = 0;
 function gameLoop(time) {
-  const dt = Math.min(3, (time - lastTime) / 16.67); // normalize to ~60fps
+  const dt = Math.min(3, (time - lastTime) / 16.67);
   lastTime = time;
   update(dt);
   draw();
   requestAnimationFrame(gameLoop);
 }
 
-requestAnimationFrame(gameLoop);
-
-// --- MINIMAP (press M) ---
-let showMinimap = false;
+// --- KEYBOARD SHORTCUT: P for potion, M for minimap toggle ---
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'm') showMinimap = !showMinimap;
+  if (state === 'playing' && e.key.toLowerCase() === 'p') usePotion();
 });
 
-// Override draw to add minimap
-const originalDraw = draw;
-// We'll inject minimap into the draw function
-const _origDraw = draw;
-
-// Patch draw to include minimap
-function drawWithMinimap() {
-  _origDraw();
-  if (!showMinimap || state !== 'playing') return;
-
-  const mmScale = 3;
-  const mmX = 5, mmY = 95;
-  ctx.save();
-  ctx.scale(canvas.width / (VIEW_TILES_X * TILE), canvas.height / (VIEW_TILES_Y * TILE));
-
-  ctx.fillStyle = 'rgba(0,0,0,0.8)';
-  ctx.fillRect(mmX - 1, mmY - 1, MAP_W * mmScale + 2, MAP_H * mmScale + 2);
-
-  for (let y = 0; y < MAP_H; y++) {
-    for (let x = 0; x < MAP_W; x++) {
-      const tile = map[y][x];
-      if (tile === T.WALL) ctx.fillStyle = '#333';
-      else if (tile === T.DOOR) ctx.fillStyle = '#864';
-      else if (tile === T.EXIT || tile === T.STAR_GEM) ctx.fillStyle = '#4f4';
-      else ctx.fillStyle = '#111';
-      ctx.fillRect(mmX + x * mmScale, mmY + y * mmScale, mmScale, mmScale);
-    }
-  }
-
-  // Player dot
-  ctx.fillStyle = '#ff4';
-  ctx.fillRect(
-    mmX + (player.x / TILE) * mmScale - 1,
-    mmY + (player.y / TILE) * mmScale - 1, 3, 3
-  );
-
-  // Enemy dots
-  ctx.fillStyle = '#f44';
-  for (const e of enemies) {
-    ctx.fillRect(
-      mmX + (e.x / TILE) * mmScale,
-      mmY + (e.y / TILE) * mmScale, 2, 2
-    );
-  }
-
-  ctx.restore();
-}
-
-// Replace game loop draw
-draw = drawWithMinimap;
+// --- INIT ---
+buildTileCaches();
+initSprites();
+resize();
+requestAnimationFrame(gameLoop);
 </script>
 </body>
 </html>
