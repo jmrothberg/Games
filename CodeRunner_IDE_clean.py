@@ -20,17 +20,27 @@
 #           keeps weak local LLMs focused on the fix instead of regenerating.
 #           Full history is restored after the response completes.
 #
+# FIX PIPELINE (tier-aware):
+#   - get_model_tier() → weak/medium/strong based on backend + model name
+#   - _classify_error() → extracts error type, line number, summary from stderr
+#   - fix_code_from_ide() → builds tier-appropriate prompt with error context
+#   - check_and_handle_ide_proposals() → merges response, auto-retries on failure
+#   - _apply_search_replace_blocks() → 4-layer fuzzy matching cascade
+#   - _log_fix_event() → structured timestamped debug console entries
+#
 # Features:
 # - 8 LLM backends: Ollama, Transformers, Claude, OpenAI, GGUF, vLLM, MLX, Blackwell
 # - Platform-aware defaults: MLX on macOS, Transformers on Linux
 # - Run (F5) + Run & Fix (F6) + LLM Fix button on chat and IDE
 # - Inline diff view with Accept (Ctrl+Enter) / Reject (Escape)
-# - Partial merge: LLM returns only changed functions, merged into full code
+# - Tier-aware fix prompts: weak→full code, medium→changed functions, strong→SEARCH/REPLACE
+# - Partial merge with auto-retry: if merge fails, retries with full code mode
+# - SEARCH/REPLACE 4-layer fuzzy matching (exact → whitespace → indent-normalized → difflib)
 # - Chat edit sync: cut/paste in chat affects what LLM sees on Send
 # - Token counters, speed metrics, and response timer
-# - Smart debugging: clickable error lines, browser error capture
+# - Smart debugging: clickable error lines, browser error capture for HTML games
 # - Debug console: runtime errors only; status info goes to system messages
-# - 15 built-in game presets for one-shot generation
+# - 16 built-in game presets optimized for one-shot generation with local models
 #
 # Installation: pip install -r requirements.txt
 # =============================================================================
@@ -245,7 +255,6 @@ TRANSFORMERS_AVAILABLE = True
 CHROMADB_AVAILABLE = False
 LANGCHAIN_SPLITTERS_AVAILABLE = False
 
-import glob
 import requests  # For Claude API calls and web search
 import queue  # For MCP client response queues
 
@@ -576,12 +585,6 @@ model = 'llama4:17b-maverick-128e-instruct-q8_0'
 # Python/HTML prompts include SEARCH/REPLACE instruction for the fix workflow.
 # =============================================================================
 
-# Removed: therapist_system_message (code-only version)
-# Removed: helpful_system_message (code-only version)
-# Kept for backward-compat references that may still exist:
-helpful_system_message = None
-therapist_system_message = None
-
 # Python programmer system message - not encoded for easy editing
 python_system_message = """You are an expert Python programmer. You excel at:
 1. Implementing game applications using PyGame.
@@ -591,14 +594,91 @@ python_system_message = """You are an expert Python programmer. You excel at:
 """
 
 # HTML programmer system message
-html_system_message = """You are an expert HTML/JavaScript programmer. You excel at:
-1. Implementing game applications using HTML5 Canvas and JavaScript.
-2. Structuring code for readability and maintainability.
-3. Send key information to the console that can be used to debug the code.
-4. When writing a NEW program, include all features — do not simplify.
-5. DO NOT USE EXTERNAL SOUND FILES UNLESS specified by the user JUST comment in code where they would go, but make sure works without.
-6. DO NOT USE EXTERNAL IMAGE FILES create YOUR OWN images using Canvas drawing.
+html_system_message = """You are an expert HTML5 Canvas game programmer. Rules:
+1. Output a SINGLE complete HTML file. All code in one file — no external dependencies.
+2. Use requestAnimationFrame for the game loop at 60fps. Use Canvas 2D context for all drawing.
+3. Draw ALL graphics with Canvas shapes (fillRect, arc, lineTo, etc.) — NO external images or sprites.
+4. NO external sound files — just comment where sounds would go.
+5. Include ALL game features from the prompt — do not simplify or leave placeholders.
+6. Add console.log for key game events (score, level, errors) to help debugging.
+7. Handle keyboard input with addEventListener('keydown'/'keyup') using a keys object for smooth movement.
+8. Structure: init variables → game loop (update + draw) → event listeners. Keep it simple and complete.
 """
+
+# =============================================================================
+# FIX PROMPT TEMPLATES — tier-aware prompts for weak/medium/strong models
+# =============================================================================
+
+# Model name patterns for tier detection (checked via substring match)
+_STRONG_MODEL_PATTERNS = ['claude', 'gpt-4', 'gpt-5', 'o1', 'o3', 'deepseek-v3', 'deepseek-r1']
+_MEDIUM_MODEL_PATTERNS = ['qwen3-32b', 'qwen3-30b', 'codestral', 'deepseek-coder', 'llama-70b',
+                          'llama3-70b', 'command-r', 'mixtral', 'devstral']
+# Everything else (including most MLX local models) defaults to "weak"
+
+FIX_SYSTEM_PROMPTS = {
+    "weak": "You are a code debugger. Fix the bug and return the complete fixed program.",
+    "medium": "You are a code debugger. Return ONLY the fixed functions in a code block. Not the whole program.",
+    "strong": "You are a code debugger. Show changes using SEARCH/REPLACE blocks.",
+}
+
+FIX_FORMAT_INSTRUCTIONS = {
+    "weak_short": "Return the COMPLETE fixed program in a single ```{language} code block. Include ALL code, not just changes.",
+    "weak_long": (
+        "Return ONLY the fixed function(s) in ONE ```{language} code block.\n"
+        "Rules:\n"
+        "1. Say what is wrong in 1 sentence.\n"
+        "2. Show ONLY the fixed function(s). Not the whole program.\n"
+        "3. Include the complete function from 'def' to the last line.\n"
+        "4. Maximum 60 lines of code."
+    ),
+    "medium": (
+        "RULES — follow ALL strictly:\n"
+        "1. Say what's wrong in 1-2 sentences.\n"
+        "2. Show ONLY the fixed function(s) in ONE ```{language} code block.\n"
+        "3. Do NOT return the entire program. Maximum 50 lines of code.\n"
+        "4. No comments like 'ADD THIS' or 'rest of code unchanged'.\n"
+        "5. No explanations inside the code block."
+    ),
+    "strong": (
+        "Show each change as a SEARCH/REPLACE block:\n"
+        "<<<<<<< SEARCH\n"
+        "exact lines to find\n"
+        "=======\n"
+        "replacement lines\n"
+        ">>>>>>> REPLACE\n"
+        "\n"
+        "Multiple blocks OK. Do NOT return the whole file."
+    ),
+}
+
+def _classify_error(stderr_text):
+    """Classify error type from stderr text. Returns (error_type, error_line, error_summary)."""
+    if not stderr_text or not stderr_text.strip():
+        return 'logic', None, ''
+
+    error_summary = stderr_text.strip().split('\n')[-1]
+
+    # Extract line number
+    error_line = None
+    import re as _re
+    m = _re.search(r'line (\d+)', stderr_text)
+    if m:
+        error_line = int(m.group(1))
+
+    # Classify type
+    for pattern, category in [
+        (r'SyntaxError|IndentationError', 'syntax'),
+        (r'TypeError', 'type'),
+        (r'NameError|ReferenceError|is not defined', 'reference'),
+        (r'ModuleNotFoundError|ImportError', 'import'),
+        (r'AttributeError', 'attribute'),
+        (r'IndexError|KeyError', 'index'),
+        (r'ValueError', 'value'),
+    ]:
+        if _re.search(pattern, stderr_text):
+            return category, error_line, error_summary
+
+    return 'runtime', error_line, error_summary
 
 # Claude API configuration - reads from environment variable or file
 def get_claude_api_key():
@@ -4563,6 +4643,21 @@ Select "x + y" and Debug will add ic(x + y)
             self.status_label.config(text="Fixing...", fg="red", font=("TkDefaultFont", 10, "bold"))
             self.root.update_idletasks()
 
+            # Extract actual browser error lines from debug console into
+            # last_run_stderr so fix_code_from_ide() includes them in the
+            # LLM prompt.  Previously this was empty for HTML, so the LLM
+            # received zero error context.
+            error_lines = []
+            for line in debug_content.split('\n'):
+                if any(m in line for m in error_markers):
+                    error_lines.append(line)
+                elif line.startswith('  ') and error_lines:
+                    # Include indented stack trace lines after an error marker
+                    error_lines.append(line)
+                elif line.startswith('Line:') or line.startswith('Message:') or line.startswith('Stack:'):
+                    error_lines.append(line)
+            self.parent.last_run_stderr = '\n'.join(error_lines[-20:]) if error_lines else "Browser JavaScript error detected"
+
             # Enable auto-propose bypass
             self.parent._auto_fix_in_progress = True
 
@@ -4885,9 +4980,10 @@ class OllamaGUI:
         self.generation_active = False  # Flag to track active generation
         self.stop_generation = False  # Flag to signal stopping generation
         self.ollama_available = True  # Flag to track if Ollama is available
-        self.temperature = DoubleVar(value=0.1)  # Default temperature (low = deterministic, one-shot on local LLMs)
-        self.top_p = DoubleVar(value=0.5)  # Default top_p for nucleus sampling
+        self.temperature = DoubleVar(value=0.15)  # Low temperature for deterministic one-shot code generation
+        self.top_p = DoubleVar(value=0.9)  # Nucleus sampling — 0.9 avoids cutting off valid code tokens
         self.top_k = IntVar(value=40)  # Default top_k for top-k sampling
+        self.repetition_penalty = DoubleVar(value=1.08)  # Repetition penalty for local models
         self.last_run_code = None
         self.last_run_stdout = None
         self.last_run_stderr = None
@@ -4961,279 +5057,294 @@ class OllamaGUI:
         self.total_input_tokens = 0  # Running total input tokens (resets on /restart)
         self.total_output_tokens = 0 # Running total output tokens (resets on /restart)
         
-        # Game instruction prompts
+        # =====================================================================
+        # GAME PRESETS — 16 one-shot generation prompts for the dropdown
+        # Each prompt is designed for local models (3-30B parameters).
+        # Key design principles:
+        #   - Specify canvas size, fps, and technical approach explicitly
+        #   - Give concrete pixel sizes, physics constants, colors
+        #   - Describe drawing with Canvas primitives (no external images)
+        #   - Keep scope achievable in a single generation (no multi-file)
+        # To add a new preset: add a key-value pair here. It auto-appears
+        # in the combobox via list(self.game_prompts.keys()) at line ~6260.
+        # =====================================================================
         self.game_prompts = {
             "-- Select Game Preset --": "", # Placeholder
-            "Space Invaders": """Create a Space Invaders game faithful to the 1978 Taito original.
+            "Space Invaders": """Create a complete Space Invaders game as a single HTML file using Canvas.
 
-Key features:
-- Player controls laser cannon at bottom, moves horizontally, fires straight up (one bullet max)
-- 5 rows of 11 aliens (55 total): squid-shaped (top 2), bug-shaped (middle 2), octopus-shaped (bottom)
-- Aliens move in formation, shift horizontally then drop when hitting edges
-- Aliens accelerate and drop bombs as their numbers decrease
-- 4 protective bunkers that erode when hit by player or alien fire
-- Mystery UFO appears occasionally for bonus points
-- Player has 3 lives; game ends when aliens reach bottom or all lives lost
-- Score display at top with classic arcade font
+Game structure:
+- 800x600 canvas, black background, 60fps game loop using requestAnimationFrame
+- Player: green rectangle at bottom, moves left/right with arrow keys, fires with spacebar (1 bullet at a time)
+- Aliens: 5 rows x 11 columns grid. Move right together, drop down one row when the row hits a wall, then move left. Repeat.
+- Alien speed increases as aliens are destroyed. Aliens drop bombs randomly.
+- 4 green bunkers made of small blocks. Bunker blocks are destroyed when hit by player bullet or alien bomb.
+- UFO: red rectangle crosses the top every 15 seconds for bonus points
+- 3 lives, score at top, game over when aliens reach the bottom or lives = 0
+- Press R to restart after game over
 
-GREAT GRAPHICS & ANIMATION:
-- Black background with bright colored sprites
-- Aliens in 3 distinct designs with GREAT smooth animation
-- Green player cannon, green destructible bunkers with GREAT effects
-- White laser bullets, alien bombs with GREAT particle effects""",
-            "Asteroids": """Create an Asteroids game faithful to the 1979 Atari original.
+Drawing (no images, all Canvas shapes):
+- Aliens: draw 3 distinct pixel-art shapes using small filled rectangles (8x8 grid patterns). Top row one shape, middle rows another, bottom rows another.
+- Player cannon: green trapezoid. Bullets: white 2x8 rectangles. Alien bombs: yellow zigzag lines.
+- Animate aliens with 2 frames: toggle between two sprite patterns every 0.5s""",
+            "Asteroids": """Create a complete Asteroids game as a single HTML file using Canvas.
 
-Key features:
-- Player controls triangular spaceship with 360° rotation and momentum physics
-- Thrust propels ship in direction it's facing, ship has inertia
-- Large asteroids (4 at start) split into medium, then small when shot
-- Two UFO types: large (slow, random shots) and small (fast, precise shots)
-- Screen wraparound on all edges
-- Player starts with 3 lives, earns extra life at 10,000 points
-- Ship shows flame animation when thrusting
+Game structure:
+- 800x600 canvas, black background, 60fps requestAnimationFrame loop
+- Ship: white triangle at center, rotates with left/right arrows, thrust with up arrow adds velocity in facing direction
+- Physics: ship has momentum/inertia, drifts in space. Slight friction so it slows gradually.
+- Shooting: spacebar fires white dots from ship nose in facing direction. Max 4 bullets on screen.
+- Asteroids: start with 4 large irregular polygons (random vertices around a radius). When shot, large splits into 2 medium, medium into 2 small, small is destroyed.
+- Screen wrap: everything wraps around all 4 edges
+- Collision: simple circle-based distance checks
+- 3 lives, score tracking, extra life at 10000 points
+- UFO appears every 20 seconds, flies across screen shooting at player
 
-GREAT GRAPHICS & ANIMATION:
-- Pure black background with bright white vector lines
-- Triangular player ship with GREAT thrust flame animation
-- Irregular jagged asteroid shapes as wireframe outlines with GREAT rotation
-- UFOs as classic flying saucer wireframes with GREAT movement
-- All graphics are unfilled wireframe outlines with GREAT visual effects""",
-            "Breakout": """Create a Breakout game faithful to the 1976 Atari original.
+Drawing:
+- Ship: white outlined triangle with orange thrust flame when accelerating
+- Asteroids: white outlined irregular polygons that rotate slowly
+- All graphics are wireframe outlines on black, classic vector look""",
+            "Breakout": """Create a complete Breakout game as a single HTML file using Canvas.
 
-Key features:
-- Player controls white paddle at bottom that moves horizontally
-- 8 rows of colored bricks: red (top), orange, green, yellow (bottom)
-- Ball speed increases as bricks are cleared
-- Ball angle changes based on paddle hit location
-- Paddle shrinks after reaching certain brick rows
-- Three balls (lives) per game
-- Ball can break through multiple bricks on single bounce
-- Solid walls and ceiling as boundaries
+Game structure:
+- 800x600 canvas, black background, 60fps requestAnimationFrame loop
+- Paddle: white rectangle at bottom, 80px wide, moves with left/right arrow keys and mouse
+- Ball: white 8px circle, starts on paddle, launches with spacebar at 45 degree angle
+- Ball bounces off walls, ceiling, and paddle. Reflect Y on top/paddle, reflect X on side walls.
+- Paddle hit position changes ball angle: center=straight up, edges=sharp angle
+- Bricks: 8 rows x 14 columns. Row colors top to bottom: red, red, orange, orange, green, green, yellow, yellow
+- Top rows worth more points (red=7, orange=5, green=3, yellow=1)
+- Ball speed increases 25% after breaking through orange row, another 25% after red row
+- 3 lives, score display, level clears when all bricks gone, then reload bricks with faster ball
 
-GREAT GRAPHICS & ANIMATION:
-- Black background with bright saturated colors
-- White paddle and ball with GREAT smooth movement and effects
-- Colored brick rows: red, orange, green, yellow with GREAT destruction animation
-- White borders for walls and ceiling
-- Blocky arcade font for score with GREAT visual feedback""",
-            "Pac-Man": """Create a Pac-Man game capturing the 1980 Namco original gameplay.
+Drawing:
+- Bricks: filled rounded rectangles with 1px gap between them
+- Ball: white filled circle with short trailing afterimage
+- Clean, simple arcade look""",
+            "Pac-Man": """Create a complete Pac-Man game as a single HTML file using Canvas.
 
-Key features:
-- Yellow Pac-Man moves through maze eating 240 white dots
-- 4 colored ghosts with distinct AI: red chases, pink ambushes, cyan flanks, orange erratic
-- 4 power pellets make ghosts vulnerable (blue) and edible for bonus points
-- Fruit appears periodically for extra points
-- Side tunnels allow screen wrapping
-- Ghosts return to central pen when eaten
-- Grid-based movement with precise alignment
-- Lives counter and level progression
+Game structure:
+- Canvas sized to fit a 28x31 tile grid (each tile 20px). Black background.
+- Maze: define as a 2D array. 1=wall (blue filled rectangles), 0=path with dot, 2=empty, 3=power pellet, 4=ghost house
+- Pac-Man: yellow circle with animated mouth (wedge cutout that opens/closes), moves with arrow keys
+- Movement is grid-aligned: Pac-Man moves tile-to-tile, queued turns execute when reaching an intersection
+- 4 ghosts, each a different color (red, pink, cyan, orange). Draw as a circle on top + wavy bottom edge.
+- Ghost AI: each ghost targets a different tile. Red chases Pac-Man directly. Pink targets 4 tiles ahead. Cyan uses red's position as reference. Orange chases when far, scatters when close.
+- Ghosts have 3 modes: chase, scatter (go to home corner), frightened (blue, wander randomly after power pellet)
+- Eating a power pellet turns ghosts blue for 8 seconds. Eating blue ghost = 200/400/800/1600 points.
+- 240 dots + 4 power pellets per level. Eating all dots wins the level.
+- 3 lives, score display, ghost eyes return to pen when eaten
 
-GREAT GRAPHICS & ANIMATION:
-- Black background with blue maze walls
-- Yellow Pac-Man with GREAT smooth mouth animation and movement
-- 4 distinctly colored ghosts with GREAT unique shapes and animation
-- White dots and larger power pellets with GREAT visual effects
-- Central ghost house and side tunnels with GREAT detail
-- Classic arcade font for score with GREAT visual feedback""",
-            "Frogger": """Create a Frogger game based on the 1981 Konami original.
+Drawing:
+- Maze walls: blue rounded-corner rectangles. Dots: small white circles. Power pellets: large white circles that flash.""",
+            "Frogger": """Create a complete Frogger game as a single HTML file using Canvas.
 
-Key features:
-- Frog starts at bottom, must reach 5 home slots at top safely
-- Bottom half: 5 lanes of traffic moving left/right at different speeds
-- Top half: river with 5 rows of moving logs, turtles, and alligators
-- Frog jumps on logs/turtles to cross river (water = death)
-- Some turtles dive underwater periodically
-- Crocodiles appear on logs with snapping jaws
-- Timer counts down - reaching zero = death
-- Bonus points for remaining time
-- Grid-based movement, 3 lives, multiple difficulty levels
+Game structure:
+- 800x700 canvas. Divided into rows: safe grass at bottom, 5 road lanes, safe median, 5 river rows, 5 home slots at top.
+- Frog: green 30x30 square, moves one row/column per arrow key press (grid-snapping movement)
+- Road (bottom half): cars and trucks move left or right at different speeds per lane. Hitting any vehicle = death.
+- River (top half): logs and turtles move left or right. Frog MUST land on a log or turtle to cross. Falling in water = death. Frog rides on the log/turtle it's standing on.
+- 5 home slots at top: frog must reach each one. Fill all 5 to complete the level.
+- Timer bar at bottom counts down 30 seconds. Time out = death.
+- 3 lives, score: 10 points per row forward, 500 per home slot filled, time bonus
 
-GREAT GRAPHICS & ANIMATION:
-- Purple road, blue river, green grass background with GREAT detail
-- Bright green frog with GREAT smooth 4-leg animation and movement
-- Various colored vehicles with GREAT realistic movement and effects
-- Brown logs, green turtles with GREAT diving animation, green alligators
-- 5 home slots at top, timer bar, score display with GREAT visual feedback
-- Chunky 1980s arcade style graphics with GREAT visual polish""",
-            "Centipede": """Create a Centipede game faithful to the 1981 Atari original.
+Drawing:
+- Grass: green strips. Road: dark gray. River: dark blue.
+- Cars: colored rectangles (red, yellow, white, blue) of different sizes
+- Logs: brown rounded rectangles. Turtles: green circles in groups of 2-3.
+- Frog: bright green square with two darker green eyes""",
+            "Centipede": """Create a complete Centipede game as a single HTML file using Canvas.
 
-Key features:
-- Player controls small gun at bottom, moves in lower portion only
-- Centipede starts at top, moves horizontally then drops when hitting obstacles
-- Centipede consists of 10-12 connected segments following head in chain
-- Player shoots upward, destroying segments and mushrooms (4 hits to destroy mushrooms)
-- When middle segment hit, centipede splits into two independent centipedes
-- Additional enemies: fleas drop mushrooms, spiders zigzag diagonally, scorpions poison mushrooms
-- Each wave increases difficulty and adds more centipedes
-- 3 lives, extra life every 12,000 points, classic arcade scoring
+Game structure:
+- 800x600 canvas, black background, 60fps loop. Playfield divided into a grid (about 30x25 cells).
+- Player: small bright green triangle at bottom, moves anywhere in bottom 6 rows with arrow keys. Fires upward with spacebar.
+- Centipede: 12 connected circle segments that enter from top. Head moves horizontally, all segments follow the path of the one ahead. When hitting a mushroom or wall edge, drop down one row and reverse direction.
+- Shooting a middle segment splits the centipede into two independent centipedes, each with its own head.
+- Mushrooms: scattered randomly on the grid (about 30). Each takes 4 hits to destroy. Draw as colored circles that change color with damage (green→yellow→orange→red→gone).
+- Spider: appears from side, bounces diagonally through the bottom area, destroys mushrooms it touches. Worth 300-900 points based on distance when shot.
+- Flea: drops straight down from top when few mushrooms in lower area, leaves new mushrooms behind.
+- 3 lives, score display, wave counter. New centipede each wave.
 
-GREAT GRAPHICS & ANIMATION:
-- Black background with ultra-bright vivid colors
-- Bright green/yellow segmented centipede with GREAT smooth movement and distinct head
-- Colorful mushrooms with GREAT damage animation and visual effects
-- Various colored enemies with GREAT movement patterns and effects
-- Small player character at bottom with GREAT visual feedback
-- Grid-based layout for mushrooms and movement with GREAT polish""",
-            "Defender": """Defend humanoids from alien abduction.
+Drawing:
+- Centipede head: bright red circle with two dot eyes. Body segments: green circles.
+- Mushrooms: filled circles. Spider: red X shape. Flea: small blue dropping dot.""",
+            "Defender": """Create a complete Defender game as a single HTML file using Canvas.
 
-Key features:
-- Fly spaceship horizontally, rescue walking humanoids from landers
-- Landers turn into mutants if they successfully abduct humanoids
-- Use laser and smart bombs against enemies
+Game structure:
+- 900x500 canvas, black background. Side-scrolling: the world is 4x wider than the screen. Camera follows the player ship.
+- Player ship: small arrow/triangle shape, always at left-center of screen. Thrust with up arrow, reverse direction with left/right arrows. Ship faces left or right.
+- Shooting: spacebar fires a fast horizontal laser in the direction the ship faces
+- Terrain: a green mountain-line at the bottom (array of heights, drawn as a filled polygon)
+- Humanoids: 10 small stick figures walking on the terrain
+- Landers: red circles that descend toward humanoids. If a lander reaches a humanoid, it picks them up and carries them to the top. If it reaches the top, both become a fast-moving mutant.
+- Player can catch falling humanoids after destroying the lander carrying them. Catching = 500 bonus points.
+- Smart bomb (B key): destroys all visible enemies. 3 per life.
+- Minimap: thin strip at top of screen showing full world width with dots for enemies and humanoids
+- 3 lives, score, wave clears when all landers destroyed
 
-GREAT GRAPHICS & ANIMATION:
-- Black background, vector-style thin lines with GREAT detail
-- Colorful enemies with GREAT smooth movement and effects
-- Scrolling terrain with GREAT visual polish and animation""",
-                "Floppy Birds": """Simple Flappy Bird clone.
+Drawing:
+- Ship: white triangle with colored exhaust. Laser: thin white horizontal line.
+- Landers: red circles. Mutants: purple fast-moving triangles. Humanoids: small green stick figures.""",
+            "Flappy Bird": """Create a complete Flappy Bird game as a single HTML file using Canvas.
 
-Key features:
-- Bird falls with gravity, spacebar makes it flap up
-- Fly through pipe gaps, score increases per pipe passed
-- Game over on collision, 'R' to restart
+Game structure:
+- 400x600 canvas, light blue sky background, 60fps requestAnimationFrame loop
+- Bird: yellow 20px circle at x=100, affected by gravity (velocity += 0.4 each frame)
+- Spacebar or click: set bird velocity to -7 (flap up). Bird rotates to face its velocity direction.
+- Pipes: pairs of green rectangles with a 140px vertical gap. New pipe pair every 200px horizontally. Pipes scroll left at 2px/frame.
+- Collision: bird hits pipe rectangle or goes above/below screen = game over
+- Score: +1 each time bird passes a pipe pair. Display large centered score.
+- Ground: brown/green strip at bottom that scrolls left
+- Game states: READY (bird bobs, show "tap to start"), PLAYING (normal game), DEAD (bird falls, show score + "tap to restart")
 
-GREAT GRAPHICS & ANIMATION:
-- Yellow bird with GREAT smooth flapping animation and physics
-- Green pipes with gaps and GREAT scrolling movement
-- Brown ground, blue sky with GREAT visual detail
-- Simple shapes with GREAT visual polish and effects""",
+Drawing:
+- Bird: yellow filled circle with white eye, black pupil, orange triangle beak. Tilt angle based on velocity.
+- Pipes: bright green filled rectangles with darker green cap rectangles on the ends
+- Scrolling ground with simple grass texture pattern""",
 
-            "Doom-Style FPS": """Simple raycasting FPS like Doom.
+            "Doom-Style FPS": """Create a raycasting 3D first-person shooter as a single HTML file using Canvas.
 
-Key features:
-- ARROW KEYS movement, mouse look, raycasting for 3D walls from 2D grid
-- Weapons: pistol, shotgun, chaingun, rocket launcher with number key switching
-- Enemies: simple colored shapes that chase player and attack
+Game structure:
+- 800x600 canvas. Render a 3D view using raycasting from a 2D grid map (like Wolfenstein 3D).
+- Map: 16x16 grid defined as a 2D array. 0=empty, 1-4=different wall types. Include rooms, corridors, and open areas.
+- Raycasting: cast one ray per screen column (800 rays). For each ray, step through the grid using DDA algorithm to find the nearest wall. Draw a vertical stripe whose height = screenHeight / perpendicular_distance.
+- Color walls by type and shade by distance (darker = farther). North/south walls slightly darker than east/west.
+- Floor and ceiling: solid dark gray floor, dark blue ceiling (no need for floor-casting)
+- Player movement: W/S or Up/Down = move forward/back. A/D or Left/Right = rotate view. Collision detection against walls.
+- Enemies: 5 red circles placed on the map. Draw them as scaled sprites (larger when closer). They chase the player and deal damage on contact.
+- Weapon: draw a simple gun shape at bottom center. Spacebar to shoot. Raycast from center to check if an enemy is hit.
+- Health bar, ammo counter, minimap in corner showing top-down view of explored area
 
-GREAT GRAPHICS & ANIMATION:
-- Gray walls with GREAT texture detail and lighting effects
-- Dark floor/ceiling with GREAT depth and perspective
-- Enemy sprites with GREAT scaling animation and visual effects""",
+Drawing:
+- Textured-look walls using vertical color gradient stripes
+- Simple HUD overlay with health and ammo""",
 
-            "Mario Kart": """Top-down kart racing game.
+            "Mario Kart": """Create a top-down racing game as a single HTML file using Canvas.
 
-Key features:
-- Arrow keys control (accelerate, brake, turn), 4-8 AI karts, 3 laps, position tracking
-- Power-ups: item boxes give shells, bananas, mushrooms, lightning, stars with spacebar usage
+Game structure:
+- 800x600 canvas, 60fps loop. Top-down view of an oval/figure-8 race track.
+- Track: define as a path (series of points forming a closed loop). Track surface is dark gray, 80px wide. Grass (green) outside, red/white curbs on edges.
+- Player kart: colored rectangle, 20x12px. Up arrow = accelerate, down = brake, left/right = rotate. Physics: velocity, acceleration, friction. Slower on grass.
+- 3 AI karts that follow the track path at varying speeds. Simple AI: steer toward next waypoint on the track.
+- 3 laps to win. Lap detection: crossing the start/finish line in the correct direction.
+- Items: yellow squares placed on track. Drive over one to get a random item (shown in HUD box). Spacebar to use:
+  - Green shell: fires forward in a straight line, bounces off walls, spins out any kart it hits
+  - Banana: drops behind kart, spins out anyone who hits it
+  - Mushroom: instant speed boost
+- Position display (1st-4th), lap counter, minimap in corner
 
-GREAT GRAPHICS & ANIMATION:
-- Colored karts with GREAT smooth movement and realistic physics
-- Tracks with grass off-road areas and GREAT visual detail
-- Item boxes with GREAT pickup animation and effects
-- Mini-map with GREAT real-time updates and visual feedback""",
-            "Mr. Do!": """Digging action game.
+Drawing:
+- Karts: colored rectangles with small exhaust puff when accelerating
+- Track: dark gray road with white dashed center line, red-white striped curbs""",
+            "Mr. Do!": """Create a complete Mr. Do! digging game as a single HTML file using Canvas.
 
-Key features:
-- Control clown character that digs tunnels through dirt
-- Push apples to crush monsters, collect cherries or kill all monsters to win level
-- Throwable powerball that bounces and returns, alpha monsters drop letters for extra life
+Game structure:
+- 700x600 canvas. Grid-based playfield (about 20x15 cells). Most cells start filled with brown dirt.
+- Player (Mr. Do): red circle character, moves with arrow keys. Moving into a dirt cell digs it (clears it).
+- Cherries: clusters of 4 red dots scattered in the dirt. Collecting all cherries completes the level. Each cherry = 50 points.
+- Apples: 5-6 green circles resting on dirt. When the dirt below an apple is dug away, the apple falls. A falling apple crushes and kills any monster (or the player!) below it. Apples stop when they hit solid ground or another apple.
+- Monsters: 5 red squares that spawn from a central pen. They chase the player through dug tunnels. If no path exists, they slowly dig through dirt.
+- Powerball: spacebar throws a bouncing blue ball in the direction Mr. Do faces. It bounces off walls and kills one monster on contact, then returns to the player after 3 seconds. Only one powerball at a time.
+- Killing all monsters also completes the level. 3 lives, score display.
 
-GREAT GRAPHICS & ANIMATION:
-- Colorful clown character with GREAT movement and facial expressions
-- Brown dirt with GREAT digging animation and particle effects
-- Red apples with GREAT physics and crushing effects
-- Round monsters with GREAT movement patterns and animations
-- Underground setting with GREAT atmospheric detail and lighting""",
-            "Minecraft": """Create a fully functional Minecraft-style voxel building game using Three.js.
+Drawing:
+- Dirt: brown filled cells. Dug paths: black/dark background. Cherries: small red circles in clusters.
+- Mr. Do: red circle with a white hat (small white semicircle on top)
+- Monsters: red squares with simple dot eyes""",
+            "Minecraft": """Create a Minecraft-style voxel building game as a single HTML file using Three.js (load from CDN).
 
-Key features:
-- First-person 3D voxel world with block-based terrain generation
-- ARROW KEYS movement, mouse look, space to jump, shift to sneak/crouch
-- Left click to destroy blocks, right click to place selected block
-- Number keys 1-9 to select different block types from inventory
-- Procedural terrain generation using 3D noise (Simplex or Perlin)
-- Multiple biomes: grassy plains, deserts, forests, mountains, water bodies
-- Day/night cycle with moving sun and changing sky colors
-- Physics: gravity, collision detection, falling blocks
-- Inventory system with hotbar showing selected block type
-- Minimap in top-right corner showing explored chunks
-- Creative mode: unlimited blocks, fly mode (double-tap space)
-- Block types: grass, dirt, stone, cobblestone, wood, leaves, sand, water, bedrock
-- Water blocks with transparency and flowing physics
-- Trees generated naturally in forests
-- Crosshair in center of screen for aiming
-- Performance optimization: chunk-based rendering, frustum culling
+Game structure:
+- Full-window 3D scene with perspective camera. Generate a flat 32x32 terrain of grass blocks.
+- Terrain: top layer grass (green top, brown sides), fill below with dirt, bottom layer bedrock
+- Use simple Perlin/sine height variation so terrain isn't perfectly flat (hills 1-5 blocks tall)
+- First-person controls: WASD to move, mouse to look (pointer lock on click), space to jump, shift to descend in fly mode
+- Block interaction: left click = remove block (raycast from camera center, remove first intersected block), right click = place block on the face of the targeted block
+- Block types: grass, dirt, stone, wood, leaves, sand, water. Number keys 1-7 to select. Show selected type in HUD.
+- Trees: place 5-8 trees randomly (4-6 block brown trunk + green leaf cube cluster on top)
+- Performance: use merged geometry or InstancedMesh for blocks. Only render exposed faces.
+- Simple sky: light blue background color with a yellow circle (sun) on a distant plane
+- Crosshair: white + at screen center. Hotbar HUD at bottom showing block types.
 
-GREAT GRAPHICS & ANIMATION:
-- Smooth first-person camera with mouselook controls
-- Blocky pixel-perfect voxel aesthetics with clean edges
-- Dynamic lighting with shadows from the sun
-- Sky gradient that changes from day to night (blue to purple/black)
-- Water with realistic transparency and reflection effects
-- Trees with trunk and leaf blocks, natural placement
-- Smooth terrain transitions between biomes
-- Particle effects when breaking/placing blocks
-- Atmospheric fog that limits render distance
-- High-performance rendering with 60+ FPS target""",
-            "Super Mario Bros": """Create a Super Mario Bros game faithful to the 1985 Nintendo original.
+Keep it simple: flat-ish terrain, basic box geometry, solid colors per face. No complex biomes or day/night cycle.""",
+            "Super Mario Bros": """Create a Super Mario Bros side-scrolling platformer as a single HTML file using Canvas.
 
-Key features:
-- Side-scrolling platformer with smooth camera that follows Mario
-- Mario runs, jumps, and collects coins while avoiding enemies and obstacles
-- Power-up system: Super Mushroom makes Mario big, Fire Flower gives fireball power
-- Enemies: Goombas (walking mushrooms), Koopas (turtles in shells), Piranha Plants
-- Pipes for level navigation and secret areas
-- Flagpole at end of each level for bonus points based on height
-- Classic level design with platforms, gaps, and destructible bricks
-- Underground and underwater levels with different physics
-- Lives system (3 lives), continue after game over
-- Score system with points for enemies defeated and items collected
-- Warp zones and hidden areas accessible through pipes or secret bricks
+Game structure:
+- 800x450 canvas, 60fps loop. World is wider than screen (3000px). Camera scrolls right to follow Mario.
+- Mario: 24x32 colored rectangle (red hat/shirt, blue overalls). Arrow keys to move, spacebar/up to jump.
+- Physics: gravity pulls Mario down. Jump velocity = -10, gravity = 0.5. Horizontal acceleration with friction. Mario can only jump when standing on ground/platform.
+- Level layout: define as an array of objects with (x, y, width, height, type). Types: ground, brick, question_block, pipe, gap.
+- Ground: brown blocks along the bottom, with gaps Mario can fall into (= death)
+- Question blocks: yellow blocks with "?" drawn on them. Hit from below = coin pops out (+100 points) or mushroom power-up.
+- Bricks: brown blocks that break when hit from below (only when Mario is big)
+- Enemies: Goombas (brown ovals that walk left, die when stomped) and Koopas (green rectangles that become sliding shells when stomped)
+- Pipes: green rectangles as obstacles
+- Power-up: mushroom moves right along ground. Collecting it makes Mario taller (32→48px). Getting hit while big = shrink back. Getting hit while small = death.
+- Flagpole at end of level (x=2800). Touching it = level complete.
+- 3 lives, coin counter, score display
 
-GREAT GRAPHICS & ANIMATION:
-- Bright, colorful side-scrolling world with detailed sprites
-- Smooth Mario animations: walking, jumping, power-up transformations
-- Realistic physics with momentum, gravity, and bouncy jumps
-- Animated background elements like clouds, bushes, and moving platforms
-- Particle effects for coin collection, brick destruction, and enemy defeats
-- Classic 8-bit pixel art style with sharp, clean graphics
-- Scrolling parallax backgrounds with depth layers
-- Animated water effects for underwater levels
-- Detailed level design with foreground and background elements""",
-            "Missile Command": """Create a Missile Command game faithful to the 1980 Atari original.
+Drawing:
+- Mario: simple colored rectangles composing his body (no sprite sheet needed). Flip direction when moving left.
+- Ground/bricks: brown rectangles with dark grid lines. Question blocks: yellow with "?" text. Pipes: green rectangles.
+- Background: light blue sky, simple white cloud rectangles, green bush rectangles""",
+            "Missile Command": """Create a complete Missile Command game as a single HTML file using Canvas.
 
-Key features:
-- Player controls anti-missile batteries at bottom of screen
-- Defend 6 cities from incoming nuclear missiles
-- Missiles split into multiple warheads that spread out
-- Crosshair targeting system with mouse or cursor keys
-- Exploding missile effects that can destroy incoming threats
-- Bonus cities awarded at certain score intervals
-- Increasing difficulty with faster, more numerous missiles
-- Realistic physics for missile trajectories and explosions
-- Score system based on missiles destroyed and cities saved
+Game structure:
+- 800x600 canvas, black background, 60fps loop
+- 6 cities: small cyan building-shape clusters along the bottom of the screen
+- 3 missile batteries: at left, center, right bottom. Each starts with 10 missiles. Draw as small triangles with a missile count number.
+- Incoming missiles: red lines that descend from random top positions toward cities/batteries. They leave a red trail behind them.
+- Player targeting: move crosshair with mouse. Click to fire a defensive missile from the nearest battery that has ammo.
+- Defensive missiles: blue lines that travel from battery toward clicked position. When they arrive, they explode into an expanding/contracting orange circle (radius grows to 40px, then shrinks).
+- Any incoming missile trail that touches an explosion circle is destroyed (chain reactions possible).
+- Waves: wave 1 = 10 incoming missiles. Each wave adds 5 more and they move 10% faster.
+- MIRVs: starting wave 3, some missiles split into 2-3 warheads partway down
+- Scoring: 25 points per destroyed missile, 100 per surviving city at wave end
+- Game ends when all 6 cities are destroyed
 
-GREAT GRAPHICS & ANIMATION:
-- Dark night sky background with stars and horizon
-- Bright white missiles streaking across screen
-- Colorful explosion effects when missiles are destroyed
-- Green cities and missile batteries with damage states
-- Smooth missile trails and particle effects
-- Radar display showing incoming threats
-- Dramatic sound effects for launches and explosions
-- Retro 1980s arcade aesthetic with glowing effects""",
-            "Q*bert": """Create a Q*bert game faithful to the 1982 Gottlieb original.
+Drawing:
+- Cities: clusters of cyan filled rectangles of varying heights (simple skyline shapes)
+- Missile trails: thin lines (red=incoming, blue=defensive). Explosions: filled orange circles that pulse.""",
+            "Q*bert": """Create a complete Q*bert game as a single HTML file using Canvas.
 
-Key features:
-- Q*bert jumps on a pyramid of cubes, changing their color
-- Jump in any of 4 diagonal directions to adjacent cubes
-- All cubes must be changed to target color to complete level
-- Avoid enemies: Coily (snake), Slick and Sam (green balls), Ugg and Wrongway (purple creatures)
-- Collect items for bonus points: green balls, flying discs
-- Falling off pyramid results in life loss
-- Progressive difficulty with more enemies and faster movement
-- 8 different enemy types with unique behaviors
-- Score multipliers and bonus rounds
+Game structure:
+- 600x700 canvas, black background. Draw an isometric pyramid of cubes: 7 rows (1 cube on top, 7 on bottom = 28 cubes total).
+- Each cube drawn as a 3D-looking block: top face (one color), left face (darker shade), right face (different shade). Makes a nice 3D pyramid.
+- Q*bert: orange circle with eyes and a snout, sits on top face of current cube
+- Movement: arrow keys move Q*bert diagonally (up-left, up-right, down-left, down-right to adjacent cubes). Q*bert hops with a small arc animation.
+- Landing on a cube changes its top face color (e.g., blue→yellow). Goal: change ALL cubes to the target color to complete the level.
+- Enemies: Coily (red snake) starts as a purple ball that bounces down the pyramid, then becomes a snake that chases Q*bert. Slick and Sam (green/blue balls) bounce down and revert cube colors.
+- Falling off the edge = lose a life. But there are 2 spinning discs on the sides that teleport Q*bert back to the top.
+- 3 lives, score (25 per cube changed, 500 per level cleared)
+- Level 2+: cubes require 2 color changes (blue→intermediate→target), making it harder
 
-GREAT GRAPHICS & ANIMATION:
-- Colorful isometric pyramid made of cubes
-- Q*bert's smooth jumping animations and sound effects
-- Enemies with distinct colors and movement patterns
-- Cube color-changing effects with satisfying sound
-- Particle effects when Q*bert lands on cubes
-- Animated background with floating platforms
-- Vibrant 1980s arcade color palette
-- Smooth character movements and physics""",
+Drawing:
+- Cubes: isometric projection. Top face = parallelogram, left/right faces = parallelograms creating 3D box look.
+- Q*bert: orange circle with white eye, sitting on top face of cube
+- Simple but effective isometric 3D look""",
+            "Contra Run": """Create a side-scrolling run-and-gun action game inspired by classic Contra as a single HTML file using Canvas.
+
+Game structure:
+- 800x500 canvas, 60fps requestAnimationFrame loop. World scrolls right as the player advances (total world width: 4000px).
+- Player: 20x36 colored rectangle (green body, skin-color face, dark legs). Starts at left side.
+- Controls: left/right arrows to run, spacebar/up to jump, Z or Ctrl to shoot. Player can aim in 8 directions: hold up to shoot up, down to duck and shoot low, diagonals while jumping.
+- Physics: gravity = 0.5, jump velocity = -10. Player can jump onto platforms and over gaps.
+- Bullets: small yellow rectangles that travel fast in the aimed direction. Player can fire every 150ms.
+- Level layout: array of platforms and terrain. Mix of flat ground, elevated platforms, gaps to jump over, and stairs.
+- Enemies (spawn at intervals ahead of the player):
+  1. Soldiers: red rectangles that run toward player and shoot horizontally every 2 seconds
+  2. Turrets: gray squares fixed on platforms that aim and fire at the player every 1.5 seconds
+  3. Runners: orange rectangles that sprint toward the player (no shooting, just contact damage)
+- Enemy bullets: small red dots. Player bullets: small yellow dots.
+- Getting hit = lose a life (flash briefly and get 2s invincibility). 3 lives.
+- Power-ups: blue diamond drops from some enemies. Collecting it upgrades weapon:
+  - Level 0: single shot. Level 1: faster fire rate. Level 2: spread shot (3 bullets in a fan)
+- Boss at x=3600: large red rectangle (80x60) with a visible health bar (20 HP). Fires 3 bullets in a spread pattern every second. Defeating boss = you win.
+- Score: 100 per soldier, 200 per turret, 1000 for boss
+
+Drawing:
+- Background: dark blue sky gradient at top, green jungle ground. Parallax: distant mountains scroll at half speed.
+- Player: green rectangle body, runs with simple leg toggle animation (swap between 2 poses). Flashes white when hit.
+- Explosions: when enemies die, show expanding orange circle that fades out over 10 frames.
+- HUD: lives, score, weapon level at top of screen""",
         }
         self.selected_game_prompt = StringVar(value="-- Select Game Preset --")
         
@@ -5901,7 +6012,7 @@ GREAT GRAPHICS & ANIMATION:
         temp_label_frame.pack(side=tk.LEFT)
 
         Label(temp_label_frame, text="Temperature:").pack(side=tk.LEFT)
-        self.temp_value_label = Label(temp_label_frame, text="0.1")
+        self.temp_value_label = Label(temp_label_frame, text="0.15")
         self.temp_value_label.pack(side=tk.LEFT, padx=5)
 
         # Temperature slider
@@ -5922,9 +6033,9 @@ GREAT GRAPHICS & ANIMATION:
         preset_frame = Frame(self.temp_frame)
         preset_frame.pack(side=tk.RIGHT)
         
-        Button(preset_frame, text="Code Exact (0.15)", command=lambda: self.set_temperature(0.15)).pack(side=tk.LEFT, padx=2)
-        Button(preset_frame, text="Precise (0.2)", command=lambda: self.set_temperature(0.2)).pack(side=tk.LEFT, padx=2)
-        Button(preset_frame, text="Game (0.35)", command=lambda: self.set_temperature(0.35)).pack(side=tk.LEFT, padx=2)
+        Button(preset_frame, text="Exact (0.1)", command=lambda: self.set_temperature(0.1)).pack(side=tk.LEFT, padx=2)
+        Button(preset_frame, text="Code (0.15)", command=lambda: self.set_temperature(0.15)).pack(side=tk.LEFT, padx=2)
+        Button(preset_frame, text="Game (0.25)", command=lambda: self.set_temperature(0.25)).pack(side=tk.LEFT, padx=2)
         Button(preset_frame, text="Balanced (0.5)", command=lambda: self.set_temperature(0.5)).pack(side=tk.LEFT, padx=2)
         Button(preset_frame, text="Creative (0.8)", command=lambda: self.set_temperature(0.8)).pack(side=tk.LEFT, padx=2)
 
@@ -5946,8 +6057,8 @@ GREAT GRAPHICS & ANIMATION:
         # Top-p presets
         topp_preset_frame = Frame(self.topp_frame)
         topp_preset_frame.pack(side=tk.RIGHT)
-        Button(topp_preset_frame, text="Precise (0.5)", command=lambda: self.top_p.set(0.5)).pack(side=tk.LEFT, padx=2)
-        Button(topp_preset_frame, text="Balanced (0.9)", command=lambda: self.top_p.set(0.9)).pack(side=tk.LEFT, padx=2)
+        Button(topp_preset_frame, text="Focused (0.8)", command=lambda: self.top_p.set(0.8)).pack(side=tk.LEFT, padx=2)
+        Button(topp_preset_frame, text="Code (0.9)", command=lambda: self.top_p.set(0.9)).pack(side=tk.LEFT, padx=2)
         Button(topp_preset_frame, text="Creative (0.95)", command=lambda: self.top_p.set(0.95)).pack(side=tk.LEFT, padx=2)
 
         # Top-k control
@@ -5970,6 +6081,26 @@ GREAT GRAPHICS & ANIMATION:
         Button(topk_preset_frame, text="Precise (10)", command=lambda: self.top_k.set(10)).pack(side=tk.LEFT, padx=2)
         Button(topk_preset_frame, text="Balanced (40)", command=lambda: self.top_k.set(40)).pack(side=tk.LEFT, padx=2)
         Button(topk_preset_frame, text="Creative (80)", command=lambda: self.top_k.set(80)).pack(side=tk.LEFT, padx=2)
+
+        # Repetition penalty control
+        self.rep_penalty_frame = Frame(main_frame)
+        Label(self.rep_penalty_frame, text="Rep. Penalty:").pack(side=tk.LEFT, padx=(0, 5))
+        self.rep_penalty_slider = Scale(
+            self.rep_penalty_frame,
+            from_=1.0,
+            to=1.3,
+            resolution=0.02,
+            orient=tk.HORIZONTAL,
+            variable=self.repetition_penalty,
+            length=200
+        )
+        self.rep_penalty_slider.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        rep_preset_frame = Frame(self.rep_penalty_frame)
+        rep_preset_frame.pack(side=tk.RIGHT)
+        Button(rep_preset_frame, text="Off (1.0)", command=lambda: self.repetition_penalty.set(1.0)).pack(side=tk.LEFT, padx=2)
+        Button(rep_preset_frame, text="Light (1.05)", command=lambda: self.repetition_penalty.set(1.05)).pack(side=tk.LEFT, padx=2)
+        Button(rep_preset_frame, text="Normal (1.08)", command=lambda: self.repetition_penalty.set(1.08)).pack(side=tk.LEFT, padx=2)
+        Button(rep_preset_frame, text="Strong (1.15)", command=lambda: self.repetition_penalty.set(1.15)).pack(side=tk.LEFT, padx=2)
 
         # Max tokens control for GGUF (initially hidden)
         self.max_tokens_frame = Frame(main_frame)
@@ -6157,7 +6288,8 @@ GREAT GRAPHICS & ANIMATION:
             preset_frame,
             textvariable=self.selected_game_prompt,
             values=list(self.game_prompts.keys()),
-            state="readonly" # Prevent typing custom values
+            state="readonly", # Prevent typing custom values
+            height=20  # Show all game presets without scrolling
         )
         self.game_preset_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.game_preset_combo.bind("<<ComboboxSelected>>", self.on_game_preset_selected)
@@ -6862,7 +6994,7 @@ Based on the above context, please answer: {input_text}"""
                 # Chat is now always editable
                 self.chat_display.insert(tk.END, "\n\n[Generation stopped]")
                 self.chat_display.see(tk.END)
-                
+
                 # Still add what we got to the history
                 if full_response:
                     self.messages.append({'role': 'assistant', 'content': full_response})
@@ -6884,10 +7016,17 @@ Based on the above context, please answer: {input_text}"""
                     self.messages.append(fix_request)
                     self.messages.append({'role': 'assistant', 'content': full_response})
                     self._pre_fix_messages = None
-                
+
                 # Complete the message display - chat is now always editable
                 self.chat_display.insert(tk.END, "\n\n")
                 self.chat_display.see(tk.END)
+
+            # Route fix response to IDE — check_and_handle_ide_proposals
+            # was previously only called from _display_message_impl which
+            # never receives the full streaming response (it gets "" at start).
+            # This explicit call ensures the fix response is routed to the IDE.
+            if full_response:
+                self.root.after(0, lambda r=full_response: self.check_and_handle_ide_proposals(r))
             
         except Exception as e:
             # Handle any errors
@@ -7602,7 +7741,7 @@ Based on the above context, please answer: {input_text}"""
                 temp=self.temperature.get(),
                 top_p=self.top_p.get(),
                 top_k=self.top_k.get(),
-                repetition_penalty=1.08,
+                repetition_penalty=self.repetition_penalty.get(),
                 repetition_context_size=64
             )
 
@@ -9053,15 +9192,54 @@ Based on the above context, please answer: {input_text}"""
                     # changed functions, merge them into the original rather
                     # than showing a raw diff that deletes everything else.
                     merged = self._merge_partial_fix(self.ide_original_code, proposed_code)
-                    final_code = merged if merged else proposed_code
 
-                    if hasattr(self, 'ide_window'):
-                        self.propose_code_changes(final_code)
+                    if merged:
+                        self._log_fix_event("merge", strategy="partial", result="SUCCESS")
+                        if hasattr(self, 'ide_window'):
+                            self.propose_code_changes(merged)
+                            self._auto_fix_in_progress = False
+                            self.show_copy_status("💡 Fixed code proposed to IDE - check IDE window to accept/reject", 4000)
+                        self.ide_original_code = None
+                        return
+
+                    # Merge failed — check if this looks like a complete program
+                    orig_lines = len(self.ide_original_code.strip().split('\n'))
+                    prop_lines = len(proposed_code.split('\n'))
+                    looks_complete = prop_lines >= orig_lines * 0.5
+
+                    if looks_complete:
+                        # Proposed code is substantial — show diff directly
+                        self._log_fix_event("merge", strategy="direct_diff", result="fragment is large enough")
+                        if hasattr(self, 'ide_window'):
+                            self.propose_code_changes(proposed_code)
+                            self._auto_fix_in_progress = False
+                            self.show_copy_status("💡 Fixed code proposed to IDE - check IDE window to accept/reject", 4000)
+                        self.ide_original_code = None
+                        return
+
+                    # Fragment is too small to be useful — auto-retry with full code
+                    if not getattr(self, '_fix_auto_retry_done', False):
+                        self._fix_auto_retry_done = True
+                        self._log_fix_event("merge", strategy="all", result="FAILED — auto-retrying with full code")
+                        self.display_status_message("Partial fix couldn't be merged. Retrying with full code...")
+                        self.ide_original_code = None
                         self._auto_fix_in_progress = False
-                        self.show_copy_status("💡 Fixed code proposed to IDE - check IDE window to accept/reject", 4000)
+                        # Schedule auto-retry on main thread
+                        original_code = self.ide_window.get_content() if self.ide_window else code_content
+                        self.root.after(100, lambda c=original_code: self.fix_code_from_ide(c, _is_auto_retry=True))
+                        return
+                    else:
+                        # Already retried once — show whatever we have
+                        self._fix_auto_retry_done = False
+                        self._log_fix_event("merge", strategy="fallback", result="showing raw diff after retry")
+                        if hasattr(self, 'ide_window'):
+                            self.propose_code_changes(proposed_code)
+                            self._auto_fix_in_progress = False
+                        self.ide_original_code = None
+                        return
 
-                    self.ide_original_code = None
-                    return
+        # Reset retry flag when not in fix mode
+        self._fix_auto_retry_done = False
 
         # If IDE has content and response contains code that seems to be a modification
         if hasattr(self, 'ide_current_content') and self.ide_current_content:
@@ -9575,17 +9753,19 @@ Based on the above context, please answer: {input_text}"""
             return error_msg
 
     def toggle_sampling_controls(self):
-        """Toggle visibility of sampling controls (temperature, top_p, top_k)"""
+        """Toggle visibility of sampling controls (temperature, top_p, top_k, rep penalty)"""
         if self.show_sampling_controls.get():
             # Show sampling controls
             self.temp_frame.pack(fill=tk.X, pady=(0, 10))
             self.topp_frame.pack(fill=tk.X, pady=(0, 5))
-            self.topk_frame.pack(fill=tk.X, pady=(0, 10))
+            self.topk_frame.pack(fill=tk.X, pady=(0, 5))
+            self.rep_penalty_frame.pack(fill=tk.X, pady=(0, 10))
         else:
             # Hide sampling controls
             self.temp_frame.pack_forget()
             self.topp_frame.pack_forget()
             self.topk_frame.pack_forget()
+            self.rep_penalty_frame.pack_forget()
 
     def update_system_message_for_targeted_changes(self):
         """Update the system message based on current code mode.
@@ -11279,22 +11459,71 @@ Based on the above context, please answer: {input_text}"""
     # ---------- Fix workflow: IDE -> LLM -> diff -> Accept/Reject ----------
     # Called by both "Ask LLM to Fix" and Run & Fix (F6) after error detection.
 
-    def fix_code_from_ide(self, code_content):
-        """Fix code from IDE.
+    def get_model_tier(self):
+        """Detect model capability tier: 'weak', 'medium', or 'strong'.
 
-        TWO MODES (controlled by 'Return full code' checkbox in IDE toolbar):
-        - OFF (default): Ask LLM to explain the bug and show only the
-          corrected lines. Fast, cheap, works for trivial errors.
-        - ON: Ask LLM to return the complete fixed program. The diff
-          view shows what changed. Use for big changes / rewrites.
+        Used to select the right fix prompt format.  MLX local models
+        default to 'weak' unless they match a known-capable pattern.
+        Cloud APIs (Claude, OpenAI) default to 'strong'.
+        """
+        backend = self.backend_var.get()
+        if backend == 'claude':
+            return 'strong'
+        if backend == 'openai':
+            model = self.model_var.get().lower()
+            if any(p in model for p in _STRONG_MODEL_PATTERNS):
+                return 'strong'
+            return 'medium'
+
+        # Local backends: MLX, Ollama, GGUF, vLLM, Transformers
+        model = self.model_var.get().lower()
+        # Check selected MLX/GGUF/Transformers path for model name
+        for attr in ('selected_mlx_path', 'selected_gguf_path', 'selected_transformers_path'):
+            v = getattr(self, attr, None)
+            if v:
+                val = v.get() if hasattr(v, 'get') else str(v)
+                model = val.lower()
+                break
+
+        for p in _STRONG_MODEL_PATTERNS:
+            if p in model:
+                return 'strong'
+        for p in _MEDIUM_MODEL_PATTERNS:
+            if p in model:
+                return 'medium'
+        return 'weak'
+
+    def _log_fix_event(self, event, **kwargs):
+        """Write a structured, timestamped line to the debug console for the fix pipeline.
+
+        Example output:
+            [15:30:01] FIX START | error: runtime | line: 42 | lang: python | tier: weak | mode: full_code
+            [15:30:01] PROMPT    | 2450 chars | tier: weak | mode: full_code
+            [15:30:15] MERGE     | strategy: partial | result: SUCCESS
+        """
+        import datetime
+        ts = datetime.datetime.now().strftime('%H:%M:%S')
+        parts = [f"[{ts}] {event.upper():10s}"]
+        for k, v in kwargs.items():
+            parts.append(f"{k}: {v}")
+        line = " | ".join(parts)
+        self.add_to_debug_console(line)
+
+    def fix_code_from_ide(self, code_content, _is_auto_retry=False):
+        """Fix code from IDE with tier-aware prompting.
+
+        Adapts the fix prompt based on model capability:
+        - weak models (Qwen 3.5, small Llama): full code for short programs,
+          targeted with better guidance for long programs
+        - medium models (Qwen3 32B, Codestral): targeted fix with strict rules
+        - strong models (Claude, GPT-4): SEARCH/REPLACE blocks
+
+        The 'Return full code' checkbox in the IDE toolbar overrides to full
+        code mode regardless of tier.  _is_auto_retry is set internally when
+        a targeted fix failed to merge and we retry with full code.
         """
         # Get any text from the user input box for additional context
         user_message = self.user_input.get("1.0", tk.END).strip()
-
-        # Get debug console content for context
-        self.debug_console.config(state=tk.NORMAL)
-        debug_content = self.debug_console.get("1.0", tk.END).strip()
-        self.debug_console.config(state=tk.DISABLED)
 
         # Determine language based on current system mode
         mode = self.system_mode.get()
@@ -11305,83 +11534,96 @@ Based on the above context, please answer: {input_text}"""
         # Store the original code for the accept/reject workflow
         self.ide_original_code = code_content
 
-        # Build error context
+        # --- Classify error and build error context ---
+        error_type, error_line, error_summary = _classify_error(
+            self.last_run_stderr if self.last_run_stderr else '')
+
         error_section = ""
         if self.last_run_stderr and self.last_run_stderr.strip():
-            error_section = f"\nError:\n```\n{self.last_run_stderr.strip()}\n```"
+            error_section = f"\nError ({error_type}):\n```\n{self.last_run_stderr.strip()[-800:]}\n```"
         if self.last_run_stdout and self.last_run_stdout.strip():
-            error_section += f"\nOutput:\n```\n{self.last_run_stdout.strip()}\n```"
+            error_section += f"\nProgram output:\n```\n{self.last_run_stdout.strip()[-400:]}\n```"
+
+        # Show code around the error line to help weak models focus
+        error_context = ""
+        if error_line:
+            lines = code_content.split('\n')
+            start = max(0, error_line - 6)
+            end = min(len(lines), error_line + 4)
+            numbered = '\n'.join(f"{i+1:4d}| {l}" for i, l in enumerate(lines[start:end], start))
+            error_context = f"\nCode around error (line {error_line}):\n```\n{numbered}\n```"
 
         problem_desc = f"Problem: {user_message}" if user_message else "Find and fix the bugs."
 
-        # Check if user wants full code back
+        # --- Determine fix mode based on tier + code length + user override ---
+        tier = self.get_model_tier()
         want_full_code = getattr(self.ide_window, 'return_full_code', None)
-        full_code_mode = want_full_code and want_full_code.get()
+        user_forced_full = want_full_code and want_full_code.get()
+        code_line_count = code_content.count('\n') + 1
 
-        if full_code_mode:
-            # FULL CODE MODE: send program, get complete fixed program back
-            prompt = f"""Fix this {code_type} program.
-
-```{language}
-{code_content}
-```
-{error_section}
-{problem_desc}
-
-Return the COMPLETE fixed program in a single ```{language} code block. Do not skip any part of the code."""
-            mode_label = "full code"
-        else:
-            # TARGETED FIX MODE (default): return only the fixed functions
-            prompt = f"""Fix this {code_type} program:
-
-```{language}
-{code_content}
-```
-{error_section}
-{problem_desc}
-
-One sentence: what is wrong.
-Then ONE ```{language} code block with ONLY the fixed functions. Not the whole program."""
+        if user_forced_full or _is_auto_retry:
+            # User toggled "Return full code" or auto-retry after merge failure
+            fix_fmt = FIX_FORMAT_INSTRUCTIONS['weak_short'].format(language=language)
+            fix_sys = FIX_SYSTEM_PROMPTS['weak']
+            mode_label = "full code" + (" (auto-retry)" if _is_auto_retry else "")
+        elif tier == 'strong':
+            fix_fmt = FIX_FORMAT_INSTRUCTIONS['strong'].format(language=language)
+            fix_sys = FIX_SYSTEM_PROMPTS['strong']
+            mode_label = "SEARCH/REPLACE"
+        elif tier == 'medium':
+            fix_fmt = FIX_FORMAT_INSTRUCTIONS['medium'].format(language=language)
+            fix_sys = FIX_SYSTEM_PROMPTS['medium']
             mode_label = "targeted fix"
+        else:
+            # Weak model — adaptive: full code for short, targeted for long
+            if code_line_count <= 200:
+                fix_fmt = FIX_FORMAT_INSTRUCTIONS['weak_short'].format(language=language)
+                fix_sys = FIX_SYSTEM_PROMPTS['weak']
+                mode_label = "full code (short program)"
+            else:
+                fix_fmt = FIX_FORMAT_INSTRUCTIONS['weak_long'].format(language=language)
+                fix_sys = FIX_SYSTEM_PROMPTS['medium']
+                mode_label = "targeted fix (long program)"
 
-        # Display what we're sending
-        if self.last_run_stderr and self.last_run_stderr.strip():
-            error_summary = self.last_run_stderr.strip().split("\n")[-1]
-            display_message = f"[Fix code — error: {error_summary}]"
+        # --- Build the fix prompt ---
+        prompt = f"""Fix this {code_type} program.
+{error_section}{error_context}
+{problem_desc}
+
+```{language}
+{code_content}
+```
+
+{fix_fmt}"""
+
+        # --- Display what we're sending ---
+        if error_summary:
+            display_msg = f"[Fix code — {error_type} error: {error_summary}]"
             if user_message:
-                display_message = f"{display_message}\n{user_message}"
+                display_msg = f"{display_msg}\n{user_message}"
         elif user_message:
-            display_message = f"[Ask LLM to fix code]\n{user_message}"
+            display_msg = f"[Ask LLM to fix code]\n{user_message}"
         else:
-            display_message = "[Ask LLM to review and fix code]"
+            display_msg = "[Ask LLM to review and fix code]"
 
-        self.display_message("You", display_message)
+        self.display_message("You", display_msg)
 
-        # Surface fix status in system console
-        if self.last_run_stderr and self.last_run_stderr.strip():
-            self.display_system_message(f"--- {mode_label} mode — error: {self.last_run_stderr.strip().split(chr(10))[-1]}")
-        else:
-            self.display_system_message(f"Fix request sent ({mode_label} mode)")
+        # Structured fix log
+        self._log_fix_event("fix_start", error_type=error_type,
+                            error_line=error_line or 'N/A',
+                            language=language, tier=tier, mode=mode_label)
+        self._log_fix_event("prompt_sent", chars=len(prompt), tier=tier, mode=mode_label)
 
         # Clear input box
         self.user_input.delete("1.0", tk.END)
 
         # Save full history, send only focused context for fix
-        # The fix prompt already contains full current code + errors + rules,
-        # so old conversation history just confuses weaker LLMs.
-        # Use a fix-specific system message (the normal one says "include all features"
-        # which contradicts fix mode's "only return changed functions").
-        fix_system_message = {'role': 'system', 'content':
-            "You are a code debugger. Return ONLY the fixed functions in a code block. "
-            "Not the whole program."}
+        fix_system_message = {'role': 'system', 'content': fix_sys}
         self._pre_fix_messages = list(self.messages)
         self.messages = [
             fix_system_message,
             {'role': 'user', 'content': prompt}
         ]
-
-        # Log what we're sending (user-facing status in system console)
-        self.display_system_message(f"FIX MODE: sending {len(self.messages)} messages (system + fix prompt), {len(prompt)} chars")
 
         # Disable input while processing
         self.user_input.config(state=tk.DISABLED)
@@ -11775,6 +12017,13 @@ Then ONE ```{language} code block with ONLY the fixed functions. Not the whole p
     def _apply_search_replace_blocks(self, original_code, message):
         """Parse SEARCH/REPLACE blocks from LLM response and apply them to original code.
 
+        Uses a 4-layer matching cascade (inspired by Aider) to handle
+        whitespace drift and indentation differences from weak models:
+          Layer 1: Exact string match
+          Layer 2: Whitespace-insensitive (rstrip per line, sliding window)
+          Layer 3: Indentation-normalized (strip leading whitespace, match, re-indent)
+          Layer 4: Fuzzy match (difflib SequenceMatcher ratio >= 0.85)
+
         Returns the modified code, or None if no SEARCH/REPLACE blocks were found.
         """
         import re
@@ -11814,6 +12063,80 @@ Then ONE ```{language} code block with ONLY the fixed functions. Not the whole p
                         applied += 1
                         found = True
                         break
+
+                if not found:
+                    # Layer 3: Indentation-normalized match
+                    # Strip ALL leading whitespace, match content, then re-indent with original indentation
+                    search_stripped = [line.strip() for line in search_text.split('\n')]
+                    # Remove empty lines at start/end for matching
+                    while search_stripped and not search_stripped[0]:
+                        search_stripped.pop(0)
+                    while search_stripped and not search_stripped[-1]:
+                        search_stripped.pop()
+
+                    if search_stripped:
+                        result_lines = result.split('\n')
+                        search_len = len(search_stripped)
+                        for i in range(len(result_lines) - search_len + 1):
+                            candidate = [line.strip() for line in result_lines[i:i + search_len]]
+                            if candidate == search_stripped:
+                                # Matched! Re-indent replacement using the original indentation
+                                orig_indent = ''
+                                for ch in result_lines[i]:
+                                    if ch in (' ', '\t'):
+                                        orig_indent += ch
+                                    else:
+                                        break
+                                replace_lines = replace_text.split('\n')
+                                # Detect indentation in replacement text
+                                rep_indent = ''
+                                for rl in replace_lines:
+                                    if rl.strip():
+                                        for ch in rl:
+                                            if ch in (' ', '\t'):
+                                                rep_indent += ch
+                                            else:
+                                                break
+                                        break
+                                # Re-indent: remove replacement's base indent, add original's
+                                reindented = []
+                                for rl in replace_lines:
+                                    if rl.startswith(rep_indent):
+                                        reindented.append(orig_indent + rl[len(rep_indent):])
+                                    else:
+                                        reindented.append(rl)
+                                result_lines[i:i + search_len] = reindented
+                                result = '\n'.join(result_lines)
+                                applied += 1
+                                found = True
+                                self.add_to_debug_console(f"SEARCH/REPLACE: indent-normalized match at line {i+1}")
+                                break
+
+                if not found:
+                    # Layer 4: Fuzzy match using difflib SequenceMatcher
+                    from difflib import SequenceMatcher
+                    search_lines_clean = [line.rstrip() for line in search_text.split('\n')]
+                    result_lines = result.split('\n')
+                    search_len = len(search_lines_clean)
+                    best_ratio = 0.0
+                    best_idx = -1
+
+                    for i in range(len(result_lines) - search_len + 1):
+                        candidate = '\n'.join(result_lines[i:i + search_len])
+                        search_joined = '\n'.join(search_lines_clean)
+                        ratio = SequenceMatcher(None, search_joined, candidate).ratio()
+                        if ratio > best_ratio:
+                            best_ratio = ratio
+                            best_idx = i
+
+                    if best_ratio >= 0.85 and best_idx >= 0:
+                        replace_lines = replace_text.split('\n')
+                        result_lines[best_idx:best_idx + search_len] = replace_lines
+                        result = '\n'.join(result_lines)
+                        applied += 1
+                        found = True
+                        self.add_to_debug_console(
+                            f"SEARCH/REPLACE: fuzzy match at line {best_idx+1} (ratio={best_ratio:.2f})")
 
                 if not found:
                     self.add_to_debug_console(f"SEARCH/REPLACE: could not match block ({search_text[:50]}...)")

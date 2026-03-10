@@ -46,8 +46,18 @@ This two-phase approach (full program for generation, changed-functions-only for
 ### Diff & Merge Strategy
 
 - Uses `difflib.SequenceMatcher` opcodes for intelligent merging of partial LLM responses
-- Supports SEARCH/REPLACE blocks (`<<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE`) with fuzzy fallback
+- Supports SEARCH/REPLACE blocks (`<<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE`) with 4-layer fuzzy matching cascade:
+  1. Exact match → 2. Whitespace-insensitive → 3. Indentation-normalized → 4. difflib fuzzy (ratio ≥ 0.85)
 - Falls back to function-name matching when merging partial returns
+- Auto-retry: if merge fails and the fragment is too small, automatically retries with full-code mode (one retry max)
+
+### Fix Pipeline (tier-aware)
+
+- `get_model_tier()` classifies current model as weak/medium/strong based on backend and model name patterns
+- `_classify_error()` extracts error type, line number, and summary from stderr
+- `fix_code_from_ide()` builds tier-appropriate prompts with error context lines
+- Weak models on short code (≤200 lines) get full-code mode; on long code get targeted mode with auto-retry fallback
+- `_log_fix_event()` writes structured timestamped entries to debug console for pipeline visibility
 
 ### Message Routing (three distinct channels)
 
@@ -68,11 +78,11 @@ Main Tkinter GUI thread + background threads for LLM calls. Thread-safe message 
 
 - `.env` / `anthropic_key.txt` / `openai_key.txt` — API keys (never committed)
 - `config.json` — Model configuration (currently Qwen3 VL MOE)
-- Default sampling: Temperature 0.1, Top-p 0.5, Top-k 40, Max tokens 16,000
+- Default sampling: Temperature 0.15, Top-p 0.9, Top-k 40, Repetition penalty 1.08, Max tokens 16,000
 
 ## Key Patterns to Know
 
 - **All optional dependencies are try/except imported** — the app gracefully degrades if packages like `jedi`, `pygments`, `chromadb`, etc. are missing
 - **System prompts differ by mode** — "Python Programmer" and "HTML Programmer" for generation; a separate "Fix Mode" system prompt replaces the generation one during fixes
 - **Chat is editable** — Users can cut/paste in the chat display to modify history; `Send` rebuilds the message list from visible text
-- **15 built-in game presets** — Dropdown prompts for one-shot game generation (Space Invaders, Asteroids, etc.)
+- **16 built-in game presets** — Dropdown prompts optimized for one-shot generation with local models (Space Invaders, Asteroids, Contra Run, etc.). Each preset specifies concrete canvas sizes, physics constants, and drawing instructions.

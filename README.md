@@ -103,15 +103,13 @@ When you click **LLM Fix**, CodeRunner sends only **two messages** to the LLM:
 
 The full conversation history is **not** sent. This prevents weak local LLMs from seeing old "write me a game" requests and regenerating the entire program. After the LLM responds, the full history is restored so your chat stays intact.
 
-The fix prompt includes strict rules:
-- Say what's wrong in 1-2 sentences
-- Put ALL changes in ONE code block as complete functions
-- Do NOT return the entire program — maximum 50 lines
-- No loose instructions outside the code block
+The fix prompt adapts to model capability (see **Tier-Aware Fix Prompts** below). For weak models on short code, it asks for the complete fixed program. For stronger models, it asks for only changed functions or SEARCH/REPLACE blocks.
 
-### Partial Merge
+### Partial Merge & Auto-Retry
 
 When the LLM returns only changed functions, CodeRunner **merges them back** into your full program using `SequenceMatcher` opcodes. Lines not in the LLM's response are kept as-is — they're not deletions, just parts the LLM didn't need to change.
+
+If the merge fails (fragment too small to match), CodeRunner **auto-retries once** with full-code mode instead of showing a broken diff. This handles the common case where weak models return an incomplete fragment.
 
 ### Accept & Reject
 
@@ -217,20 +215,46 @@ The chat header shows real-time stats for every message:
 
 ### Game Presets
 
-15 built-in game prompts for one-shot generation:
+16 built-in game prompts optimized for one-shot generation with local models:
 
-Space Invaders, Asteroids, Breakout, Pac-Man, Frogger, Centipede, Defender, Flappy Birds, Doom-Style FPS, Mario Kart, Mr. Do!, Minecraft, Super Mario Bros, Missile Command, Q*bert
+Space Invaders, Asteroids, Breakout, Pac-Man, Frogger, Centipede, Defender, Flappy Bird, Doom-Style FPS, Mario Kart, Mr. Do!, Minecraft, Super Mario Bros, Missile Command, Q\*bert, **Contra Run** (side-scrolling run-and-gun)
+
+Each prompt specifies concrete implementation details (canvas size, physics constants, drawing instructions, data structures) so that even small local models (~3-30B parameters) can produce working games in a single shot.
 
 Select from the dropdown and hit Send.
 
-### Defaults
+### Sampling Defaults
 
 | Setting | Default | Notes |
 |---------|---------|-------|
-| Temperature | 0.1 | Low for deterministic one-shot generation on local LLMs |
-| Top-p | 0.5 | Nucleus sampling cutoff |
+| Temperature | 0.15 | Low for deterministic one-shot code generation |
+| Top-p | 0.9 | Nucleus sampling — wide enough to not cut off valid code tokens |
+| Top-k | 40 | Top-k sampling |
+| Rep. Penalty | 1.08 | Prevents repetitive code patterns (adjustable via slider) |
 | Max tokens | 16,000 | Enough for full game generation |
 | Backend | MLX (macOS) / Transformers (Linux) | Auto-detected based on platform |
+
+Preset buttons for quick tuning: Exact / Code / Game / Balanced / Creative for temperature; Focused / Code / Creative for top-p.
+
+### Tier-Aware Fix Prompts
+
+The fix pipeline adapts to model capability:
+
+| Tier | Models | Fix Strategy |
+|------|--------|-------------|
+| **Weak** | Qwen 3.5, small Llama, most MLX models | Short code: return full program. Long code: return changed functions with strict format rules. Auto-retry with full code if merge fails. |
+| **Medium** | Qwen3 32B, Codestral, DeepSeek-Coder | Return only changed functions in one code block |
+| **Strong** | Claude, GPT-4/5 | SEARCH/REPLACE blocks for surgical edits |
+
+Error-aware prompting: extracts error type, line number, and shows ±5 context lines around the error to help the model focus.
+
+### SEARCH/REPLACE Fuzzy Matching
+
+Four-layer matching cascade for applying SEARCH/REPLACE blocks (inspired by Aider):
+1. **Exact match** — literal string replacement
+2. **Whitespace-insensitive** — rstrip per line, sliding window
+3. **Indentation-normalized** — strip all leading whitespace, match content, re-indent with original indentation
+4. **Fuzzy match** — `difflib.SequenceMatcher` ratio ≥ 0.85
 
 ---
 
@@ -305,10 +329,10 @@ Mac users: `Cmd` works in place of `Ctrl` for all shortcuts.
 | Mode | System Message |
 |------|----------------|
 | **Python Programmer** | Expert Python/PyGame programmer. Include all features, console debugging. |
-| **HTML Programmer** | Expert HTML5/Canvas programmer. No external files, Canvas drawing only. |
-| **Fix Mode** (automatic) | Expert debugger. Return ONLY fixed functions in a single code block. Never return the entire program. |
+| **HTML Programmer** | Expert HTML5 Canvas game programmer. Single-file output, requestAnimationFrame loop, Canvas shapes only, no external files. Structured guidance for weak models. |
+| **Fix Mode** (automatic) | Tier-aware: weak models get "return complete fixed program", medium get "return only changed functions", strong get "use SEARCH/REPLACE blocks". |
 
-Fix mode uses its own system message that replaces the generation-focused one. This prevents contradictory instructions ("include all features" vs "only return changed functions").
+Fix mode uses its own system message that replaces the generation-focused one. This prevents contradictory instructions ("include all features" vs "only return changed functions"). The fix prompt also classifies the error type and includes numbered context lines around the error.
 
 Custom prompts can be edited directly in the UI via the system prompt editor.
 
