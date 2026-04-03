@@ -628,16 +628,16 @@ FIX_FORMAT_INSTRUCTIONS = {
         "Rules:\n"
         "1. Say what is wrong in 1 sentence.\n"
         "2. Show ONLY the fixed function(s). Not the whole program.\n"
-        "3. Include the complete function from 'def' to the last line.\n"
-        "4. Maximum 60 lines of code."
+        "3. Include the COMPLETE function from 'def' to the last line — do NOT truncate."
     ),
     "medium": (
         "RULES — follow ALL strictly:\n"
         "1. Say what's wrong in 1-2 sentences.\n"
         "2. Show ONLY the fixed function(s) in ONE ```{language} code block.\n"
-        "3. Do NOT return the entire program. Maximum 50 lines of code.\n"
-        "4. No comments like 'ADD THIS' or 'rest of code unchanged'.\n"
-        "5. No explanations inside the code block."
+        "3. Do NOT return the entire program.\n"
+        "4. Include COMPLETE functions — do NOT truncate or cut off mid-function.\n"
+        "5. No comments like 'ADD THIS' or 'rest of code unchanged'.\n"
+        "6. No explanations inside the code block."
     ),
     "strong": (
         "Show each change as a SEARCH/REPLACE block:\n"
@@ -2316,6 +2316,11 @@ class IDEWindow:
                                  font=("TkDefaultFont", 8, "bold"))
         self.reject_btn.pack(side=tk.LEFT, padx=1)
 
+        # Auto-run after accepting a fix — closes the run→error→fix loop automatically
+        self.auto_run_after_accept = BooleanVar(value=True)
+        Checkbutton(toolbar, text="Auto-run", variable=self.auto_run_after_accept,
+                    font=bf).pack(side=tk.LEFT, padx=1)
+
         # Per-hunk navigation (hidden until diff is shown)
         self.hunk_frame = Frame(toolbar)
         self.prev_hunk_btn = Button(self.hunk_frame, text="<", command=lambda: self.navigate_hunk(-1), font=bf)
@@ -2709,7 +2714,8 @@ class IDEWindow:
         self.editor.tag_configure("diff_change", background="lightyellow", foreground="darkorange")
         self.editor.tag_configure("diff_accepted", background="#90EE90", foreground="black")
         self.editor.tag_configure("diff_rejected", background="#D3D3D3", foreground="gray", overstrike=True)
-        self.editor.tag_configure("hunk_highlight", borderwidth=2, relief="solid")
+        # Bug fix: added background so current hunk is visually highlighted (was invisible)
+        self.editor.tag_configure("hunk_highlight", background="#FFE566", borderwidth=2, relief="solid")
         
     def apply_syntax_highlighting(self):
         """Apply basic Python syntax highlighting"""
@@ -4132,6 +4138,13 @@ Select "x + y" and Debug will add ic(x + y)
         'Accept All' / 'Reject All' (the old buttons) still work for bulk.
         """
         self.proposed_content = proposed_content
+
+        # Bug fix: sync current_content from editor in case the user manually
+        # edited code after the last set_content() call.  Only do this when
+        # we are NOT already in diff mode (editor is clean code, not diff view).
+        if not self.is_showing_diff:
+            self.current_content = self.get_content()
+
         self.is_showing_diff = True
 
         current_lines = self.current_content.split('\n')
@@ -4348,7 +4361,7 @@ Select "x + y" and Debug will add ic(x + y)
                 self._highlight_current_hunk()
                 return
         # All hunks decided — prompt to apply
-        self.status_label.config(text="All hunks reviewed — click 'Apply All' to finish", fg="green")
+        self.status_label.config(text="All hunks reviewed — click 'Done' to apply", fg="green")
         self._highlight_current_hunk()
 
     def apply_hunk_decisions(self):
@@ -4415,6 +4428,11 @@ Select "x + y" and Debug will add ic(x + y)
 
         if hasattr(self.parent, 'notify_ide_content_loaded'):
             self.parent.notify_ide_content_loaded(self.current_content)
+
+        # Auto-run: if the checkbox is checked, immediately run & fix so the
+        # next error (if any) flows automatically into another LLM fix cycle.
+        if getattr(self, 'auto_run_after_accept', None) and self.auto_run_after_accept.get():
+            self.root.after(150, self.run_and_auto_fix)
 
     def accept_changes(self):
         """Accept ALL hunks and apply (bulk accept)."""
@@ -4974,7 +4992,7 @@ class OllamaGUI:
         self.messages = [self.system_message]  # Initialize chat history with system message
         self.hide_thinking = BooleanVar(value=False)  # Control whether to hide thinking from chat history
         self.do_thinking = BooleanVar(value=False)  # Control whether to request thinking from model
-        self.previous_thinking_state = True  # Track previous state of thinking toggle (True = thinking shown/saved)
+        self.previous_thinking_state = False  # Track previous state of thinking toggle (matches default: thinking off)
         self.first_message = True  # Flag for first message sent
         self.current_file = None  # Track the currently loaded/saved file
         self.generation_active = False  # Flag to track active generation
@@ -6156,13 +6174,9 @@ Drawing:
         clear_image_btn = Button(button_frame, text="Clear Image", command=self.clear_image)
         clear_image_btn.pack(side=tk.LEFT, padx=5)
         
-        # Hide thinking checkbox
-        think_check = Checkbutton(button_frame, text="Hide Thinking", variable=self.hide_thinking, command=self.sync_thinking_state)
+        # Thinking checkbox — checked = model thinks (output filtered from display)
+        think_check = Checkbutton(button_frame, text="Thinking", variable=self.hide_thinking, command=self.sync_thinking_state)
         think_check.pack(side=tk.LEFT, padx=5)
-
-        # DO thinking checkbox (request thinking from model)
-        do_think_check = Checkbutton(button_frame, text="Request Thinking", variable=self.do_thinking)
-        do_think_check.pack(side=tk.LEFT, padx=5)
         
         # System prompt editor frame (hidden by default)
         self.prompt_frame = Frame(main_frame)
@@ -6543,7 +6557,7 @@ Drawing:
                 self.chat_display.delete("1.0", tk.END)
                 
                 # Reset thinking state tracker
-                self.previous_thinking_state = not self.hide_thinking.get()  # Inverted logic
+                self.previous_thinking_state = self.hide_thinking.get()
                 # Reset first message flag since this is a "new" conversation
                 self.first_message = True
                 
@@ -6680,7 +6694,7 @@ Drawing:
         self.display_message("You", f"{input_text}{image_msg}")
         
         # Add thinking toggle command if the state changed or it's the first message
-        current_thinking = not self.hide_thinking.get()  # Inverted logic
+        current_thinking = self.hide_thinking.get()  # Checked = thinking enabled
         if current_thinking != self.previous_thinking_state or self.first_message:
             if current_thinking:
                 input_text += " /think"
@@ -7236,8 +7250,8 @@ Based on the above context, please answer: {input_text}"""
                 "options": {"temperature": self.temperature.get()}
             }
 
-            # Add think parameter if DO thinking is enabled
-            if self.do_thinking.get():
+            # Add think parameter if Thinking checkbox is enabled
+            if self.hide_thinking.get():
                 api_params["think"] = True
             
             # Add tools if search mode is enabled
@@ -7355,8 +7369,8 @@ Based on the above context, please answer: {input_text}"""
                 }]
             }
 
-            # Add think parameter if DO thinking is enabled
-            if self.do_thinking.get():
+            # Add think parameter if Thinking checkbox is enabled
+            if self.hide_thinking.get():
                 payload["think"] = True
             
             # Make the API request
@@ -7471,8 +7485,8 @@ Based on the above context, please answer: {input_text}"""
                     "stop": ["</s>", "<|endoftext|>", "<|eot_id|>", "\n\nUser:", "\n\nAssistant:"]  # Add proper stop sequences
                 }
 
-                # Add think parameter if DO thinking is enabled (llama-cpp may ignore this)
-                if self.do_thinking.get():
+                # Add think parameter if Thinking checkbox is enabled (llama-cpp may ignore this)
+                if self.hide_thinking.get():
                     api_params["think"] = True
 
                 # Add tools if search mode is enabled
@@ -7533,8 +7547,8 @@ Based on the above context, please answer: {input_text}"""
                     "stop": ["</s>", "<|endoftext|>", "<|eot_id|>", "\n\nUser:", "\n\nAssistant:"]  # Add proper stop sequences
                 }
 
-                # Add think parameter if DO thinking is enabled (llama-cpp may ignore this)
-                if self.do_thinking.get():
+                # Add think parameter if Thinking checkbox is enabled (llama-cpp may ignore this)
+                if self.hide_thinking.get():
                     api_params["think"] = True
 
                 # Add tools if search mode is enabled
@@ -7606,7 +7620,9 @@ Based on the above context, please answer: {input_text}"""
         display_message = getattr(self, 'current_user_message', '')  # Get the current user message for phrase checking
         hide_thinking = self.hide_thinking.get()
 
-        has_thinking_tags = ("<think>" in clean_response and "</think>" in clean_response) or ("<thinking>" in clean_response and "</thinking>" in clean_response)
+        has_thinking_tags = (("<think>" in clean_response and "</think>" in clean_response) or
+                             ("<thinking>" in clean_response and "</thinking>" in clean_response) or
+                             ("<|channel>thought" in clean_response and "<channel|>" in clean_response))
 
         if hide_thinking and has_thinking_tags:
             # User wants to hide thinking - extract only the final answer
@@ -7615,6 +7631,10 @@ Based on the above context, please answer: {input_text}"""
                 final_answer = clean_response[think_end:].strip()
             elif "</thinking>" in clean_response:
                 think_end = clean_response.find("</thinking>") + len("</thinking>")
+                final_answer = clean_response[think_end:].strip()
+            elif "<channel|>" in clean_response:
+                # Gemma 4 thinking format
+                think_end = clean_response.find("<channel|>") + len("<channel|>")
                 final_answer = clean_response[think_end:].strip()
             else:
                 final_answer = clean_response  # Fallback
@@ -7679,7 +7699,12 @@ Based on the above context, please answer: {input_text}"""
 
                 # Add system message if available
                 if self.system_message and self.system_message.get('content'):
-                    messages.append({"role": "system", "content": self.system_message['content']})
+                    sys_content = self.system_message['content']
+                    # Gemma 4: prepend <|think|> token to enable thinking when checkbox is on
+                    model_cfg = getattr(self.mlx_model, 'config', None) or (self.mlx_vlm_model.config if self.mlx_vlm_model else None)
+                    if model_cfg and getattr(model_cfg, 'model_type', '') == 'gemma4' and self.hide_thinking.get():
+                        sys_content = "<|think|>" + sys_content
+                    messages.append({"role": "system", "content": sys_content})
 
                 # Add conversation history (including tool results as user messages for MLX)
                 for msg in self.messages:
@@ -7853,7 +7878,12 @@ Based on the above context, please answer: {input_text}"""
         # and inserts image tokens automatically via get_message_json for the first user message
         messages = []
         if self.system_message and self.system_message.get('content'):
-            messages.append({"role": "system", "content": self.system_message['content']})
+            sys_content = self.system_message['content']
+            # Gemma 4: prepend <|think|> token to enable thinking when checkbox is on
+            model_type = getattr(self.mlx_vlm_model.config, 'model_type', '')
+            if model_type == 'gemma4' and self.hide_thinking.get():
+                sys_content = "<|think|>" + sys_content
+            messages.append({"role": "system", "content": sys_content})
 
         # Add conversation history (text only — prior images are not resent)
         for msg in self.messages:
@@ -7934,7 +7964,12 @@ Based on the above context, please answer: {input_text}"""
         # Build messages list
         messages = []
         if self.system_message and self.system_message.get('content'):
-            messages.append({"role": "system", "content": self.system_message['content']})
+            sys_content = self.system_message['content']
+            # Gemma 4: prepend <|think|> token to enable thinking when checkbox is on
+            model_type = getattr(self.mlx_vlm_model.config, 'model_type', '')
+            if model_type == 'gemma4' and self.hide_thinking.get():
+                sys_content = "<|think|>" + sys_content
+            messages.append({"role": "system", "content": sys_content})
 
         for msg in self.messages:
             if msg['role'] in ['user', 'assistant']:
@@ -8033,17 +8068,27 @@ Based on the above context, please answer: {input_text}"""
                 # Look for start of thinking block
                 think_start = remaining_buffer.find('<think>')
                 thinking_start = remaining_buffer.find('<thinking>')
+                # Gemma 4 thinking: <|channel>thought\n ... <channel|>
+                gemma4_start = remaining_buffer.find('<|channel>thought')
 
-                if think_start != -1 and (thinking_start == -1 or think_start <= thinking_start):
-                    # Found <think> tag first
-                    display_parts.append(remaining_buffer[:think_start])
+                # Pick the earliest match
+                candidates = []
+                if think_start != -1:
+                    candidates.append((think_start, 7, '<think>'))           # len('<think>')
+                if thinking_start != -1:
+                    candidates.append((thinking_start, 10, '<thinking>'))     # len('<thinking>')
+                if gemma4_start != -1:
+                    # Skip past the newline after "thought\n"
+                    tag_end = remaining_buffer.find('\n', gemma4_start)
+                    tag_len = (tag_end + 1 - gemma4_start) if tag_end != -1 else len('<|channel>thought\n')
+                    candidates.append((gemma4_start, tag_len, '<|channel>thought'))
+
+                if candidates:
+                    candidates.sort(key=lambda c: c[0])
+                    pos, skip, _tag = candidates[0]
+                    display_parts.append(remaining_buffer[:pos])
                     in_thinking_block = True
-                    remaining_buffer = remaining_buffer[think_start + 7:]  # Skip "<think>"
-                elif thinking_start != -1:
-                    # Found <thinking> tag first
-                    display_parts.append(remaining_buffer[:thinking_start])
-                    in_thinking_block = True
-                    remaining_buffer = remaining_buffer[thinking_start + 10:]  # Skip "<thinking>"
+                    remaining_buffer = remaining_buffer[pos + skip:]
                 else:
                     # No thinking tags found, display everything
                     display_parts.append(remaining_buffer)
@@ -8052,15 +8097,22 @@ Based on the above context, please answer: {input_text}"""
                 # We're inside a thinking block, look for end
                 think_end = remaining_buffer.find('</think>')
                 thinking_end = remaining_buffer.find('</thinking>')
+                # Gemma 4 thinking end tag
+                gemma4_end = remaining_buffer.find('<channel|>')
 
-                if think_end != -1 and (thinking_end == -1 or think_end <= thinking_end):
-                    # Found </think> tag first
+                end_candidates = []
+                if think_end != -1:
+                    end_candidates.append((think_end, 8))      # len('</think>')
+                if thinking_end != -1:
+                    end_candidates.append((thinking_end, 11))   # len('</thinking>')
+                if gemma4_end != -1:
+                    end_candidates.append((gemma4_end, 10))     # len('<channel|>')
+
+                if end_candidates:
+                    end_candidates.sort(key=lambda c: c[0])
+                    pos, skip = end_candidates[0]
                     in_thinking_block = False
-                    remaining_buffer = remaining_buffer[think_end + 8:]  # Skip "</think>"
-                elif thinking_end != -1:
-                    # Found </thinking> tag first
-                    in_thinking_block = False
-                    remaining_buffer = remaining_buffer[thinking_end + 11:]  # Skip "</thinking>"
+                    remaining_buffer = remaining_buffer[pos + skip:]
                 else:
                     # End tag not found yet, buffer for next chunk
                     break
@@ -9202,14 +9254,17 @@ Based on the above context, please answer: {input_text}"""
                         self.ide_original_code = None
                         return
 
-                    # Merge failed — check if this looks like a complete program
+                    # Merge failed — check if this looks like a complete program.
+                    # Only diff directly if the fragment is >= 90% of the original;
+                    # anything smaller is a partial fragment that would wipe out
+                    # unchanged code if shown as a raw diff.
                     orig_lines = len(self.ide_original_code.strip().split('\n'))
                     prop_lines = len(proposed_code.split('\n'))
-                    looks_complete = prop_lines >= orig_lines * 0.5
+                    looks_complete = prop_lines >= orig_lines * 0.90
 
                     if looks_complete:
-                        # Proposed code is substantial — show diff directly
-                        self._log_fix_event("merge", strategy="direct_diff", result="fragment is large enough")
+                        # Fragment is nearly the full file — diff is safe
+                        self._log_fix_event("merge", strategy="direct_diff", result="fragment >= 90% of original")
                         if hasattr(self, 'ide_window'):
                             self.propose_code_changes(proposed_code)
                             self._auto_fix_in_progress = False
@@ -9217,7 +9272,7 @@ Based on the above context, please answer: {input_text}"""
                         self.ide_original_code = None
                         return
 
-                    # Fragment is too small to be useful — auto-retry with full code
+                    # Fragment is partial — auto-retry with full code to avoid wiping unchanged code
                     if not getattr(self, '_fix_auto_retry_done', False):
                         self._fix_auto_retry_done = True
                         self._log_fix_event("merge", strategy="all", result="FAILED — auto-retrying with full code")
@@ -9311,8 +9366,8 @@ Based on the above context, please answer: {input_text}"""
         elif cmd == '/think':
             self.hide_thinking.set(not self.hide_thinking.get())
             status = "enabled" if self.hide_thinking.get() else "disabled"
-            self.previous_thinking_state = not self.hide_thinking.get()  # Update the tracking state (inverted)
-            self.display_status_message(f"Thinking hiding {status}")
+            self.previous_thinking_state = self.hide_thinking.get()
+            self.display_status_message(f"Thinking {status}")
             
         elif cmd == '/save':
             self.save_chat()
@@ -9483,7 +9538,7 @@ Based on the above context, please answer: {input_text}"""
         # Chat is now always editable
         self.chat_display.delete("1.0", tk.END)
         # Reset thinking state tracker
-        self.previous_thinking_state = not self.hide_thinking.get()  # Inverted logic
+        self.previous_thinking_state = self.hide_thinking.get()
         # Reset first message flag
         self.first_message = True
         self.display_system_message("Chat restarted")  # Route to system console, not chat history
@@ -11427,7 +11482,7 @@ Based on the above context, please answer: {input_text}"""
             if want_full and want_full.get():
                 fix_instruction = f"Return the COMPLETE fixed program in a single ```{language} code block."
             else:
-                fix_instruction = f"RULES — follow ALL strictly:\n1. Say what's wrong in 1-2 sentences.\n2. Show ONLY the fixed function(s) in ONE ```{language} code block.\n3. Do NOT return the entire program. Maximum 50 lines of code.\n4. No comments like 'ADD THIS' or 'rest of code unchanged'.\n5. No explanations inside the code block."
+                fix_instruction = f"RULES — follow ALL strictly:\n1. Say what's wrong in 1-2 sentences.\n2. Show ONLY the fixed function(s) in ONE ```{language} code block.\n3. Do NOT return the entire program.\n4. Include COMPLETE functions — do NOT truncate or cut off mid-function.\n5. No comments like 'ADD THIS' or 'rest of code unchanged'.\n6. No explanations inside the code block."
 
             prompt = f"""Please review and fix any issues in the following {code_type} code:
 ```{language}
@@ -11533,6 +11588,9 @@ Based on the above context, please answer: {input_text}"""
 
         # Store the original code for the accept/reject workflow
         self.ide_original_code = code_content
+
+        # Reset retry flag so every new fix gets its one auto-retry allowance
+        self._fix_auto_retry_done = False
 
         # --- Classify error and build error context ---
         error_type, error_line, error_summary = _classify_error(
@@ -12383,11 +12441,11 @@ Based on the above context, please answer: {input_text}"""
 
     def sync_thinking_state(self):
         """Update the previous thinking state to match current state when checkbox is clicked"""
-        self.previous_thinking_state = not self.hide_thinking.get()  # Inverted logic
+        self.previous_thinking_state = self.hide_thinking.get()
 
         # Optional: Show status message when changed
         status = "enabled" if self.hide_thinking.get() else "disabled"
-        self.status_var.set(f"Hide thinking {status}")
+        self.status_var.set(f"Thinking {status}")
 
     # RAG Implementation Methods
     def index_new_folder(self):
@@ -13086,9 +13144,10 @@ def filter_thinking(text, show_thinking):
     """Filter thinking sections based on the show_thinking flag"""
     if show_thinking:
         return text
-    # Remove both <think> and <thinking> tags and their content
+    # Remove <think>, <thinking>, and Gemma 4 <|channel>thought tags and their content
     text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
     text = re.sub(r'<thinking>.*?</thinking>', '', text, flags=re.DOTALL)
+    text = re.sub(r'<\|channel>thought\n.*?<channel\|>', '', text, flags=re.DOTALL)
     return text.strip()
 
 # Main entry point
