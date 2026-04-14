@@ -383,7 +383,7 @@ pip install transformers torch accelerate  # HuggingFace models
 
 ```bash
 pip install jedi pygments flake8 black
-pip install mypy bandit radon      # Advanced analysis
+pip install mypy                   # Optional static typing (IDE: right-click → Analyze)
 ```
 
 ---

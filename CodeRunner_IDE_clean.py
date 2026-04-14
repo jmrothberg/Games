@@ -2,14 +2,22 @@
 # CodeRunner IDE (Clean) - Code-focused AI IDE
 # =============================================================================
 # Based on CodeRunner IDE v2.8.26
-# Stripped down to code-only features (no chat mode, no RAG/vector search)
+# Single-file Tkinter app: chat + IDE + system/debug consoles, multiple LLM backends.
+#
+# FILE MAP (read top-to-bottom; line numbers drift over time — search for headers):
+#   ~260+     MCP client + tool definitions (optional)
+#   ~580+     System prompts + fix-prompt templates (FIX_SYSTEM_PROMPTS, tiers)
+#   ~2000+    Browser error server (HTML games POST errors to localhost)
+#   ~2190+    IDEWindow — editor, diff, Run, syntax tools
+#   ~4930+    OllamaGUI — main window, backends, send/receive, fix pipeline
+#   Game presets live in OllamaGUI.__init__ (search: self.game_prompts)
 #
 # WORKFLOW:
 #   1. Ask LLM to write code in the chat box
 #   2. Click "Move to IDE" to load code into the editor (first time)
 #   3. Press F5 to Run, or F6 for Run & Fix
 #   4. For manual fixes: type what's wrong in chat, click "LLM Fix"
-
+#   5. Accept or reject the proposed diff in the IDE
 #   6. Repeat!
 #
 # KEY POINT: After the first "Move to IDE", edits always show as a DIFF.
@@ -17,11 +25,11 @@
 #
 # FIX MODE: When "LLM Fix" is clicked, only the system message + fix prompt
 #           are sent to the LLM (not the full conversation history). This
-#           keeps weak local LLMs focused on the fix instead of regenerating.
+#           keeps local LLMs focused on the fix instead of regenerating.
 #           Full history is restored after the response completes.
 #
 # FIX PIPELINE (tier-aware):
-#   - get_model_tier() → weak/medium/strong based on backend + model name
+#   - get_model_tier() → local/strong based on backend + model name
 #   - _classify_error() → extracts error type, line number, summary from stderr
 #   - fix_code_from_ide() → builds tier-appropriate prompt with error context
 #   - check_and_handle_ide_proposals() → merges response, auto-retries on failure
@@ -33,7 +41,7 @@
 # - Platform-aware defaults: MLX on macOS, Transformers on Linux
 # - Run (F5) + Run & Fix (F6) + LLM Fix button on chat and IDE
 # - Inline diff view with Accept (Ctrl+Enter) / Reject (Escape)
-# - Tier-aware fix prompts: weak→full code, medium→changed functions, strong→SEARCH/REPLACE
+# - Tier-aware fix prompts: local→full code or targeted fix, strong→SEARCH/REPLACE
 # - Partial merge with auto-retry: if merge fails, retries with full code mode
 # - SEARCH/REPLACE 4-layer fuzzy matching (exact → whitespace → indent-normalized → difflib)
 # - Chat edit sync: cut/paste in chat affects what LLM sees on Send
@@ -41,6 +49,7 @@
 # - Smart debugging: clickable error lines, browser error capture for HTML games
 # - Debug console: runtime errors only; status info goes to system messages
 # - 16 built-in game presets optimized for one-shot generation with local models
+# - Optional RAG: ChromaDB folder indexing via /indexdir (install chromadb)
 #
 # Installation: pip install -r requirements.txt
 # =============================================================================
@@ -179,14 +188,9 @@ except ImportError:
     BLACK_AVAILABLE = False
     print("Black not available. Install with: pip install black for code formatting")
 
-# Import additional power features for LLM code testing
-try:
-    import ast
-    import astor
-    AST_AVAILABLE = True
-except ImportError:
-    AST_AVAILABLE = False
-    print("AST analysis not available. Install with: pip install astor for code analysis")
+# AST structure view (stdlib `ast` — always present on normal Python builds)
+import ast
+AST_AVAILABLE = True
 
 try:
     import mypy.api
@@ -194,22 +198,6 @@ try:
 except ImportError:
     MYPY_AVAILABLE = False
     print("MyPy not available. Install with: pip install mypy for type checking")
-
-try:
-    from bandit.core import manager
-    from bandit.core import config
-    BANDIT_AVAILABLE = True
-except ImportError:
-    BANDIT_AVAILABLE = False
-    print("Bandit not available. Install with: pip install bandit for security scanning")
-
-try:
-    import radon.complexity as radon_cc
-    import radon.metrics as radon_metrics
-    RADON_AVAILABLE = True
-except ImportError:
-    RADON_AVAILABLE = False
-    print("Radon not available. Install with: pip install radon for complexity analysis")
 
 try:
     import coverage
@@ -606,48 +594,70 @@ html_system_message = """You are an expert HTML5 Canvas game programmer. Rules:
 """
 
 # =============================================================================
-# FIX PROMPT TEMPLATES — tier-aware prompts for weak/medium/strong models
+# FIX PROMPT TEMPLATES — two tiers: local (all local models) and strong (cloud APIs)
 # =============================================================================
 
-# Model name patterns for tier detection (checked via substring match)
+# Model name patterns for strong tier detection (checked via substring match)
 _STRONG_MODEL_PATTERNS = ['claude', 'gpt-4', 'gpt-5', 'o1', 'o3', 'deepseek-v3', 'deepseek-r1']
-_MEDIUM_MODEL_PATTERNS = ['qwen3-32b', 'qwen3-30b', 'codestral', 'deepseek-coder', 'llama-70b',
-                          'llama3-70b', 'command-r', 'mixtral', 'devstral']
-# Everything else (including most MLX local models) defaults to "weak"
 
 FIX_SYSTEM_PROMPTS = {
-    "weak": "You are a code debugger. Fix the bug and return the complete fixed program.",
-    "medium": "You are a code debugger. Return ONLY the fixed functions in a code block. Not the whole program.",
-    "strong": "You are a code debugger. Show changes using SEARCH/REPLACE blocks.",
+    "local_full": (
+        "You are a code debugger. You will be given a program with a bug.\n"
+        "1. Read the error message carefully.\n"
+        "2. Find the exact bug in the code.\n"
+        "3. Fix ONLY the bug — do not rewrite or reorganize the code.\n"
+        "4. Return the COMPLETE fixed program in a single code block."
+    ),
+    "local_targeted": (
+        "You are a code debugger. You will be given a program with a bug.\n"
+        "1. Say what the bug is in ONE sentence.\n"
+        "2. Return ONLY the fixed function(s) in a single code block.\n"
+        "3. Do NOT return the whole program — only the function(s) you changed.\n"
+        "4. Each function must be COMPLETE — from 'def'/'function' to its last line.\n"
+        "5. Do NOT add comments like 'rest unchanged' or 'add this' inside the code block."
+    ),
+    "strong": (
+        "You are a code debugger. You will be given a program with a bug and line-numbered source.\n"
+        "1. Identify the bug from the error message and the code.\n"
+        "2. Explain what's wrong in 1-2 sentences.\n"
+        "3. Show ONLY the changes using SEARCH/REPLACE blocks.\n"
+        "4. The SEARCH section must EXACTLY match existing lines in the file (including whitespace and indentation).\n"
+        "5. Keep SEARCH blocks small — include only the lines that need to change plus 1-2 lines of surrounding context for unique matching.\n"
+        "6. Use multiple SEARCH/REPLACE blocks for multiple changes — do NOT combine unrelated changes into one block.\n"
+        "7. Do NOT return the whole file."
+    ),
 }
 
 FIX_FORMAT_INSTRUCTIONS = {
-    "weak_short": "Return the COMPLETE fixed program in a single ```{language} code block. Include ALL code, not just changes.",
-    "weak_long": (
-        "Return ONLY the fixed function(s) in ONE ```{language} code block.\n"
-        "Rules:\n"
-        "1. Say what is wrong in 1 sentence.\n"
-        "2. Show ONLY the fixed function(s). Not the whole program.\n"
-        "3. Include the COMPLETE function from 'def' to the last line — do NOT truncate."
+    "local_full": (
+        "IMPORTANT: Return the COMPLETE fixed program in a single ```{language} code block.\n"
+        "Include ALL code from the original program, not just the changed parts.\n"
+        "Do NOT skip functions. Do NOT add '...' or 'rest of code'. Return the FULL program."
     ),
-    "medium": (
+    "local_targeted": (
         "RULES — follow ALL strictly:\n"
-        "1. Say what's wrong in 1-2 sentences.\n"
+        "1. Say what's wrong in 1-2 sentences BEFORE the code block.\n"
         "2. Show ONLY the fixed function(s) in ONE ```{language} code block.\n"
         "3. Do NOT return the entire program.\n"
-        "4. Include COMPLETE functions — do NOT truncate or cut off mid-function.\n"
-        "5. No comments like 'ADD THIS' or 'rest of code unchanged'.\n"
-        "6. No explanations inside the code block."
+        "4. Include COMPLETE functions — from the first line ('def'/'function') to the very last line. Do NOT truncate or cut off mid-function.\n"
+        "5. Keep the same function name and parameters as the original.\n"
+        "6. No comments like 'ADD THIS' or 'rest of code unchanged' inside the code block.\n"
+        "7. No explanations inside the code block.\n"
+        "8. Do NOT add new imports — only return the fixed function(s)."
     ),
     "strong": (
         "Show each change as a SEARCH/REPLACE block:\n"
         "<<<<<<< SEARCH\n"
-        "exact lines to find\n"
+        "exact lines to find (must match the file EXACTLY)\n"
         "=======\n"
         "replacement lines\n"
-        ">>>>>>> REPLACE\n"
-        "\n"
-        "Multiple blocks OK. Do NOT return the whole file."
+        ">>>>>>> REPLACE\n\n"
+        "Rules:\n"
+        "- The SEARCH section must EXACTLY match existing lines — copy them from the code, including indentation.\n"
+        "- Keep each SEARCH block small (only the lines that change + 1-2 lines of context for unique matching).\n"
+        "- Use SEPARATE blocks for each distinct change.\n"
+        "- Do NOT return the whole file.\n"
+        "- Every SEARCH/REPLACE block must be complete and self-contained."
     ),
 }
 
@@ -829,7 +839,8 @@ def safe_web_search(query, max_results=5):
     except Exception as e:
         return f"Web search failed: {str(e)}"
 
-# RAG functions for ChromaDB integration
+# --- RAG / ChromaDB (optional; /indexdir, /loaddb in chat) ---
+# Used only when ChromaDB is installed. Not required for core IDE + LLM workflow.
 def create_chroma_collection(collection_name, persist_dir):
     """Create or get a ChromaDB collection"""
     if not CHROMADB_AVAILABLE:
@@ -868,52 +879,6 @@ def create_chroma_collection(collection_name, persist_dir):
             collection = client.create_collection(name=fallback_name, embedding_function=ef)
             print(f"Created fallback collection: {fallback_name}")
             return client, collection
-
-def process_image_ocr(image_path, status_callback=None):
-    """
-    Extract text from images using OCR via pytesseract
-    macOS users need to:
-    1. Install Tesseract OCR: `brew install tesseract`
-    2. Install pytesseract: `pip install pytesseract`
-    """
-    try:
-        from PIL import Image
-        import pytesseract
-        
-        # Special handling for macOS typical Tesseract installation paths
-        if sys.platform == 'darwin':
-            # Common macOS tesseract locations
-            tesseract_paths = [
-                '/usr/local/bin/tesseract',
-                '/opt/homebrew/bin/tesseract',
-                '/usr/bin/tesseract'
-            ]
-            
-            # Try each path
-            for path in tesseract_paths:
-                if os.path.exists(path):
-                    pytesseract.pytesseract.tesseract_cmd = path
-                    break
-        
-        if status_callback:
-            status_callback(f"Processing image with OCR: {os.path.basename(image_path)}")
-        
-        # Open the image
-        image = Image.open(image_path)
-        
-        # Extract text using pytesseract
-        text = pytesseract.image_to_string(image)
-        
-        if text.strip():
-            return text.strip()
-        else:
-            if status_callback:
-                status_callback(f"No text found in image: {os.path.basename(image_path)}")
-            return None
-    except Exception as e:
-        if status_callback:
-            status_callback(f"OCR error: {str(e)}")
-        return None
 
 def load_documents_from_folder(folder_path, status_callback=None):
     """Load documents from a folder with various document loaders based on file type"""
@@ -987,7 +952,7 @@ def load_documents_from_folder(folder_path, status_callback=None):
         '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods',
         # Temporary files often created by Office apps
         '~$', '.tmp',
-        # Images 
+        # Images (skipped here; RAG indexing is text/code/PDF/docx only)
         '.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.gif', '.webp', '.heic', '.raw', '.svg',
         # Archives
         '.zip', '.rar', '.tar', '.gz', '.7z',
@@ -1641,10 +1606,6 @@ def query_chromadb(query, collection_name, persist_dir, n_results=5):
     
     return results, None
 
-def get_default_system_message():
-    """Return the default system message (Python programmer in code-only version)"""
-    return python_system_message
-
 def find_gguf_models(base_path=None):
     """Find all GGUF models, showing only the first file of multi-part series"""
 
@@ -1950,17 +1911,32 @@ def get_available_mlx_models():
             Path.home() / "MLX_Models",  # User's home directory
         ]
 
+        # Deduplicate roots by real path — for user "jonathanrothberg" both entries are the same
+        # folder, which previously listed every model twice in the MLX dropdown.
+        unique_roots = []
+        seen_roots = set()
+        for d in possible_dirs:
+            if d.exists() and d.is_dir():
+                key = d.resolve()
+                if key not in seen_roots:
+                    seen_roots.add(key)
+                    unique_roots.append(d)
+
         model_dirs = []
         vlm_flags = {}  # {path: bool} — True if VLM
-        for mlx_models_dir in possible_dirs:
-            if mlx_models_dir.exists() and mlx_models_dir.is_dir():
-                for item in mlx_models_dir.iterdir():
-                    if item.is_dir():
-                        safetensors_files = list(item.glob("*.safetensors"))
-                        if safetensors_files:
-                            path_str = str(item)
-                            model_dirs.append(path_str)
-                            vlm_flags[path_str] = is_mlx_vlm_model(path_str)
+        seen_model_paths = set()  # resolved paths — skip symlink duplicates across roots
+        for mlx_models_dir in unique_roots:
+            for item in mlx_models_dir.iterdir():
+                if item.is_dir():
+                    safetensors_files = list(item.glob("*.safetensors"))
+                    if safetensors_files:
+                        canon = item.resolve()
+                        if canon in seen_model_paths:
+                            continue
+                        seen_model_paths.add(canon)
+                        path_str = str(item)
+                        model_dirs.append(path_str)
+                        vlm_flags[path_str] = is_mlx_vlm_model(path_str)
 
         return model_dirs, vlm_flags
 
@@ -2415,6 +2391,8 @@ class IDEWindow:
 #
 # You NEVER lose your code. All changes shown as diffs.
 #
+# Optional: right-click editor → Analyze (AST summary or MyPy if installed)
+#
 # Press F1 or click Help for more info
 """
         self.editor.insert("1.0", welcome)
@@ -2516,6 +2494,16 @@ class IDEWindow:
         code_menu.add_command(label="▶️ Run Code", command=self.run_current_code, accelerator="F5")
         code_menu.add_command(label="🔧 Ask LLM to Fix", command=self.fix_current_code)
 
+        # === ANALYZE (Python in IDE) ===
+        analyze_menu = Menu(self.ide_context_menu, tearoff=0)
+        self.ide_context_menu.add_cascade(label="🔬 Analyze", menu=analyze_menu)
+        analyze_menu.add_command(
+            label="AST structure (imports, defs, risks…)",
+            command=self.analyze_code_with_ast)
+        analyze_menu.add_command(
+            label="MyPy type check (needs pip install mypy)",
+            command=self.run_type_checking)
+
         # === REVIEW ===
         review_menu = Menu(self.ide_context_menu, tearoff=0)
         self.ide_context_menu.add_cascade(label="✅ Review", menu=review_menu)
@@ -2615,6 +2603,16 @@ class IDEWindow:
         self.ide_context_menu.add_cascade(label="⚡ Code", menu=code_menu)
         code_menu.add_command(label="▶️ Run Code", command=self.run_current_code, accelerator="F5")
         code_menu.add_command(label="🔧 Ask LLM to Fix", command=self.fix_current_code)
+
+        # === ANALYZE (Python in IDE) ===
+        analyze_menu = Menu(self.ide_context_menu, tearoff=0)
+        self.ide_context_menu.add_cascade(label="🔬 Analyze", menu=analyze_menu)
+        analyze_menu.add_command(
+            label="AST structure (imports, defs, risks…)",
+            command=self.analyze_code_with_ast)
+        analyze_menu.add_command(
+            label="MyPy type check (needs pip install mypy)",
+            command=self.run_type_checking)
 
         # === REVIEW ===
         review_menu = Menu(self.ide_context_menu, tearoff=0)
@@ -3251,6 +3249,16 @@ TIPS
 * Select "Python / Pygame" or "HTML / JavaScript" code mode
 * The debug console shows errors — useful context for the LLM
 * Save your work with Ctrl+S before making big changes
+
+ANALYZE TOOLS (optional, Python only)
+-------------------------------------
+* Right-click in the IDE editor → menu "Analyze"
+* AST structure — always available. Lists imports, functions, classes,
+  top-level variables, and risky calls (eval, exec, __import__, compile).
+  Use after the model generates Python to quickly see what’s in the file.
+* MyPy type check — needs: pip install mypy. Only useful if your code
+  has type hints; reports wrong types and missing returns.
+* Does not work in HTML/JavaScript mode; switch to Python mode first.
 """
         
         # Insert help text
@@ -3298,10 +3306,8 @@ TIPS
         
     # ============ ADVANCED TESTING & ANALYSIS FEATURES ============
     def analyze_code_with_ast(self):
-        """Analyze code using AST for safer inspection of LLM-generated code"""
+        """Summarize Python structure (imports, defs, classes, risky calls) via stdlib ast."""
         if not AST_AVAILABLE:
-            msg = "AST/Astor not installed!\n\nInstall with:\npip install astor\n\nThen restart the IDE."
-            messagebox.showwarning("AST Not Available", msg)
             return
 
         # Don't run AST analysis on HTML content
@@ -3312,47 +3318,13 @@ TIPS
         try:
             code = self.editor.get("1.0", tk.END).strip()
             
-            # Check if editor is empty
             if not code or len(code) < 10:
-                sample_code = '''import os
-import sys
+                messagebox.showinfo(
+                    "AST Analysis",
+                    "The IDE editor is empty or too short.\n\n"
+                    "Load or paste Python into the IDE first (e.g. Move to IDE from chat), then run AST analysis again.")
+                return
 
-# Global variable
-VERSION = "1.0.0"
-
-def greet(name="World"):
-    """Say hello to someone"""
-    return f"Hello, {name}!"
-
-class Person:
-    def __init__(self, name, age):
-        self.name = name
-        self.age = age
-    
-    def introduce(self):
-        return f"I'm {self.name}, {self.age} years old"
-
-# Potentially dangerous operations
-def risky_function():
-    user_input = input("Enter code: ")
-    eval(user_input)  # Dangerous!
-    exec("print('executed')")  # Also dangerous!
-
-if __name__ == "__main__":
-    p = Person("Alice", 30)
-    print(p.introduce())'''
-                
-                response = messagebox.askyesno("No Code to Analyze",
-                    "The editor is empty.\n\nWould you like to load sample code to see how AST analysis works?")
-                
-                if response:
-                    self.editor.delete("1.0", tk.END)
-                    self.editor.insert("1.0", sample_code)
-                    self.apply_syntax_highlighting()
-                    code = sample_code
-                else:
-                    return
-                    
             tree = ast.parse(code)
             
             # Create analysis window
@@ -3365,7 +3337,15 @@ if __name__ == "__main__":
             results_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
             
             # Analyze code structure
-            analysis = "🔍 CODE STRUCTURE ANALYSIS\n" + "="*50 + "\n\n"
+            analysis = (
+                "HOW TO USE\n"
+                + "=" * 50 + "\n"
+                + "Open this from the IDE: right-click editor → Analyze → AST structure.\n"
+                + "Requires Python mode (not HTML). Put real code in the IDE first (e.g. Move to IDE).\n"
+                + "This is a read-only summary: imports, functions, classes, globals, and obvious risks (eval/exec).\n\n"
+                + "🔍 CODE STRUCTURE ANALYSIS\n"
+                + "=" * 50 + "\n\n"
+            )
             
             # Find imports
             imports = []
@@ -3474,155 +3454,6 @@ if __name__ == "__main__":
             self.status_label.config(text=f"Analysis error: {str(e)[:50]}", fg="red")
             messagebox.showerror("AST Analysis Error", f"Error during analysis:\n{str(e)}")
             
-    def run_security_scan(self):
-        """Run Bandit security scan on code"""
-        if not BANDIT_AVAILABLE:
-            msg = "Bandit not installed!\n\nInstall with:\npip install bandit\n\nThen restart the IDE."
-            messagebox.showwarning("Bandit Not Available", msg)
-            return
-            
-        try:
-            code = self.editor.get("1.0", tk.END).strip()
-            
-            # Check if editor is empty
-            if not code or len(code) < 10:
-                sample_code = '''import os
-import pickle
-import subprocess
-
-# SECURITY ISSUES EXAMPLE CODE
-# This code has intentional security issues for demonstration
-
-def unsafe_password():
-    """Hardcoded password - security issue!"""
-    password = "admin123"  # B105: Hardcoded password
-    return password
-
-def unsafe_sql(user_input):
-    """SQL injection vulnerability"""
-    query = "SELECT * FROM users WHERE id = '%s'" % user_input  # B608: SQL injection
-    return query
-
-def unsafe_exec(code_string):
-    """Using eval/exec is dangerous"""
-    result = eval(code_string)  # B307: Use of eval
-    exec("print('hello')")  # B102: Use of exec
-    return result
-
-def unsafe_pickle(data):
-    """Unsafe deserialization"""
-    return pickle.loads(data)  # B301: Pickle usage
-
-def unsafe_command(filename):
-    """Command injection vulnerability"""
-    os.system("cat " + filename)  # B605: Shell injection
-    subprocess.call("ls " + filename, shell=True)  # B602: Shell=True
-
-def weak_random():
-    """Weak random number generation"""
-    import random
-    return random.random()  # B311: Weak random for security
-
-# Try/except without proper handling
-try:
-    risky_operation()
-except:  # B001: Bare except
-    pass'''
-                
-                response = messagebox.askyesno("No Code to Scan",
-                    "The editor is empty.\n\nWould you like to load sample code with security issues to see how scanning works?")
-                
-                if response:
-                    self.editor.delete("1.0", tk.END)
-                    self.editor.insert("1.0", sample_code)
-                    self.apply_syntax_highlighting()
-                    code = sample_code
-                else:
-                    return
-            
-            # Save to temp file for Bandit
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
-                f.write(code)
-                temp_file = f.name
-            
-            # Run bandit
-            from bandit.core import manager as bandit_manager
-            from bandit.core import config as bandit_config
-            b_mgr = bandit_manager.BanditManager(bandit_config.BanditConfig(), 'file')
-            b_mgr.discover_files([temp_file])
-            b_mgr.run_tests()
-            
-            # Get results
-            issues = b_mgr.get_issue_list()
-            
-            # Display results in a window
-            results_window = Toplevel(self.root)
-            results_window.title("Security Scan Results")
-            results_window.geometry("700x500")
-            
-            results_text = scrolledtext.ScrolledText(results_window, wrap=tk.WORD)
-            results_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-            
-            if issues:
-                result_text = "🔒 SECURITY SCAN RESULTS\n" + "="*50 + "\n\n"
-                result_text += f"Found {len(issues)} potential security issues:\n\n"
-                
-                # Group by severity
-                high_issues = [i for i in issues if i.severity == "HIGH"]
-                medium_issues = [i for i in issues if i.severity == "MEDIUM"]
-                low_issues = [i for i in issues if i.severity == "LOW"]
-                
-                if high_issues:
-                    result_text += "🔴 HIGH SEVERITY:\n" + "-"*30 + "\n"
-                    for issue in high_issues:
-                        result_text += f"Line {issue.lineno}: {issue.test}\n"
-                        result_text += f"  {issue.text}\n\n"
-                
-                if medium_issues:
-                    result_text += "🟡 MEDIUM SEVERITY:\n" + "-"*30 + "\n"
-                    for issue in medium_issues:
-                        result_text += f"Line {issue.lineno}: {issue.test}\n"
-                        result_text += f"  {issue.text}\n\n"
-                
-                if low_issues:
-                    result_text += "🟢 LOW SEVERITY:\n" + "-"*30 + "\n"
-                    for issue in low_issues:
-                        result_text += f"Line {issue.lineno}: {issue.test}\n"
-                        result_text += f"  {issue.text}\n\n"
-                
-                result_text += "="*50 + "\n"
-                result_text += "💡 RECOMMENDATIONS:\n"
-                result_text += "• Review and fix HIGH severity issues immediately\n"
-                result_text += "• Consider fixing MEDIUM issues before production\n"
-                result_text += "• LOW issues may be acceptable depending on context\n"
-                
-                results_text.insert("1.0", result_text)
-                self.status_label.config(text=f"Security scan found {len(issues)} issues", fg="orange")
-            else:
-                result_text = "✅ SECURITY SCAN COMPLETE\n" + "="*50 + "\n\n"
-                result_text += "No security issues found!\n\n"
-                result_text += "Your code appears to be free of common security vulnerabilities.\n\n"
-                result_text += "Note: This scan checks for common patterns but is not exhaustive.\n"
-                result_text += "Always follow security best practices:\n"
-                result_text += "• Never hardcode passwords or secrets\n"
-                result_text += "• Validate and sanitize all user input\n"
-                result_text += "• Use parameterized queries for databases\n"
-                result_text += "• Avoid eval() and exec() with user input\n"
-                result_text += "• Use secure random number generation for security\n"
-                
-                results_text.insert("1.0", result_text)
-                self.status_label.config(text="No security issues found", fg="green")
-            
-            results_text.config(state=tk.DISABLED)
-            Button(results_window, text="Close", command=results_window.destroy).pack(pady=5)
-                
-            # Clean up
-            os.unlink(temp_file)
-            
-        except Exception as e:
-            messagebox.showerror("Security Scan Error", f"Error during security scan:\n{str(e)}")
-            self.status_label.config(text=f"Security scan error: {str(e)[:30]}", fg="red")
-            
     def run_type_checking(self):
         """Run MyPy type checking on code"""
         if not MYPY_AVAILABLE:
@@ -3638,58 +3469,13 @@ except:  # B001: Bare except
         try:
             code = self.editor.get("1.0", tk.END).strip()
             
-            # Check if editor is empty
             if not code or len(code) < 10:
-                sample_code = '''from typing import List, Optional, Dict, Union
+                messagebox.showinfo(
+                    "Type Checking",
+                    "The IDE editor is empty or too short.\n\n"
+                    "Load or paste Python into the IDE first, then run type checking again.")
+                return
 
-def add_numbers(a: int, b: int) -> int:
-    """Correctly typed function"""
-    return a + b
-
-def bad_return_type(x: int) -> str:
-    """Wrong return type - will be caught by mypy"""
-    return x  # Error: returning int, expected str
-
-def missing_return(x: int) -> int:
-    """Missing return statement"""
-    print(x)  # Error: missing return
-
-def process_items(items: List[str]) -> Dict[str, int]:
-    """Process a list of items"""
-    result: Dict[str, int] = {}
-    for item in items:
-        result[item] = len(item)
-    return result
-
-class Person:
-    def __init__(self, name: str, age: int) -> None:
-        self.name = name
-        self.age = age
-    
-    def greet(self, other: 'Person') -> str:
-        return f"Hello {other.name}, I'm {self.name}"
-
-def optional_param(value: Optional[int] = None) -> int:
-    if value is None:
-        return 0
-    return value * 2
-
-# Type error examples
-result1 = add_numbers("5", "10")  # Error: str instead of int
-result2 = bad_return_type(42)  # Will show type mismatch
-person = Person("Alice", "thirty")  # Error: str instead of int for age'''
-                
-                response = messagebox.askyesno("No Code to Type Check",
-                    "The editor is empty.\n\nWould you like to load sample code with type hints to see how type checking works?")
-                
-                if response:
-                    self.editor.delete("1.0", tk.END)
-                    self.editor.insert("1.0", sample_code)
-                    self.apply_syntax_highlighting()
-                    code = sample_code
-                else:
-                    return
-            
             # Save to temp file
             with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
                 f.write(code)
@@ -3706,7 +3492,15 @@ person = Person("Alice", "thirty")  # Error: str instead of int for age'''
             results_text = scrolledtext.ScrolledText(results_window, wrap=tk.WORD)
             results_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
             
-            result_text = "🔍 TYPE CHECKING RESULTS\n" + "="*50 + "\n\n"
+            result_text = (
+                "HOW TO USE\n"
+                + "=" * 50 + "\n"
+                + "Right-click IDE editor → Analyze → MyPy type check (Python mode only).\n"
+                + "Requires: pip install mypy. Uses type hints you added to the code.\n"
+                + "Put real Python in the IDE first (e.g. Move to IDE).\n\n"
+                + "🔍 TYPE CHECKING RESULTS\n"
+                + "=" * 50 + "\n\n"
+            )
             
             if stdout and stdout.strip():
                 # Parse mypy output for better formatting
@@ -3775,160 +3569,6 @@ person = Person("Alice", "thirty")  # Error: str instead of int for age'''
         except Exception as e:
             messagebox.showerror("Type Checking Error", f"Error during type checking:\n{str(e)}")
             self.status_label.config(text=f"Type check error: {str(e)[:30]}", fg="red")
-            
-    def analyze_complexity(self):
-        """Analyze code complexity using Radon"""
-        if not RADON_AVAILABLE:
-            msg = "Radon not installed!\n\nInstall with:\npip install radon\n\nThen restart the IDE."
-            messagebox.showwarning("Radon Not Available", msg)
-            return
-
-        # Don't run complexity analysis on HTML content
-        if hasattr(self, 'parent') and self.parent.system_mode.get() == "html_programmer":
-            messagebox.showinfo("Complexity Analysis", "Complexity analysis is for Python code only.\nSwitch to Python mode to analyze code complexity.")
-            return
-
-        try:
-            code = self.editor.get("1.0", tk.END).strip()
-            
-            # Check if editor is empty or has no meaningful code
-            if not code or len(code) < 10:
-                # Provide sample code
-                sample_code = '''def calculate_grade(score):
-    """Calculate letter grade from score"""
-    if score >= 90:
-        return 'A'
-    elif score >= 80:
-        return 'B'
-    elif score >= 70:
-        return 'C'
-    elif score >= 60:
-        return 'D'
-    else:
-        return 'F'
-
-def complex_function(data, flag1, flag2):
-    """Example of more complex function"""
-    result = []
-    for item in data:
-        if flag1:
-            if flag2 and item > 10:
-                for i in range(item):
-                    if i % 2 == 0:
-                        result.append(i * 2)
-            else:
-                result.append(item)
-        else:
-            if item < 5:
-                result.append(item * -1)
-    return result
-
-class Calculator:
-    def add(self, a, b):
-        return a + b
-    
-    def divide(self, a, b):
-        if b != 0:
-            return a / b
-        return None'''
-                
-                # Ask user if they want to use sample code
-                response = messagebox.askyesno("No Code to Analyze", 
-                    "The editor is empty.\n\nWould you like to load sample code to see how complexity analysis works?")
-                
-                if response:
-                    self.editor.delete("1.0", tk.END)
-                    self.editor.insert("1.0", sample_code)
-                    self.apply_syntax_highlighting()
-                    code = sample_code
-                else:
-                    return
-            
-            # Analyze complexity
-            blocks = radon_cc.cc_visit(code)
-            
-            # Create results window
-            results_window = Toplevel(self.root)
-            results_window.title("Code Complexity Analysis")
-            results_window.geometry("700x500")
-            
-            results_text = scrolledtext.ScrolledText(results_window, wrap=tk.WORD)
-            results_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-            
-            analysis = "📊 COMPLEXITY ANALYSIS\n" + "="*50 + "\n\n"
-            
-            if blocks:
-                analysis += "📋 FUNCTIONS/METHODS FOUND:\n" + "-"*30 + "\n\n"
-                
-                # Complexity ratings
-                for block in blocks:
-                    if block.complexity <= 5:
-                        rating = "✅ Simple"
-                        advice = "Well structured, easy to understand"
-                    elif block.complexity <= 10:
-                        rating = "🟡 Moderate"
-                        advice = "Consider simplifying if possible"
-                    else:
-                        rating = "🔴 Complex"
-                        advice = "Should be refactored into smaller functions"
-                        
-                    analysis += f"📍 {block.name} (line {block.lineno}):\n"
-                    analysis += f"  Complexity Score: {block.complexity} - {rating}\n"
-                    analysis += f"  Type: {block.classname or 'Function'}\n"
-                    analysis += f"  Advice: {advice}\n\n"
-            else:
-                analysis += "ℹ️ No functions or methods found in the code.\n"
-                analysis += "Add some functions to see complexity analysis.\n\n"
-            
-            # Calculate maintainability index
-            try:
-                mi = radon_metrics.mi_visit(code, True)
-                analysis += "\n📈 MAINTAINABILITY INDEX: {:.2f}\n".format(mi)
-                analysis += "-"*30 + "\n"
-                if mi >= 20:
-                    analysis += "  ✅ Good maintainability (20+)\n"
-                    analysis += "  Code is easy to maintain and modify\n"
-                elif mi >= 10:
-                    analysis += "  🟡 Moderate maintainability (10-20)\n"
-                    analysis += "  Some refactoring could improve maintainability\n"
-                else:
-                    analysis += "  🔴 Poor maintainability (<10)\n"
-                    analysis += "  Significant refactoring recommended\n"
-            except Exception as e:
-                analysis += "\n(Maintainability index not available for this code)\n"
-            
-            # Halstead metrics
-            try:
-                h = radon_metrics.h_visit(code)
-                if h[0]:  # Check if metrics exist
-                    h = h[0]  # Get first result
-                    analysis += "\n📏 HALSTEAD METRICS:\n"
-                    analysis += "-"*30 + "\n"
-                    analysis += f"  Difficulty: {h.difficulty:.2f}\n"
-                    analysis += f"  Effort: {h.effort:.2f}\n"
-                    analysis += f"  Time to implement: {h.time:.2f} seconds\n"
-                    analysis += f"  Bugs estimate: {h.bugs:.3f}\n"
-            except:
-                pass
-            
-            # Add explanation
-            analysis += "\n" + "="*50 + "\n"
-            analysis += "📚 UNDERSTANDING COMPLEXITY:\n"
-            analysis += "-"*30 + "\n"
-            analysis += "• Complexity 1-5: Simple, linear code\n"
-            analysis += "• Complexity 6-10: Moderate, some branches\n"  
-            analysis += "• Complexity 11+: Complex, many paths\n\n"
-            analysis += "Lower complexity = easier to test and maintain!\n"
-            
-            results_text.insert("1.0", analysis)
-            results_text.config(state=tk.DISABLED)
-            
-            Button(results_window, text="Close", command=results_window.destroy).pack(pady=5)
-            
-            self.status_label.config(text="Complexity analysis complete", fg="green")
-            
-        except Exception as e:
-            messagebox.showerror("Complexity Analysis Error", f"Error analyzing code:\n{str(e)}")
             
     def show_debug_help(self):
         """Show help dialog for debug feature with example"""
@@ -4431,8 +4071,24 @@ Select "x + y" and Debug will add ic(x + y)
 
         # Auto-run: if the checkbox is checked, immediately run & fix so the
         # next error (if any) flows automatically into another LLM fix cycle.
+        # Cap at MAX_AUTO_FIX_ITERATIONS to prevent infinite loops.
+        # Proven by Aider (max 3 retries) — without a cap, the same error
+        # can loop indefinitely.
+        MAX_AUTO_FIX_ITERATIONS = 3
         if getattr(self, 'auto_run_after_accept', None) and self.auto_run_after_accept.get():
-            self.root.after(150, self.run_and_auto_fix)
+            iteration = getattr(self.parent, '_auto_fix_iteration', 0)
+            if iteration < MAX_AUTO_FIX_ITERATIONS:
+                self.parent._auto_fix_iteration = iteration + 1
+                self.parent.add_to_debug_console(
+                    f"Auto-fix iteration {iteration + 1}/{MAX_AUTO_FIX_ITERATIONS}")
+                self.root.after(150, self.run_and_auto_fix)
+            else:
+                self.parent._auto_fix_iteration = 0
+                self.status_label.config(
+                    text=f"Auto-fix stopped after {MAX_AUTO_FIX_ITERATIONS} iterations — review manually",
+                    fg="orange")
+                self.parent.add_to_debug_console(
+                    f"Auto-fix loop capped at {MAX_AUTO_FIX_ITERATIONS} iterations. Stopping.")
 
     def accept_changes(self):
         """Accept ALL hunks and apply (bulk accept)."""
@@ -4601,6 +4257,13 @@ Select "x + y" and Debug will add ic(x + y)
             self.status_label.config(text="No code to run", fg="gray")
             return
 
+        # If this is a fresh F6 press (not an auto-loop continuation),
+        # reset the iteration counter.  The counter is only incremented
+        # by apply_hunk_decisions() when auto-run fires after accept.
+        if not getattr(self.parent, '_auto_fix_in_progress', False):
+            self.parent._auto_fix_iteration = 0
+            self.parent._previous_fix_error = None
+
         # Determine mode
         mode = self.parent.system_mode.get()
         is_html = (mode == "html_programmer")
@@ -4628,6 +4291,11 @@ Select "x + y" and Debug will add ic(x + y)
         """Check for Python errors after execution and trigger auto-fix"""
         stderr = getattr(self.parent, 'last_run_stderr', None)
         if stderr and stderr.strip():
+            # Store error so next iteration's prompt includes
+            # "your previous fix didn't work" context
+            iteration = getattr(self.parent, '_auto_fix_iteration', 0)
+            if iteration > 0:
+                self.parent._previous_fix_error = stderr.strip().split('\n')[-1]
             self.status_label.config(text="Fixing...", fg="red", font=("TkDefaultFont", 10, "bold"))
             self.root.update_idletasks()
 
@@ -4640,6 +4308,9 @@ Select "x + y" and Debug will add ic(x + y)
             # Send fix request
             self.parent.fix_code_from_ide(original_code)
         else:
+            # Success — reset iteration counter
+            self.parent._auto_fix_iteration = 0
+            self.parent._previous_fix_error = None
             self.status_label.config(text="No errors!", fg="green", font=("TkDefaultFont", 10, "bold"))
             # Reset status after 2 seconds
             self.root.after(2000, lambda: self.status_label.config(text="Ready", fg="blue", font=("TkDefaultFont", 10)))
@@ -4658,6 +4329,9 @@ Select "x + y" and Debug will add ic(x + y)
         has_errors = any(marker in debug_content for marker in error_markers)
 
         if has_errors:
+            # Store error so next iteration's prompt includes
+            # "your previous fix didn't work" context
+            iteration = getattr(self.parent, '_auto_fix_iteration', 0)
             self.status_label.config(text="Fixing...", fg="red", font=("TkDefaultFont", 10, "bold"))
             self.root.update_idletasks()
 
@@ -4676,6 +4350,9 @@ Select "x + y" and Debug will add ic(x + y)
                     error_lines.append(line)
             self.parent.last_run_stderr = '\n'.join(error_lines[-20:]) if error_lines else "Browser JavaScript error detected"
 
+            if iteration > 0:
+                self.parent._previous_fix_error = self.parent.last_run_stderr.split('\n')[-1]
+
             # Enable auto-propose bypass
             self.parent._auto_fix_in_progress = True
 
@@ -4685,6 +4362,9 @@ Select "x + y" and Debug will add ic(x + y)
             # Send fix request
             self.parent.fix_code_from_ide(original_code)
         else:
+            # Success — reset iteration counter
+            self.parent._auto_fix_iteration = 0
+            self.parent._previous_fix_error = None
             self.status_label.config(text="No errors!", fg="green", font=("TkDefaultFont", 10, "bold"))
             # Reset status after 2 seconds
             self.root.after(2000, lambda: self.status_label.config(text="Ready", fg="blue", font=("TkDefaultFont", 10)))
@@ -4923,9 +4603,41 @@ def clear_gpu_memory():
 # Handles all LLM backends, UI layout, message routing, and the fix workflow.
 # =============================================================================
 
+def _ollama_chat_chunk_message(chunk):
+    """Normalize an Ollama /api/chat stream chunk to a plain message dict.
+
+    Thinking models (Qwen3, DeepSeek, Gemma thinking, etc.) stream reasoning in
+    message.thinking while message.content stays empty until the answer phase.
+    Code that only reads .content looks frozen while the GPU is busy.
+    """
+    msg = chunk.get('message') if isinstance(chunk, dict) else getattr(chunk, 'message', None)
+    if msg is None:
+        return {}
+    if isinstance(msg, dict):
+        return msg
+    return {
+        'role': getattr(msg, 'role', None),
+        'content': getattr(msg, 'content', None) or '',
+        'thinking': getattr(msg, 'thinking', None) or '',
+        'tool_calls': getattr(msg, 'tool_calls', None),
+    }
+
+
+# Google Gemma family: sampling overrides UI when model id/path/config indicates Gemma.
+# Thinking is toggled via <|think|> at the start of the system prompt (Thinking checkbox on).
+GEMMA_SAMPLE_TEMPERATURE = 1.0
+GEMMA_SAMPLE_TOP_P = 0.95
+GEMMA_SAMPLE_TOP_K = 64
+GEMMA_THINK_TRIGGER_TOKEN = "<|think|>"
+
+
 class OllamaGUI:
-    """Main chat interface with three-window system and integrated IDE
-    
+    """Main chat interface with three-window system and integrated IDE.
+
+    This class is intentionally large (all backends + UI + networking in one place).
+    Navigate with your editor's symbol/outline view, or search for section markers
+    like \"# ----------\" and method names (e.g. fix_code_from_ide, get_model_response).
+
     SYSTEM MESSAGE ROUTING GUIDE:
     
     Use the following methods for deterministic routing:
@@ -5002,6 +4714,9 @@ class OllamaGUI:
         self.top_p = DoubleVar(value=0.9)  # Nucleus sampling — 0.9 avoids cutting off valid code tokens
         self.top_k = IntVar(value=40)  # Default top_k for top-k sampling
         self.repetition_penalty = DoubleVar(value=1.08)  # Repetition penalty for local models
+        # Track whether user has manually changed sliders since last model load.
+        # If True, model-specific defaults will NOT override user's choices.
+        self._user_changed_sampling = False
         self.last_run_code = None
         self.last_run_stdout = None
         self.last_run_stderr = None
@@ -5076,13 +4791,10 @@ class OllamaGUI:
         self.total_output_tokens = 0 # Running total output tokens (resets on /restart)
         
         # =====================================================================
-        # GAME PRESETS — 16 one-shot generation prompts for the dropdown
-        # Each prompt is designed for local models (3-30B parameters).
-        # Key design principles:
-        #   - Specify canvas size, fps, and technical approach explicitly
-        #   - Give concrete pixel sizes, physics constants, colors
-        #   - Describe drawing with Canvas primitives (no external images)
-        #   - Keep scope achievable in a single generation (no multi-file)
+        # GAME PRESETS — one-shot generation prompts for the dropdown
+        # Each prompt describes gameplay, not drawing details — let the LLM
+        # make the best-looking game it can. All require programmatic sound
+        # effects using Web Audio API (no external files).
         # To add a new preset: add a key-value pair here. It auto-appears
         # in the combobox via list(self.game_prompts.keys()) at line ~6260.
         # =====================================================================
@@ -5090,279 +4802,191 @@ class OllamaGUI:
             "-- Select Game Preset --": "", # Placeholder
             "Space Invaders": """Create a complete Space Invaders game as a single HTML file using Canvas.
 
-Game structure:
-- 800x600 canvas, black background, 60fps game loop using requestAnimationFrame
-- Player: green rectangle at bottom, moves left/right with arrow keys, fires with spacebar (1 bullet at a time)
-- Aliens: 5 rows x 11 columns grid. Move right together, drop down one row when the row hits a wall, then move left. Repeat.
-- Alien speed increases as aliens are destroyed. Aliens drop bombs randomly.
-- 4 green bunkers made of small blocks. Bunker blocks are destroyed when hit by player bullet or alien bomb.
-- UFO: red rectangle crosses the top every 15 seconds for bonus points
-- 3 lives, score at top, game over when aliens reach the bottom or lives = 0
-- Press R to restart after game over
+- 800x600 canvas, black background, 60fps requestAnimationFrame loop
+- Player ship at bottom, moves left/right with arrow keys, fires with spacebar
+- 5 rows x 11 columns of aliens that march side-to-side, dropping down when they hit a wall, gradually speeding up as they're destroyed
+- Aliens randomly drop bombs. 4 destructible bunkers provide cover (damaged by both player bullets and alien bombs)
+- UFO crosses the top periodically for bonus points
+- 3 lives, score display, game over when aliens reach the bottom or lives = 0. Press R to restart.
+- Make the aliens, player, and all visuals look as good as possible using only Canvas drawing
+- Generate sound effects using Web Audio API (oscillators/noise): shoot, explosion, alien march, UFO hum. NO external sound files.""",
 
-Drawing (no images, all Canvas shapes):
-- Aliens: draw 3 distinct pixel-art shapes using small filled rectangles (8x8 grid patterns). Top row one shape, middle rows another, bottom rows another.
-- Player cannon: green trapezoid. Bullets: white 2x8 rectangles. Alien bombs: yellow zigzag lines.
-- Animate aliens with 2 frames: toggle between two sprite patterns every 0.5s""",
             "Asteroids": """Create a complete Asteroids game as a single HTML file using Canvas.
 
-Game structure:
 - 800x600 canvas, black background, 60fps requestAnimationFrame loop
-- Ship: white triangle at center, rotates with left/right arrows, thrust with up arrow adds velocity in facing direction
-- Physics: ship has momentum/inertia, drifts in space. Slight friction so it slows gradually.
-- Shooting: spacebar fires white dots from ship nose in facing direction. Max 4 bullets on screen.
-- Asteroids: start with 4 large irregular polygons (random vertices around a radius). When shot, large splits into 2 medium, medium into 2 small, small is destroyed.
-- Screen wrap: everything wraps around all 4 edges
-- Collision: simple circle-based distance checks
+- Ship at center: rotates with left/right arrows, thrust with up arrow (momentum/inertia physics, slight friction)
+- Spacebar fires bullets from ship nose in facing direction. Max 4 bullets on screen.
+- Start with 4 large asteroids. When shot: large splits into 2 medium, medium into 2 small, small is destroyed.
+- Screen wrap on all 4 edges. Circle-based collision detection.
 - 3 lives, score tracking, extra life at 10000 points
-- UFO appears every 20 seconds, flies across screen shooting at player
+- UFO appears periodically, flies across screen shooting at player
+- Classic vector-style look — make it visually faithful to the arcade original
+- Generate sound effects using Web Audio API (oscillators/noise): thrust, shoot, explosions of different sizes, UFO warning. NO external sound files.""",
 
-Drawing:
-- Ship: white outlined triangle with orange thrust flame when accelerating
-- Asteroids: white outlined irregular polygons that rotate slowly
-- All graphics are wireframe outlines on black, classic vector look""",
             "Breakout": """Create a complete Breakout game as a single HTML file using Canvas.
 
-Game structure:
 - 800x600 canvas, black background, 60fps requestAnimationFrame loop
-- Paddle: white rectangle at bottom, 80px wide, moves with left/right arrow keys and mouse
-- Ball: white 8px circle, starts on paddle, launches with spacebar at 45 degree angle
-- Ball bounces off walls, ceiling, and paddle. Reflect Y on top/paddle, reflect X on side walls.
-- Paddle hit position changes ball angle: center=straight up, edges=sharp angle
-- Bricks: 8 rows x 14 columns. Row colors top to bottom: red, red, orange, orange, green, green, yellow, yellow
-- Top rows worth more points (red=7, orange=5, green=3, yellow=1)
-- Ball speed increases 25% after breaking through orange row, another 25% after red row
-- 3 lives, score display, level clears when all bricks gone, then reload bricks with faster ball
+- Paddle at bottom moves with arrow keys and mouse. Ball launches from paddle with spacebar.
+- Ball bounces off walls, ceiling, and paddle. Paddle hit position affects ball angle.
+- 8 rows x 14 columns of bricks in different colors. Top rows worth more points.
+- Ball speed increases as you break through higher rows
+- 3 lives, score display, level clears when all bricks gone, then reload with faster ball
+- Make it look polished — colorful bricks, smooth ball movement, satisfying visuals
+- Generate sound effects using Web Audio API (oscillators/noise): ball bounce (different pitch for walls vs paddle vs bricks), brick break, life lost. NO external sound files.""",
 
-Drawing:
-- Bricks: filled rounded rectangles with 1px gap between them
-- Ball: white filled circle with short trailing afterimage
-- Clean, simple arcade look""",
             "Pac-Man": """Create a complete Pac-Man game as a single HTML file using Canvas.
 
-Game structure:
-- Canvas sized to fit a 28x31 tile grid (each tile 20px). Black background.
-- Maze: define as a 2D array. 1=wall (blue filled rectangles), 0=path with dot, 2=empty, 3=power pellet, 4=ghost house
-- Pac-Man: yellow circle with animated mouth (wedge cutout that opens/closes), moves with arrow keys
-- Movement is grid-aligned: Pac-Man moves tile-to-tile, queued turns execute when reaching an intersection
-- 4 ghosts, each a different color (red, pink, cyan, orange). Draw as a circle on top + wavy bottom edge.
-- Ghost AI: each ghost targets a different tile. Red chases Pac-Man directly. Pink targets 4 tiles ahead. Cyan uses red's position as reference. Orange chases when far, scatters when close.
-- Ghosts have 3 modes: chase, scatter (go to home corner), frightened (blue, wander randomly after power pellet)
-- Eating a power pellet turns ghosts blue for 8 seconds. Eating blue ghost = 200/400/800/1600 points.
-- 240 dots + 4 power pellets per level. Eating all dots wins the level.
-- 3 lives, score display, ghost eyes return to pen when eaten
+- Canvas sized to fit a 28x31 tile grid. Classic maze layout defined as a 2D array.
+- Pac-Man with animated chomping mouth, moves with arrow keys, grid-aligned tile-to-tile movement with queued turns
+- 4 ghosts (red, pink, cyan, orange), each with different AI behavior:
+  - Red: chases directly. Pink: targets ahead of Pac-Man. Cyan: uses red as reference. Orange: chases when far, scatters when close.
+- Ghost modes: chase, scatter (corners), frightened (after power pellet — can be eaten for escalating points 200/400/800/1600)
+- 240 dots + 4 power pellets per level. Eat all dots to win the level.
+- 3 lives, score display. Ghost eyes return to pen when eaten.
+- Make it look as close to the real Pac-Man as possible using Canvas drawing
+- Generate sound effects using Web Audio API (oscillators/noise): waka-waka eating, power pellet siren, ghost eaten, death. NO external sound files.""",
 
-Drawing:
-- Maze walls: blue rounded-corner rectangles. Dots: small white circles. Power pellets: large white circles that flash.""",
             "Frogger": """Create a complete Frogger game as a single HTML file using Canvas.
 
-Game structure:
-- 800x700 canvas. Divided into rows: safe grass at bottom, 5 road lanes, safe median, 5 river rows, 5 home slots at top.
-- Frog: green 30x30 square, moves one row/column per arrow key press (grid-snapping movement)
-- Road (bottom half): cars and trucks move left or right at different speeds per lane. Hitting any vehicle = death.
-- River (top half): logs and turtles move left or right. Frog MUST land on a log or turtle to cross. Falling in water = death. Frog rides on the log/turtle it's standing on.
-- 5 home slots at top: frog must reach each one. Fill all 5 to complete the level.
-- Timer bar at bottom counts down 30 seconds. Time out = death.
-- 3 lives, score: 10 points per row forward, 500 per home slot filled, time bonus
+- 800x700 canvas. Rows from bottom to top: safe grass, 5 road lanes, safe median, 5 river rows, 5 home slots.
+- Frog moves one grid step per arrow key press
+- Road: cars and trucks at different speeds per lane. Hit by vehicle = death.
+- River: logs and turtles moving left/right. Frog must ride on them to cross. Fall in water = death.
+- 5 home slots at top to fill. Fill all 5 to complete the level.
+- Timer bar counts down 30 seconds. 3 lives, score with time bonus.
+- Make the frog, vehicles, logs, and turtles look great using Canvas drawing
+- Generate sound effects using Web Audio API (oscillators/noise): hop, splash, squish, level complete. NO external sound files.""",
 
-Drawing:
-- Grass: green strips. Road: dark gray. River: dark blue.
-- Cars: colored rectangles (red, yellow, white, blue) of different sizes
-- Logs: brown rounded rectangles. Turtles: green circles in groups of 2-3.
-- Frog: bright green square with two darker green eyes""",
             "Centipede": """Create a complete Centipede game as a single HTML file using Canvas.
 
-Game structure:
-- 800x600 canvas, black background, 60fps loop. Playfield divided into a grid (about 30x25 cells).
-- Player: small bright green triangle at bottom, moves anywhere in bottom 6 rows with arrow keys. Fires upward with spacebar.
-- Centipede: 12 connected circle segments that enter from top. Head moves horizontally, all segments follow the path of the one ahead. When hitting a mushroom or wall edge, drop down one row and reverse direction.
-- Shooting a middle segment splits the centipede into two independent centipedes, each with its own head.
-- Mushrooms: scattered randomly on the grid (about 30). Each takes 4 hits to destroy. Draw as colored circles that change color with damage (green→yellow→orange→red→gone).
-- Spider: appears from side, bounces diagonally through the bottom area, destroys mushrooms it touches. Worth 300-900 points based on distance when shot.
-- Flea: drops straight down from top when few mushrooms in lower area, leaves new mushrooms behind.
-- 3 lives, score display, wave counter. New centipede each wave.
+- 800x600 canvas, black background, 60fps loop. Grid-based playfield.
+- Player at bottom (moves in bottom 6 rows), fires upward with spacebar
+- Centipede: 12 connected segments enter from top, moving horizontally. When hitting a mushroom or wall, drops down a row and reverses. Shooting a middle segment splits it into two independent centipedes.
+- ~30 mushrooms scattered on the grid, each takes 4 hits to destroy (visually changes with damage)
+- Spider bounces diagonally through bottom area, destroying mushrooms. Worth 300-900 points based on distance when shot.
+- Flea drops from top when few mushrooms remain below, leaving new mushrooms behind
+- 3 lives, score, wave counter. New centipede each wave.
+- Make all creatures look detailed and visually distinctive using Canvas drawing
+- Generate sound effects using Web Audio API (oscillators/noise): shoot, centipede movement, spider, mushroom hit, death. NO external sound files.""",
 
-Drawing:
-- Centipede head: bright red circle with two dot eyes. Body segments: green circles.
-- Mushrooms: filled circles. Spider: red X shape. Flea: small blue dropping dot.""",
             "Defender": """Create a complete Defender game as a single HTML file using Canvas.
 
-Game structure:
-- 900x500 canvas, black background. Side-scrolling: the world is 4x wider than the screen. Camera follows the player ship.
-- Player ship: small arrow/triangle shape, always at left-center of screen. Thrust with up arrow, reverse direction with left/right arrows. Ship faces left or right.
-- Shooting: spacebar fires a fast horizontal laser in the direction the ship faces
-- Terrain: a green mountain-line at the bottom (array of heights, drawn as a filled polygon)
-- Humanoids: 10 small stick figures walking on the terrain
-- Landers: red circles that descend toward humanoids. If a lander reaches a humanoid, it picks them up and carries them to the top. If it reaches the top, both become a fast-moving mutant.
-- Player can catch falling humanoids after destroying the lander carrying them. Catching = 500 bonus points.
-- Smart bomb (B key): destroys all visible enemies. 3 per life.
-- Minimap: thin strip at top of screen showing full world width with dots for enemies and humanoids
+- 900x500 canvas, black background. Side-scrolling world 4x wider than screen, camera follows player.
+- Player ship at left-center, thrust with up arrow, reverse direction with left/right. Spacebar fires horizontal laser.
+- Terrain: green mountain line at the bottom
+- 10 humanoids walking on terrain. Landers descend toward them — if a lander grabs a humanoid and reaches the top, both become a fast-moving mutant.
+- Player can catch falling humanoids after destroying their lander (500 bonus)
+- Smart bomb (B key) destroys all visible enemies. 3 per life.
+- Minimap strip at top showing full world with dots for enemies and humanoids
 - 3 lives, score, wave clears when all landers destroyed
+- Make all the ships, creatures, and terrain look polished using Canvas drawing
+- Generate sound effects using Web Audio API (oscillators/noise): laser, explosion, humanoid scream, lander hum. NO external sound files.""",
 
-Drawing:
-- Ship: white triangle with colored exhaust. Laser: thin white horizontal line.
-- Landers: red circles. Mutants: purple fast-moving triangles. Humanoids: small green stick figures.""",
             "Flappy Bird": """Create a complete Flappy Bird game as a single HTML file using Canvas.
 
-Game structure:
-- 400x600 canvas, light blue sky background, 60fps requestAnimationFrame loop
-- Bird: yellow 20px circle at x=100, affected by gravity (velocity += 0.4 each frame)
-- Spacebar or click: set bird velocity to -7 (flap up). Bird rotates to face its velocity direction.
-- Pipes: pairs of green rectangles with a 140px vertical gap. New pipe pair every 200px horizontally. Pipes scroll left at 2px/frame.
-- Collision: bird hits pipe rectangle or goes above/below screen = game over
-- Score: +1 each time bird passes a pipe pair. Display large centered score.
-- Ground: brown/green strip at bottom that scrolls left
-- Game states: READY (bird bobs, show "tap to start"), PLAYING (normal game), DEAD (bird falls, show score + "tap to restart")
-
-Drawing:
-- Bird: yellow filled circle with white eye, black pupil, orange triangle beak. Tilt angle based on velocity.
-- Pipes: bright green filled rectangles with darker green cap rectangles on the ends
-- Scrolling ground with simple grass texture pattern""",
+- 400x600 canvas, sky background, 60fps requestAnimationFrame loop
+- Bird affected by gravity, spacebar/click to flap up. Bird tilts to face its velocity direction.
+- Pipe pairs with a vertical gap scroll from right to left
+- Score +1 for each pipe pair passed. Collision with pipe or screen edges = game over.
+- Scrolling ground at bottom
+- Game states: READY (bird bobs, "tap to start"), PLAYING, DEAD (show score, "tap to restart")
+- Make the bird, pipes, and background look as charming and polished as possible
+- Generate sound effects using Web Audio API (oscillators/noise): flap, score point, hit/death. NO external sound files.""",
 
             "Doom-Style FPS": """Create a raycasting 3D first-person shooter as a single HTML file using Canvas.
 
-Game structure:
-- 800x600 canvas. Render a 3D view using raycasting from a 2D grid map (like Wolfenstein 3D).
-- Map: 16x16 grid defined as a 2D array. 0=empty, 1-4=different wall types. Include rooms, corridors, and open areas.
-- Raycasting: cast one ray per screen column (800 rays). For each ray, step through the grid using DDA algorithm to find the nearest wall. Draw a vertical stripe whose height = screenHeight / perpendicular_distance.
-- Color walls by type and shade by distance (darker = farther). North/south walls slightly darker than east/west.
-- Floor and ceiling: solid dark gray floor, dark blue ceiling (no need for floor-casting)
-- Player movement: W/S or Up/Down = move forward/back. A/D or Left/Right = rotate view. Collision detection against walls.
-- Enemies: 5 red circles placed on the map. Draw them as scaled sprites (larger when closer). They chase the player and deal damage on contact.
-- Weapon: draw a simple gun shape at bottom center. Spacebar to shoot. Raycast from center to check if an enemy is hit.
-- Health bar, ammo counter, minimap in corner showing top-down view of explored area
-
-Drawing:
-- Textured-look walls using vertical color gradient stripes
-- Simple HUD overlay with health and ammo""",
+- 800x600 canvas. Raycasting engine rendering a 3D view from a 2D 16x16 grid map (like Wolfenstein 3D).
+- DDA raycasting: one ray per screen column, draw vertical wall stripes sized by perpendicular distance
+- Wall colors vary by type and shade by distance. Floor and ceiling as solid colors.
+- WASD/arrows to move and rotate. Collision detection against walls.
+- 5 enemies placed on the map, drawn as scaled sprites. They chase the player and deal damage on contact.
+- Gun at bottom center, spacebar to shoot (raycast hit check). Health bar, ammo, minimap in corner.
+- Make it look as atmospheric and immersive as possible
+- Generate sound effects using Web Audio API (oscillators/noise): footsteps, gunshot, enemy hit, damage taken, ambient hum. NO external sound files.""",
 
             "Mario Kart": """Create a top-down racing game as a single HTML file using Canvas.
 
-Game structure:
 - 800x600 canvas, 60fps loop. Top-down view of an oval/figure-8 race track.
-- Track: define as a path (series of points forming a closed loop). Track surface is dark gray, 80px wide. Grass (green) outside, red/white curbs on edges.
-- Player kart: colored rectangle, 20x12px. Up arrow = accelerate, down = brake, left/right = rotate. Physics: velocity, acceleration, friction. Slower on grass.
-- 3 AI karts that follow the track path at varying speeds. Simple AI: steer toward next waypoint on the track.
-- 3 laps to win. Lap detection: crossing the start/finish line in the correct direction.
-- Items: yellow squares placed on track. Drive over one to get a random item (shown in HUD box). Spacebar to use:
-  - Green shell: fires forward in a straight line, bounces off walls, spins out any kart it hits
-  - Banana: drops behind kart, spins out anyone who hits it
-  - Mushroom: instant speed boost
-- Position display (1st-4th), lap counter, minimap in corner
+- Track defined as a path with road surface, grass outside, and curbs on edges.
+- Player kart: accelerate/brake with up/down, rotate with left/right. Physics with velocity, friction, slower on grass.
+- 3 AI karts following track waypoints at varying speeds
+- 3 laps to win. Items on track: green shell (fires forward, bounces), banana (drops behind), mushroom (speed boost). Spacebar to use.
+- Position display, lap counter, minimap
+- Make the karts, track, and items look great
+- Generate sound effects using Web Audio API (oscillators/noise): engine rev, item pickup, shell hit, boost. NO external sound files.""",
 
-Drawing:
-- Karts: colored rectangles with small exhaust puff when accelerating
-- Track: dark gray road with white dashed center line, red-white striped curbs""",
             "Mr. Do!": """Create a complete Mr. Do! digging game as a single HTML file using Canvas.
 
-Game structure:
-- 700x600 canvas. Grid-based playfield (about 20x15 cells). Most cells start filled with brown dirt.
-- Player (Mr. Do): red circle character, moves with arrow keys. Moving into a dirt cell digs it (clears it).
-- Cherries: clusters of 4 red dots scattered in the dirt. Collecting all cherries completes the level. Each cherry = 50 points.
-- Apples: 5-6 green circles resting on dirt. When the dirt below an apple is dug away, the apple falls. A falling apple crushes and kills any monster (or the player!) below it. Apples stop when they hit solid ground or another apple.
-- Monsters: 5 red squares that spawn from a central pen. They chase the player through dug tunnels. If no path exists, they slowly dig through dirt.
-- Powerball: spacebar throws a bouncing blue ball in the direction Mr. Do faces. It bounces off walls and kills one monster on contact, then returns to the player after 3 seconds. Only one powerball at a time.
+- 700x600 canvas. Grid-based playfield (~20x15 cells), most cells start as dirt.
+- Player digs by moving into dirt cells with arrow keys
+- Cherries scattered in dirt — collect all to complete the level (50 pts each)
+- Apples rest on dirt — when dirt below is dug away, they fall and crush anything below (including player!)
+- 5 monsters spawn from a central pen, chase player through tunnels, slowly dig through dirt if no path exists
+- Spacebar throws a bouncing powerball that kills one monster on contact, returns after 3 seconds. One at a time.
 - Killing all monsters also completes the level. 3 lives, score display.
+- Make the characters and environment look charming and detailed
+- Generate sound effects using Web Audio API (oscillators/noise): dig, cherry collect, apple fall/crush, powerball bounce, monster death. NO external sound files.""",
 
-Drawing:
-- Dirt: brown filled cells. Dug paths: black/dark background. Cherries: small red circles in clusters.
-- Mr. Do: red circle with a white hat (small white semicircle on top)
-- Monsters: red squares with simple dot eyes""",
             "Minecraft": """Create a Minecraft-style voxel building game as a single HTML file using Three.js (load from CDN).
 
-Game structure:
-- Full-window 3D scene with perspective camera. Generate a flat 32x32 terrain of grass blocks.
-- Terrain: top layer grass (green top, brown sides), fill below with dirt, bottom layer bedrock
-- Use simple Perlin/sine height variation so terrain isn't perfectly flat (hills 1-5 blocks tall)
-- First-person controls: WASD to move, mouse to look (pointer lock on click), space to jump, shift to descend in fly mode
-- Block interaction: left click = remove block (raycast from camera center, remove first intersected block), right click = place block on the face of the targeted block
-- Block types: grass, dirt, stone, wood, leaves, sand, water. Number keys 1-7 to select. Show selected type in HUD.
-- Trees: place 5-8 trees randomly (4-6 block brown trunk + green leaf cube cluster on top)
-- Performance: use merged geometry or InstancedMesh for blocks. Only render exposed faces.
-- Simple sky: light blue background color with a yellow circle (sun) on a distant plane
-- Crosshair: white + at screen center. Hotbar HUD at bottom showing block types.
+- Full-window 3D scene. 32x32 terrain with Perlin/sine height variation (gentle hills).
+- Terrain layers: grass top, dirt below, bedrock at bottom. 5-8 randomly placed trees.
+- First-person: WASD to move, mouse to look (pointer lock), space to jump
+- Left click = remove block, right click = place block on targeted face
+- Block types: grass, dirt, stone, wood, leaves, sand, water. Number keys 1-7 to select.
+- Crosshair at screen center. Hotbar HUD at bottom.
+- Performance: use InstancedMesh, only render exposed faces.
+- Keep it simple: no complex biomes or day/night cycle.
+- Generate sound effects using Web Audio API (oscillators/noise): block place, block break, footsteps. NO external sound files.""",
 
-Keep it simple: flat-ish terrain, basic box geometry, solid colors per face. No complex biomes or day/night cycle.""",
             "Super Mario Bros": """Create a Super Mario Bros side-scrolling platformer as a single HTML file using Canvas.
 
-Game structure:
-- 800x450 canvas, 60fps loop. World is wider than screen (3000px). Camera scrolls right to follow Mario.
-- Mario: 24x32 colored rectangle (red hat/shirt, blue overalls). Arrow keys to move, spacebar/up to jump.
-- Physics: gravity pulls Mario down. Jump velocity = -10, gravity = 0.5. Horizontal acceleration with friction. Mario can only jump when standing on ground/platform.
-- Level layout: define as an array of objects with (x, y, width, height, type). Types: ground, brick, question_block, pipe, gap.
-- Ground: brown blocks along the bottom, with gaps Mario can fall into (= death)
-- Question blocks: yellow blocks with "?" drawn on them. Hit from below = coin pops out (+100 points) or mushroom power-up.
-- Bricks: brown blocks that break when hit from below (only when Mario is big)
-- Enemies: Goombas (brown ovals that walk left, die when stomped) and Koopas (green rectangles that become sliding shells when stomped)
-- Pipes: green rectangles as obstacles
-- Power-up: mushroom moves right along ground. Collecting it makes Mario taller (32→48px). Getting hit while big = shrink back. Getting hit while small = death.
-- Flagpole at end of level (x=2800). Touching it = level complete.
-- 3 lives, coin counter, score display
+- 800x450 canvas, 60fps loop. World wider than screen (3000px), camera follows Mario.
+- Mario moves with arrow keys, jumps with spacebar/up. Gravity and momentum physics.
+- Level layout with ground blocks, gaps, bricks, question blocks (coins/mushroom), and pipes
+- Question blocks give coins (+100) or mushroom power-up when hit from below
+- Bricks break when hit from below (only when Mario is big)
+- Enemies: Goombas (walk left, die when stomped) and Koopas (become sliding shells when stomped)
+- Mushroom power-up makes Mario grow. Hit while big = shrink. Hit while small = death.
+- Flagpole at end = level complete. 3 lives, coin counter, score.
+- Make Mario, enemies, and the world look as faithful to the original as possible
+- Generate sound effects using Web Audio API (oscillators/noise): jump, coin, power-up, stomp, death, 1-up. NO external sound files.""",
 
-Drawing:
-- Mario: simple colored rectangles composing his body (no sprite sheet needed). Flip direction when moving left.
-- Ground/bricks: brown rectangles with dark grid lines. Question blocks: yellow with "?" text. Pipes: green rectangles.
-- Background: light blue sky, simple white cloud rectangles, green bush rectangles""",
             "Missile Command": """Create a complete Missile Command game as a single HTML file using Canvas.
 
-Game structure:
 - 800x600 canvas, black background, 60fps loop
-- 6 cities: small cyan building-shape clusters along the bottom of the screen
-- 3 missile batteries: at left, center, right bottom. Each starts with 10 missiles. Draw as small triangles with a missile count number.
-- Incoming missiles: red lines that descend from random top positions toward cities/batteries. They leave a red trail behind them.
-- Player targeting: move crosshair with mouse. Click to fire a defensive missile from the nearest battery that has ammo.
-- Defensive missiles: blue lines that travel from battery toward clicked position. When they arrive, they explode into an expanding/contracting orange circle (radius grows to 40px, then shrinks).
-- Any incoming missile trail that touches an explosion circle is destroyed (chain reactions possible).
-- Waves: wave 1 = 10 incoming missiles. Each wave adds 5 more and they move 10% faster.
-- MIRVs: starting wave 3, some missiles split into 2-3 warheads partway down
-- Scoring: 25 points per destroyed missile, 100 per surviving city at wave end
-- Game ends when all 6 cities are destroyed
+- 6 cities along the bottom. 3 missile batteries (left, center, right) each with 10 missiles.
+- Incoming missiles descend from random top positions toward cities/batteries, leaving trails.
+- Mouse to aim crosshair, click to fire defensive missile from nearest battery with ammo.
+- Defensive missiles travel to click position then explode (expanding/contracting circle). Any incoming trail touching explosion is destroyed (chain reactions possible).
+- Waves: start with 10 missiles, each wave adds more and moves faster. MIRVs after wave 3 (split into 2-3 warheads).
+- Scoring: 25 per missile destroyed, 100 per surviving city at wave end. Game over when all cities gone.
+- Make the cities, explosions, and missile trails look dramatic and polished
+- Generate sound effects using Web Audio API (oscillators/noise): launch, explosion, city destroyed, incoming whistle. NO external sound files.""",
 
-Drawing:
-- Cities: clusters of cyan filled rectangles of varying heights (simple skyline shapes)
-- Missile trails: thin lines (red=incoming, blue=defensive). Explosions: filled orange circles that pulse.""",
             "Q*bert": """Create a complete Q*bert game as a single HTML file using Canvas.
 
-Game structure:
-- 600x700 canvas, black background. Draw an isometric pyramid of cubes: 7 rows (1 cube on top, 7 on bottom = 28 cubes total).
-- Each cube drawn as a 3D-looking block: top face (one color), left face (darker shade), right face (different shade). Makes a nice 3D pyramid.
-- Q*bert: orange circle with eyes and a snout, sits on top face of current cube
-- Movement: arrow keys move Q*bert diagonally (up-left, up-right, down-left, down-right to adjacent cubes). Q*bert hops with a small arc animation.
-- Landing on a cube changes its top face color (e.g., blue→yellow). Goal: change ALL cubes to the target color to complete the level.
-- Enemies: Coily (red snake) starts as a purple ball that bounces down the pyramid, then becomes a snake that chases Q*bert. Slick and Sam (green/blue balls) bounce down and revert cube colors.
-- Falling off the edge = lose a life. But there are 2 spinning discs on the sides that teleport Q*bert back to the top.
-- 3 lives, score (25 per cube changed, 500 per level cleared)
-- Level 2+: cubes require 2 color changes (blue→intermediate→target), making it harder
+- 600x700 canvas, black background. Isometric pyramid of cubes: 7 rows (28 cubes total).
+- Each cube rendered as a 3D-looking isometric block with top, left, and right faces in different shades.
+- Q*bert sits on cubes, hops diagonally with arrow keys (with arc animation)
+- Landing on a cube changes its color. Goal: change ALL cubes to the target color.
+- Enemies: Coily (starts as ball, becomes snake that chases Q*bert). Slick and Sam revert cube colors.
+- Falling off edge = lose life. 2 spinning discs on sides teleport Q*bert to top.
+- 3 lives, score. Level 2+: cubes need 2 color changes.
+- Make the isometric 3D look as impressive as possible
+- Generate sound effects using Web Audio API (oscillators/noise): hop, color change, Coily bounce, fall, level complete. NO external sound files.""",
 
-Drawing:
-- Cubes: isometric projection. Top face = parallelogram, left/right faces = parallelograms creating 3D box look.
-- Q*bert: orange circle with white eye, sitting on top face of cube
-- Simple but effective isometric 3D look""",
-            "Contra Run": """Create a side-scrolling run-and-gun action game inspired by classic Contra as a single HTML file using Canvas.
+            "Contra Run": """Create a side-scrolling run-and-gun action game inspired by Contra as a single HTML file using Canvas.
 
-Game structure:
-- 800x500 canvas, 60fps requestAnimationFrame loop. World scrolls right as the player advances (total world width: 4000px).
-- Player: 20x36 colored rectangle (green body, skin-color face, dark legs). Starts at left side.
-- Controls: left/right arrows to run, spacebar/up to jump, Z or Ctrl to shoot. Player can aim in 8 directions: hold up to shoot up, down to duck and shoot low, diagonals while jumping.
-- Physics: gravity = 0.5, jump velocity = -10. Player can jump onto platforms and over gaps.
-- Bullets: small yellow rectangles that travel fast in the aimed direction. Player can fire every 150ms.
-- Level layout: array of platforms and terrain. Mix of flat ground, elevated platforms, gaps to jump over, and stairs.
-- Enemies (spawn at intervals ahead of the player):
-  1. Soldiers: red rectangles that run toward player and shoot horizontally every 2 seconds
-  2. Turrets: gray squares fixed on platforms that aim and fire at the player every 1.5 seconds
-  3. Runners: orange rectangles that sprint toward the player (no shooting, just contact damage)
-- Enemy bullets: small red dots. Player bullets: small yellow dots.
-- Getting hit = lose a life (flash briefly and get 2s invincibility). 3 lives.
-- Power-ups: blue diamond drops from some enemies. Collecting it upgrades weapon:
-  - Level 0: single shot. Level 1: faster fire rate. Level 2: spread shot (3 bullets in a fan)
-- Boss at x=3600: large red rectangle (80x60) with a visible health bar (20 HP). Fires 3 bullets in a spread pattern every second. Defeating boss = you win.
-- Score: 100 per soldier, 200 per turret, 1000 for boss
-
-Drawing:
-- Background: dark blue sky gradient at top, green jungle ground. Parallax: distant mountains scroll at half speed.
-- Player: green rectangle body, runs with simple leg toggle animation (swap between 2 poses). Flashes white when hit.
-- Explosions: when enemies die, show expanding orange circle that fades out over 10 frames.
-- HUD: lives, score, weapon level at top of screen""",
+- 800x500 canvas, 60fps loop. World scrolls right (total width: 4000px).
+- Player runs with left/right, jumps with spacebar/up, shoots with Z/Ctrl. Can aim in 8 directions.
+- Gravity and momentum physics. Platforms, gaps, and stairs in the level layout.
+- Enemies: soldiers (run toward player, shoot), turrets (fixed, aim at player), runners (sprint, contact damage)
+- Hit = lose life (brief invincibility). 3 lives.
+- Power-ups drop from enemies: weapon upgrade (faster fire → spread shot)
+- Boss at end: large enemy with health bar, fires spread patterns. Defeating boss = win.
+- Parallax scrolling background. Make everything look action-packed and detailed.
+- Generate sound effects using Web Audio API (oscillators/noise): gunshot, enemy hit, explosion, power-up, boss music/warning. NO external sound files.""",
         }
         self.selected_game_prompt = StringVar(value="-- Select Game Preset --")
         
@@ -6068,6 +5692,7 @@ Drawing:
             resolution=0.05,
             orient=tk.HORIZONTAL,
             variable=self.top_p,
+            command=lambda v: setattr(self, '_user_changed_sampling', True),
             length=200
         )
         self.topp_slider.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
@@ -6075,9 +5700,9 @@ Drawing:
         # Top-p presets
         topp_preset_frame = Frame(self.topp_frame)
         topp_preset_frame.pack(side=tk.RIGHT)
-        Button(topp_preset_frame, text="Focused (0.8)", command=lambda: self.top_p.set(0.8)).pack(side=tk.LEFT, padx=2)
-        Button(topp_preset_frame, text="Code (0.9)", command=lambda: self.top_p.set(0.9)).pack(side=tk.LEFT, padx=2)
-        Button(topp_preset_frame, text="Creative (0.95)", command=lambda: self.top_p.set(0.95)).pack(side=tk.LEFT, padx=2)
+        Button(topp_preset_frame, text="Focused (0.8)", command=lambda: (self.top_p.set(0.8), setattr(self, '_user_changed_sampling', True))).pack(side=tk.LEFT, padx=2)
+        Button(topp_preset_frame, text="Code (0.9)", command=lambda: (self.top_p.set(0.9), setattr(self, '_user_changed_sampling', True))).pack(side=tk.LEFT, padx=2)
+        Button(topp_preset_frame, text="Creative (0.95)", command=lambda: (self.top_p.set(0.95), setattr(self, '_user_changed_sampling', True))).pack(side=tk.LEFT, padx=2)
 
         # Top-k control
         self.topk_frame = Frame(main_frame)
@@ -6089,6 +5714,7 @@ Drawing:
             to=100,
             orient=tk.HORIZONTAL,
             variable=self.top_k,
+            command=lambda v: setattr(self, '_user_changed_sampling', True),
             length=200
         )
         self.topk_slider.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
@@ -6096,9 +5722,9 @@ Drawing:
         # Top-k presets
         topk_preset_frame = Frame(self.topk_frame)
         topk_preset_frame.pack(side=tk.RIGHT)
-        Button(topk_preset_frame, text="Precise (10)", command=lambda: self.top_k.set(10)).pack(side=tk.LEFT, padx=2)
-        Button(topk_preset_frame, text="Balanced (40)", command=lambda: self.top_k.set(40)).pack(side=tk.LEFT, padx=2)
-        Button(topk_preset_frame, text="Creative (80)", command=lambda: self.top_k.set(80)).pack(side=tk.LEFT, padx=2)
+        Button(topk_preset_frame, text="Precise (10)", command=lambda: (self.top_k.set(10), setattr(self, '_user_changed_sampling', True))).pack(side=tk.LEFT, padx=2)
+        Button(topk_preset_frame, text="Balanced (40)", command=lambda: (self.top_k.set(40), setattr(self, '_user_changed_sampling', True))).pack(side=tk.LEFT, padx=2)
+        Button(topk_preset_frame, text="Creative (80)", command=lambda: (self.top_k.set(80), setattr(self, '_user_changed_sampling', True))).pack(side=tk.LEFT, padx=2)
 
         # Repetition penalty control
         self.rep_penalty_frame = Frame(main_frame)
@@ -6110,15 +5736,16 @@ Drawing:
             resolution=0.02,
             orient=tk.HORIZONTAL,
             variable=self.repetition_penalty,
+            command=lambda v: setattr(self, '_user_changed_sampling', True),
             length=200
         )
         self.rep_penalty_slider.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         rep_preset_frame = Frame(self.rep_penalty_frame)
         rep_preset_frame.pack(side=tk.RIGHT)
-        Button(rep_preset_frame, text="Off (1.0)", command=lambda: self.repetition_penalty.set(1.0)).pack(side=tk.LEFT, padx=2)
-        Button(rep_preset_frame, text="Light (1.05)", command=lambda: self.repetition_penalty.set(1.05)).pack(side=tk.LEFT, padx=2)
-        Button(rep_preset_frame, text="Normal (1.08)", command=lambda: self.repetition_penalty.set(1.08)).pack(side=tk.LEFT, padx=2)
-        Button(rep_preset_frame, text="Strong (1.15)", command=lambda: self.repetition_penalty.set(1.15)).pack(side=tk.LEFT, padx=2)
+        Button(rep_preset_frame, text="Off (1.0)", command=lambda: (self.repetition_penalty.set(1.0), setattr(self, '_user_changed_sampling', True))).pack(side=tk.LEFT, padx=2)
+        Button(rep_preset_frame, text="Light (1.05)", command=lambda: (self.repetition_penalty.set(1.05), setattr(self, '_user_changed_sampling', True))).pack(side=tk.LEFT, padx=2)
+        Button(rep_preset_frame, text="Normal (1.08)", command=lambda: (self.repetition_penalty.set(1.08), setattr(self, '_user_changed_sampling', True))).pack(side=tk.LEFT, padx=2)
+        Button(rep_preset_frame, text="Strong (1.15)", command=lambda: (self.repetition_penalty.set(1.15), setattr(self, '_user_changed_sampling', True))).pack(side=tk.LEFT, padx=2)
 
         # Max tokens control for GGUF (initially hidden)
         self.max_tokens_frame = Frame(main_frame)
@@ -7106,7 +6733,7 @@ Based on the above context, please answer: {input_text}"""
         is_gpt5 = model_name.startswith("gpt-5")
         payload = {
             "model": model_name,
-            "messages": self.messages,
+            "messages": self._messages_with_gemma_think_token(self.messages, model_name=model_name),
         }
         if is_gpt5:
             payload["max_completion_tokens"] = int(self.max_tokens_var.get())
@@ -7114,7 +6741,11 @@ Based on the above context, please answer: {input_text}"""
             stream = False  # GPT-5 models don't support streaming (organization verification required)
         else:
             payload["max_tokens"] = int(min(max(self.max_tokens_var.get(), 1), 100000))
-            payload["temperature"] = float(self.temperature.get())
+            if self._is_gemma_model_string(model_name):
+                payload["temperature"] = float(GEMMA_SAMPLE_TEMPERATURE)
+                payload["top_p"] = float(GEMMA_SAMPLE_TOP_P)
+            else:
+                payload["temperature"] = float(self.temperature.get())
             stream = True
         payload["stream"] = stream
 
@@ -7243,15 +6874,17 @@ Based on the above context, please answer: {input_text}"""
                 raise Exception("Ollama service is not available")
                 
             # Prepare API call parameters
+            api_messages = self._messages_with_gemma_think_token(
+                self.messages, model_name=model_to_use)
             api_params = {
                 "model": model_to_use,
-                "messages": self.messages,
+                "messages": api_messages,
                 "stream": True,
-                "options": {"temperature": self.temperature.get()}
+                "options": self._ollama_options_for_model(model_to_use),
             }
 
-            # Add think parameter if Thinking checkbox is enabled
-            if self.hide_thinking.get():
+            # Native Ollama reasoning stream — not used for Gemma (Gemma uses <|think|> on system prompt).
+            if self.hide_thinking.get() and not self._is_gemma_model_string(model_to_use):
                 api_params["think"] = True
             
             # Add tools if search mode is enabled
@@ -7274,6 +6907,8 @@ Based on the above context, please answer: {input_text}"""
             # Initialize thinking state tracking
             in_thinking_block = False
             pending_buffer = ""
+            has_thinking_tags = False
+            self._ollama_hidethink_status_shown = False
 
             # Process each chunk as it arrives
             for chunk in stream:
@@ -7285,9 +6920,11 @@ Based on the above context, please answer: {input_text}"""
                         pass
                     break
 
+                msg = _ollama_chat_chunk_message(chunk)
+
                 # Check for tool calls in the chunk — collect for agent loop
-                if 'message' in chunk and 'tool_calls' in chunk['message'] and chunk['message']['tool_calls']:
-                    tool_calls = chunk['message']['tool_calls']
+                if msg.get('tool_calls'):
+                    tool_calls = msg['tool_calls']
                     for tool_call in tool_calls:
                         func_name = tool_call.get('function', {}).get('name', '')
                         arguments = tool_call.get('function', {}).get('arguments', {})
@@ -7304,26 +6941,29 @@ Based on the above context, please answer: {input_text}"""
                             'backend': 'ollama'
                         })
 
-                chunk_text = chunk['message'].get('content', '')
-                if chunk_text:  # Only add if there's actual content
-                    full_response += chunk_text
+                # Ollama native thinking stream (message.thinking) before answer tokens arrive
+                think_delta = msg.get('thinking') or ''
+                if think_delta and self.hide_thinking.get():
+                    if not getattr(self, '_ollama_hidethink_status_shown', False):
+                        self._ollama_hidethink_status_shown = True
+                        self.display_status_message(
+                            "Ollama: reasoning (hidden) — answer will stream when ready")
+                elif think_delta:
+                    self.append_to_chat(think_delta)
 
-                    # Track thinking tags for post-processing
-                    if '<think>' in chunk_text or '<thinking>' in chunk_text:
+                chunk_text = msg.get('content') or ''
+                if chunk_text:
+                    full_response += chunk_text
+                    if '<redacted_thinking>' in chunk_text or '<thinking>' in chunk_text:
                         has_thinking_tags = True
 
-                # Handle thinking filtering with state tracking
                 if chunk_text and self.hide_thinking.get():
-                    # Process chunk with thinking state
                     display_text, in_thinking_block, pending_buffer = self._process_chunk_with_thinking(
                         chunk_text, in_thinking_block, pending_buffer
                     )
-
-                    # Display filtered content
                     if display_text:
                         self.append_to_chat(display_text)
                 elif chunk_text:
-                    # No filtering needed - display everything
                     self.append_to_chat(chunk_text)
 
                 last_visible_update = len(full_response)
@@ -7347,21 +6987,23 @@ Based on the above context, please answer: {input_text}"""
             # Prepare the request payload
             import requests
             import json
-            
-            # Format the context from previous messages
+
+            # Create the API payload - using the documented format for vision models
+            api_messages = self._messages_with_gemma_think_token(
+                self.messages, model_name=model_to_use)
+            # Include system so Gemma receives <|think|> on system; prior code omitted system here.
             context = []
-            for msg in self.messages[:-1]:  # Exclude the last message which has the image
-                if msg['role'] == 'user':
+            for msg in api_messages[:-1]:  # Exclude the last message which has the image
+                if msg['role'] == 'system':
+                    context.append({"role": "system", "content": msg['content']})
+                elif msg['role'] == 'user':
                     context.append({"role": "user", "content": msg['content'] if isinstance(msg['content'], str) else "..."})
                 elif msg['role'] == 'assistant':
                     context.append({"role": "assistant", "content": msg['content']})
-                # Skip system messages for the API call
-            
-            # Create the API payload - using the documented format for vision models
             payload = {
                 "model": model_to_use,
                 "stream": True,
-                "options": {"temperature": self.temperature.get()},
+                "options": self._ollama_options_for_model(model_to_use),
                 "messages": context + [{
                     "role": "user",
                     "content": prompt_text,
@@ -7369,8 +7011,7 @@ Based on the above context, please answer: {input_text}"""
                 }]
             }
 
-            # Add think parameter if Thinking checkbox is enabled
-            if self.hide_thinking.get():
+            if self.hide_thinking.get() and not self._is_gemma_model_string(model_to_use):
                 payload["think"] = True
             
             # Make the API request
@@ -7384,6 +7025,8 @@ Based on the above context, please answer: {input_text}"""
             # Initialize thinking state tracking
             in_thinking_block = False
             pending_buffer = ""
+            has_thinking_tags = False
+            self._ollama_hidethink_status_shown = False
 
             # Handle the streaming response
             if response.status_code == 200:
@@ -7394,27 +7037,33 @@ Based on the above context, please answer: {input_text}"""
                     if line:
                         try:
                             chunk = json.loads(line)
-                            if 'message' in chunk and 'content' in chunk['message']:
-                                chunk_text = chunk['message']['content']
-                                full_response += chunk_text
+                            msg = _ollama_chat_chunk_message(chunk)
+                            if not msg:
+                                continue
 
-                                # Track thinking tags for post-processing
-                                if '<think>' in chunk_text or '<thinking>' in chunk_text:
+                            think_delta = msg.get('thinking') or ''
+                            if think_delta and self.hide_thinking.get():
+                                if not getattr(self, '_ollama_hidethink_status_shown', False):
+                                    self._ollama_hidethink_status_shown = True
+                                    self.display_status_message(
+                                        "Ollama: reasoning (hidden) — answer will stream when ready")
+                            elif think_delta:
+                                self.append_to_chat(think_delta)
+
+                            chunk_text = msg.get('content') or ''
+                            if chunk_text:
+                                full_response += chunk_text
+                                if '<redacted_thinking>' in chunk_text or '<thinking>' in chunk_text:
                                     has_thinking_tags = True
 
-                                # Handle thinking filtering with state tracking
-                                if self.hide_thinking.get():
-                                    # Process chunk with thinking state
-                                    display_text, in_thinking_block, pending_buffer = self._process_chunk_with_thinking(
-                                        chunk_text, in_thinking_block, pending_buffer
-                                    )
-
-                                    # Display filtered content
-                                    if display_text:
-                                        self.append_to_chat(display_text)
-                                else:
-                                    # No filtering needed - display everything
-                                    self.append_to_chat(chunk_text)
+                            if chunk_text and self.hide_thinking.get():
+                                display_text, in_thinking_block, pending_buffer = self._process_chunk_with_thinking(
+                                    chunk_text, in_thinking_block, pending_buffer
+                                )
+                                if display_text:
+                                    self.append_to_chat(display_text)
+                            elif chunk_text:
+                                self.append_to_chat(chunk_text)
 
                         except json.JSONDecodeError:
                             # Skip invalid JSON
@@ -7469,24 +7118,27 @@ Based on the above context, please answer: {input_text}"""
                 
                 # Use create_chat_completion with images
                 max_tokens = int(self.max_tokens_var.get())
-                # Ensure temperature is not too low to prevent infinite loops
-                # For code: use 0.0-0.3 for deterministic, 0.4-0.7 for creative solutions
-                temp_value = max(self.temperature.get(), 0.05)  # Allow near-0 but prevent infinite loops
+                gguf_name = os.path.basename((self.selected_gguf_path.get() or ""))
+                if self._is_gemma_model_string(gguf_name):
+                    temp_value = GEMMA_SAMPLE_TEMPERATURE
+                    top_p_use, top_k_use = GEMMA_SAMPLE_TOP_P, GEMMA_SAMPLE_TOP_K
+                else:
+                    temp_value = max(self.temperature.get(), 0.05)
+                    top_p_use, top_k_use = 0.8, 20
 
                 api_params = {
                     "messages": messages,
                     "max_tokens": max_tokens,
-                    "temperature": temp_value,  # Prevent infinite loops with minimum temp
-                    "top_p": 0.8,  # Qwen recommended setting
-                    "top_k": 20,  # Qwen recommended setting
+                    "temperature": temp_value,
+                    "top_p": top_p_use,
+                    "top_k": top_k_use,
                     "min_p": 0.01,  # Qwen recommended setting (optional)
                     "repeat_penalty": 1.05,  # Qwen recommended setting
                     "stream": True,
                     "stop": ["</s>", "<|endoftext|>", "<|eot_id|>", "\n\nUser:", "\n\nAssistant:"]  # Add proper stop sequences
                 }
 
-                # Add think parameter if Thinking checkbox is enabled (llama-cpp may ignore this)
-                if self.hide_thinking.get():
+                if self.hide_thinking.get() and not self._is_gemma_model_string(gguf_name):
                     api_params["think"] = True
 
                 # Add tools if search mode is enabled
@@ -7530,25 +7182,29 @@ Based on the above context, please answer: {input_text}"""
             else:
                 # Text-only response using create_chat_completion
                 max_tokens = int(self.max_tokens_var.get())
-
-                # Ensure temperature is not too low to prevent infinite loops
-                # For code: use 0.0-0.3 for deterministic, 0.4-0.7 for creative solutions
-                temp_value = max(self.temperature.get(), 0.05)  # Allow near-0 but prevent infinite loops
+                gguf_name = os.path.basename((self.selected_gguf_path.get() or ""))
+                chat_messages = self._messages_with_gemma_think_token(
+                    self.messages, model_name=gguf_name)
+                if self._is_gemma_model_string(gguf_name):
+                    temp_value = GEMMA_SAMPLE_TEMPERATURE
+                    top_p_use, top_k_use = GEMMA_SAMPLE_TOP_P, GEMMA_SAMPLE_TOP_K
+                else:
+                    temp_value = max(self.temperature.get(), 0.05)
+                    top_p_use, top_k_use = 0.8, 20
 
                 api_params = {
-                    "messages": self.messages,
+                    "messages": chat_messages,
                     "max_tokens": max_tokens,
-                    "temperature": temp_value,  # Prevent infinite loops with minimum temp
-                    "top_p": 0.8,  # Qwen recommended setting
-                    "top_k": 20,  # Qwen recommended setting
+                    "temperature": temp_value,
+                    "top_p": top_p_use,
+                    "top_k": top_k_use,
                     "min_p": 0.01,  # Qwen recommended setting (optional)
                     "repeat_penalty": 1.05,  # Qwen recommended setting
                     "stream": True,
                     "stop": ["</s>", "<|endoftext|>", "<|eot_id|>", "\n\nUser:", "\n\nAssistant:"]  # Add proper stop sequences
                 }
 
-                # Add think parameter if Thinking checkbox is enabled (llama-cpp may ignore this)
-                if self.hide_thinking.get():
+                if self.hide_thinking.get() and not self._is_gemma_model_string(gguf_name):
                     api_params["think"] = True
 
                 # Add tools if search mode is enabled
@@ -7644,6 +7300,57 @@ Based on the above context, please answer: {input_text}"""
 
         return clean_response
 
+    def _is_gemma_model_string(self, name):
+        """True when Ollama model tag, GGUF basename, or HF folder name is a Gemma model."""
+        if not name or not isinstance(name, str):
+            return False
+        return "gemma" in name.lower()
+
+    def _is_gemma_mlx_config(self, model_cfg):
+        """True when an MLX-loaded HF config is Gemma (covers gemma, gemma2, gemma3, gemma4, etc.)."""
+        if not model_cfg:
+            return False
+        mt = getattr(model_cfg, "model_type", None) or ""
+        arch = getattr(model_cfg, "architectures", None) or ""
+        if isinstance(arch, (list, tuple)):
+            arch = " ".join(str(a) for a in arch)
+        blob = f"{mt} {arch}".lower()
+        return "gemma" in blob
+
+    def _gemma_sampling_temp_top_p_top_k(self):
+        return (GEMMA_SAMPLE_TEMPERATURE, GEMMA_SAMPLE_TOP_P, GEMMA_SAMPLE_TOP_K)
+
+    def _messages_with_gemma_think_token(self, messages, *, model_name=None, mlx_config=None):
+        """Copy message list; if Gemma + Thinking checkbox on, prepend <|think|> to first system string.
+
+        Does not mutate self.messages — injection is per API call only.
+        """
+        out = [dict(m) if isinstance(m, dict) else m for m in messages]
+        is_gemma = False
+        if model_name and self._is_gemma_model_string(model_name):
+            is_gemma = True
+        if mlx_config is not None and self._is_gemma_mlx_config(mlx_config):
+            is_gemma = True
+        if not is_gemma or not self.hide_thinking.get():
+            return out
+        for m in out:
+            if isinstance(m, dict) and m.get("role") == "system" and isinstance(m.get("content"), str):
+                c = m["content"]
+                if not c.startswith(GEMMA_THINK_TRIGGER_TOKEN):
+                    m["content"] = GEMMA_THINK_TRIGGER_TOKEN + c
+                break
+        return out
+
+    def _ollama_options_for_model(self, model_name):
+        """Ollama /api/chat options: Gemma uses fixed temp/top_p/top_k; others keep UI temperature only."""
+        if self._is_gemma_model_string(model_name):
+            return {
+                "temperature": GEMMA_SAMPLE_TEMPERATURE,
+                "top_p": GEMMA_SAMPLE_TOP_P,
+                "top_k": GEMMA_SAMPLE_TOP_K,
+            }
+        return {"temperature": self.temperature.get()}
+
     def set_mlx_sampling(self, temp=0.15, top_p=0.95, top_k=40, repetition_penalty=1.08, repetition_context_size=64):
         """Set up MLX sampling parameters"""
         sampler = make_sampler(temp=temp, top_p=top_p, top_k=top_k)
@@ -7693,18 +7400,16 @@ Based on the above context, please answer: {input_text}"""
             # Check if tokenizer has a chat_template (e.g., Devstral-2-123B-Instruct)
             mlx_tools_enabled = hasattr(self, 'search_mode') and self.search_mode.get()
 
+            model_cfg = getattr(self.mlx_model, 'config', None) or (
+                getattr(self.mlx_vlm_model, 'config', None) if getattr(self, 'mlx_vlm_model', None) else None)
+
             if hasattr(self.mlx_tokenizer, 'chat_template') and self.mlx_tokenizer.chat_template is not None:
                 # Build messages list for chat template
                 messages = []
 
                 # Add system message if available
                 if self.system_message and self.system_message.get('content'):
-                    sys_content = self.system_message['content']
-                    # Gemma 4: prepend <|think|> token to enable thinking when checkbox is on
-                    model_cfg = getattr(self.mlx_model, 'config', None) or (self.mlx_vlm_model.config if self.mlx_vlm_model else None)
-                    if model_cfg and getattr(model_cfg, 'model_type', '') == 'gemma4' and self.hide_thinking.get():
-                        sys_content = "<|think|>" + sys_content
-                    messages.append({"role": "system", "content": sys_content})
+                    messages.append({"role": "system", "content": self.system_message['content']})
 
                 # Add conversation history (including tool results as user messages for MLX)
                 for msg in self.messages:
@@ -7722,6 +7427,9 @@ Based on the above context, please answer: {input_text}"""
                 elif self.messages and self.messages[-1]['role'] == 'user':
                     # Already in messages, don't duplicate
                     pass
+
+                # Gemma (all variants): <|think|> on first system message when Thinking is on
+                messages = self._messages_with_gemma_think_token(messages, mlx_config=model_cfg)
 
                 # Build tool definitions for Qwen3 chat template (if search enabled)
                 mlx_tool_defs = None
@@ -7746,7 +7454,7 @@ Based on the above context, please answer: {input_text}"""
                     )
             else:
                 # Use standard formatting for models without chat_template
-                prompt = self.format_messages_for_mlx(display_message)
+                prompt = self.format_messages_for_mlx(display_message, mlx_config=model_cfg)
                 
                 if not prompt:
                     # First message - use simple format
@@ -7761,11 +7469,15 @@ Based on the above context, please answer: {input_text}"""
             # Stream the response in real-time with live display
             response = ""
 
-            # Set up sampling parameters
+            # Set up sampling parameters — Gemma uses fixed temp/top_p/top_k per model card
+            if self._is_gemma_mlx_config(model_cfg):
+                g_temp, g_top_p, g_top_k = self._gemma_sampling_temp_top_p_top_k()
+            else:
+                g_temp, g_top_p, g_top_k = self.temperature.get(), self.top_p.get(), self.top_k.get()
             sampler, procs = self.set_mlx_sampling(
-                temp=self.temperature.get(),
-                top_p=self.top_p.get(),
-                top_k=self.top_k.get(),
+                temp=g_temp,
+                top_p=g_top_p,
+                top_k=g_top_k,
                 repetition_penalty=self.repetition_penalty.get(),
                 repetition_context_size=64
             )
@@ -7876,14 +7588,10 @@ Based on the above context, please answer: {input_text}"""
 
         # Build messages list — vlm_apply_chat_template expects plain string content
         # and inserts image tokens automatically via get_message_json for the first user message
+        vlm_cfg = self.mlx_vlm_model.config
         messages = []
         if self.system_message and self.system_message.get('content'):
-            sys_content = self.system_message['content']
-            # Gemma 4: prepend <|think|> token to enable thinking when checkbox is on
-            model_type = getattr(self.mlx_vlm_model.config, 'model_type', '')
-            if model_type == 'gemma4' and self.hide_thinking.get():
-                sys_content = "<|think|>" + sys_content
-            messages.append({"role": "system", "content": sys_content})
+            messages.append({"role": "system", "content": self.system_message['content']})
 
         # Add conversation history (text only — prior images are not resent)
         for msg in self.messages:
@@ -7893,6 +7601,8 @@ Based on the above context, please answer: {input_text}"""
         # Current user message (plain text — image token inserted by apply_chat_template)
         if display_message:
             messages.append({"role": "user", "content": display_message})
+
+        messages = self._messages_with_gemma_think_token(messages, mlx_config=vlm_cfg)
 
         # Apply the VLM chat template — num_images=1 tells it to insert image placeholder
         prompt = vlm_apply_chat_template(
@@ -7909,13 +7619,21 @@ Based on the above context, please answer: {input_text}"""
         pending_buffer = ""
         token_count = 0
 
+        vlm_gen_kwargs = {
+            "max_tokens": int(self.max_tokens_var.get()),
+            "temperature": self.temperature.get(),
+        }
+        if self._is_gemma_mlx_config(vlm_cfg):
+            vlm_gen_kwargs["temperature"] = GEMMA_SAMPLE_TEMPERATURE
+            vlm_gen_kwargs["top_p"] = GEMMA_SAMPLE_TOP_P
+            vlm_gen_kwargs["top_k"] = GEMMA_SAMPLE_TOP_K
+
         for response_chunk in vlm_stream_generate(
             self.mlx_vlm_model,
             self.mlx_vlm_processor,
             prompt=prompt,
             image=image_path,
-            max_tokens=int(self.max_tokens_var.get()),
-            temperature=self.temperature.get(),
+            **vlm_gen_kwargs,
         ):
             if self.stop_generation:
                 break
@@ -7961,15 +7679,10 @@ Based on the above context, please answer: {input_text}"""
         VLM models can generate text without an image — we just build the
         prompt with num_images=0 and skip the image argument.
         """
-        # Build messages list
+        vlm_cfg = self.mlx_vlm_model.config
         messages = []
         if self.system_message and self.system_message.get('content'):
-            sys_content = self.system_message['content']
-            # Gemma 4: prepend <|think|> token to enable thinking when checkbox is on
-            model_type = getattr(self.mlx_vlm_model.config, 'model_type', '')
-            if model_type == 'gemma4' and self.hide_thinking.get():
-                sys_content = "<|think|>" + sys_content
-            messages.append({"role": "system", "content": sys_content})
+            messages.append({"role": "system", "content": self.system_message['content']})
 
         for msg in self.messages:
             if msg['role'] in ['user', 'assistant']:
@@ -7981,6 +7694,8 @@ Based on the above context, please answer: {input_text}"""
 
         if display_message:
             messages.append({"role": "user", "content": display_message})
+
+        messages = self._messages_with_gemma_think_token(messages, mlx_config=vlm_cfg)
 
         # Build tool definitions for Qwen3 chat template (if search enabled)
         mlx_tools_enabled = hasattr(self, 'search_mode') and self.search_mode.get()
@@ -8013,12 +7728,20 @@ Based on the above context, please answer: {input_text}"""
         pending_buffer = ""
         token_count = 0
 
+        vlm_gen_kwargs = {
+            "max_tokens": int(self.max_tokens_var.get()),
+            "temperature": self.temperature.get(),
+        }
+        if self._is_gemma_mlx_config(vlm_cfg):
+            vlm_gen_kwargs["temperature"] = GEMMA_SAMPLE_TEMPERATURE
+            vlm_gen_kwargs["top_p"] = GEMMA_SAMPLE_TOP_P
+            vlm_gen_kwargs["top_k"] = GEMMA_SAMPLE_TOP_K
+
         for response_chunk in vlm_stream_generate(
             self.mlx_vlm_model,
             self.mlx_vlm_processor,
             prompt=prompt,
-            max_tokens=int(self.max_tokens_var.get()),
-            temperature=self.temperature.get(),
+            **vlm_gen_kwargs,
         ):
             if self.stop_generation:
                 break
@@ -8125,13 +7848,21 @@ Based on the above context, please answer: {input_text}"""
 
         return display_text, in_thinking_block, pending_buffer
 
-    def format_messages_for_mlx(self, display_message=None):
+    def format_messages_for_mlx(self, display_message=None, mlx_config=None):
         """Format messages for MLX model input"""
         formatted_messages = []
 
         # Add the current system message (which changes based on mode: Python, HTML, Helpful, etc.)
         if self.system_message and self.system_message.get('content'):
             system_content = self.system_message['content']
+            cfg = mlx_config
+            if cfg is None and getattr(self, 'mlx_model', None):
+                cfg = getattr(self.mlx_model, 'config', None)
+            if cfg is None and getattr(self, 'mlx_vlm_model', None):
+                cfg = getattr(self.mlx_vlm_model, 'config', None)
+            patched = self._messages_with_gemma_think_token(
+                [{"role": "system", "content": system_content}], mlx_config=cfg)
+            system_content = patched[0]["content"]
 
             formatted_messages.append(f"<|im_start|>system\n{system_content}<|im_end|>")
 
@@ -8155,6 +7886,14 @@ Based on the above context, please answer: {input_text}"""
         else:
             # Fallback to helpful system message if no system message is set
             fallback_system = self.system_message['content'] if self.system_message else python_system_message
+            cfg = mlx_config
+            if cfg is None and getattr(self, 'mlx_model', None):
+                cfg = getattr(self.mlx_model, 'config', None)
+            if cfg is None and getattr(self, 'mlx_vlm_model', None):
+                cfg = getattr(self.mlx_vlm_model, 'config', None)
+            patched = self._messages_with_gemma_think_token(
+                [{"role": "system", "content": fallback_system}], mlx_config=cfg)
+            fallback_system = patched[0]["content"]
             return f"<|im_start|>system\n{fallback_system}<|im_end|>\n<|im_start|>assistant\n"
 
     def stream_vllm_response(self, display_message=None):
@@ -8185,6 +7924,9 @@ Based on the above context, please answer: {input_text}"""
                         if text_content:
                             messages.append({"role": msg['role'], "content": text_content})
 
+            vllm_path = (self.selected_vllm_path.get() or "")
+            messages = self._messages_with_gemma_think_token(messages, model_name=vllm_path)
+
             # Convert messages to string format for vLLM
             prompt = ""
             for msg in messages:
@@ -8212,12 +7954,22 @@ Based on the above context, please answer: {input_text}"""
             self.add_to_debug_console("="*30)
 
             # Set up sampling parameters
-            sampling_params = SamplingParams(
-                temperature=self.temperature.get(),
-                top_p=self.top_p.get(),
-                max_tokens=int(self.max_tokens_var.get()),
-                stop=["</s>", "<|endoftext|>", "<|eot_id|>", "\n\nUser:", "\n\nAssistant:"]  # Common stop sequences
-            )
+            if self._is_gemma_model_string(vllm_path):
+                gv, gp, gk = self._gemma_sampling_temp_top_p_top_k()
+                sampling_params = SamplingParams(
+                    temperature=gv,
+                    top_p=gp,
+                    top_k=gk,
+                    max_tokens=int(self.max_tokens_var.get()),
+                    stop=["</s>", "<|endoftext|>", "<|eot_id|>", "\n\nUser:", "\n\nAssistant:"],
+                )
+            else:
+                sampling_params = SamplingParams(
+                    temperature=self.temperature.get(),
+                    top_p=self.top_p.get(),
+                    max_tokens=int(self.max_tokens_var.get()),
+                    stop=["</s>", "<|endoftext|>", "<|eot_id|>", "\n\nUser:", "\n\nAssistant:"]  # Common stop sequences
+                )
 
             # Generate response using vLLM
             outputs = self.vllm_model.generate([prompt], sampling_params, use_tqdm=False)
@@ -8312,6 +8064,8 @@ Based on the above context, please answer: {input_text}"""
                                 text_content += item.get('text', '')
                         if text_content:
                             messages.append({"role": msg['role'], "content": text_content})
+
+            messages = self._messages_with_gemma_think_token(messages, model_name=model_path)
 
             # Handle tokenization differently for MistralCommonBackend
             if MISTRAL_COMMON_AVAILABLE and isinstance(self.transformers_tokenizer, MistralCommonBackend):
@@ -8461,6 +8215,8 @@ Based on the above context, please answer: {input_text}"""
                 else:
                     # Set generation parameters with safeguards for regular models
                     temp_value = self.temperature.get()
+                    if self._is_gemma_model_string(model_path):
+                        temp_value = GEMMA_SAMPLE_TEMPERATURE
                     do_sample_flag = temp_value > 0
                     pad_token_id = getattr(self.transformers_tokenizer, 'eos_token_id', None)
                     eos_token_id = getattr(self.transformers_tokenizer, 'eos_token_id', None)
@@ -8484,6 +8240,10 @@ Based on the above context, please answer: {input_text}"""
                     else:
                         # Standard generation for other models
                         # Add CUDA assert protection by monitoring for numerical issues
+                        _gemma_gen_kw = {}
+                        if self._is_gemma_model_string(model_path):
+                            _gemma_gen_kw["top_p"] = GEMMA_SAMPLE_TOP_P
+                            _gemma_gen_kw["top_k"] = GEMMA_SAMPLE_TOP_K
                         try:
                             outputs = self.transformers_model.generate(
                                 inputs["input_ids"],
@@ -8494,6 +8254,7 @@ Based on the above context, please answer: {input_text}"""
                                 pad_token_id=pad_token_id,
                                 eos_token_id=eos_token_id,
                                 use_cache=True,
+                                **_gemma_gen_kw,
                             )
                         except RuntimeError as cuda_error:
                             if "device-side assert" in str(cuda_error) or "probability tensor" in str(cuda_error):
@@ -8524,6 +8285,7 @@ Based on the above context, please answer: {input_text}"""
                                             pad_token_id=pad_token_id,
                                             eos_token_id=eos_token_id,
                                             use_cache=False,  # Disable cache to avoid cached bad values
+                                            **_gemma_gen_kw,
                                         )
 
                                         # Restore original forward if we patched it
@@ -9176,19 +8938,31 @@ Based on the above context, please answer: {input_text}"""
         else:
             self.speed_label.config(text="")
 
-    def handle_code_update_response(self, response_text):
-        """Handle code update responses - just extract code and show as diff
-
-        Much simpler than FIM - just show what the LLM suggests!
-        """
-        # This is now handled by check_and_handle_ide_proposals
-        # which extracts code blocks and shows them as diffs
-        return False
-    
     # ---------- Response -> IDE routing ----------
     # After the LLM finishes, this extracts code from the response and routes
     # it to the IDE as a diff.  Tries SEARCH/REPLACE blocks first (fast edits),
     # then falls back to extracting full code blocks.
+
+    def _validate_proposed_code(self, code):
+        """Syntax-check proposed code before showing it to the user.
+
+        Returns (is_valid, error_message).  For Python, uses ast.parse().
+        For HTML, does basic tag-balance check.  Proven by Aider & Claude Code:
+        never show the user a proposal that can't even parse.
+        """
+        is_html = self.system_mode.get() == "html_programmer"
+        if is_html:
+            # Basic HTML sanity: must have <html or <!DOCTYPE or <head or <body or <script
+            if not any(tag in code.lower() for tag in ('<html', '<!doctype', '<head', '<body', '<script', '<canvas', '<div')):
+                return False, "Response doesn't look like valid HTML"
+            return True, ""
+        else:
+            import ast
+            try:
+                ast.parse(code)
+                return True, ""
+            except SyntaxError as e:
+                return False, f"SyntaxError: {e.msg} (line {e.lineno})"
 
     def check_and_handle_ide_proposals(self, message):
         """Route LLM response to IDE: try SEARCH/REPLACE blocks, then code blocks."""
@@ -9230,11 +9004,15 @@ Based on the above context, please answer: {input_text}"""
                 return
 
             # METHOD 2: Extract code block and try partial merge first
+            # Flexible patterns to handle local LLM formatting quirks (missing newlines, variant tags)
             if is_html_mode:
-                code_pattern = r'```html\s*\n(.*?)```'
+                code_pattern = r'```(?:html|HTML)\s*\n?(.*?)```'
             else:
-                code_pattern = r'```python\s*\n(.*?)```'
+                code_pattern = r'```(?:python|py|Python)\s*\n?(.*?)```'
             code_matches = re.findall(code_pattern, message, re.DOTALL)
+            # Fallback: any fenced code block if language-specific pattern found nothing
+            if not code_matches:
+                code_matches = re.findall(r'```\w*\s*\n?(.*?)```', message, re.DOTALL)
 
             if code_matches:
                 proposed_code = code_matches[-1].strip()
@@ -9255,12 +9033,12 @@ Based on the above context, please answer: {input_text}"""
                         return
 
                     # Merge failed — check if this looks like a complete program.
-                    # Only diff directly if the fragment is >= 90% of the original;
+                    # Only diff directly if the fragment is >= 80% of the original;
                     # anything smaller is a partial fragment that would wipe out
                     # unchanged code if shown as a raw diff.
                     orig_lines = len(self.ide_original_code.strip().split('\n'))
                     prop_lines = len(proposed_code.split('\n'))
-                    looks_complete = prop_lines >= orig_lines * 0.90
+                    looks_complete = prop_lines >= orig_lines * 0.80
 
                     if looks_complete:
                         # Fragment is nearly the full file — diff is safe
@@ -9277,10 +9055,12 @@ Based on the above context, please answer: {input_text}"""
                         self._fix_auto_retry_done = True
                         self._log_fix_event("merge", strategy="all", result="FAILED — auto-retrying with full code")
                         self.display_status_message("Partial fix couldn't be merged. Retrying with full code...")
+                        # Store context so the retry prompt tells LLM what happened
+                        self._previous_fix_error = "Partial fix could not be merged into the original program"
                         self.ide_original_code = None
                         self._auto_fix_in_progress = False
                         # Schedule auto-retry on main thread
-                        original_code = self.ide_window.get_content() if self.ide_window else code_content
+                        original_code = self.ide_window.get_content() if self.ide_window else ""
                         self.root.after(100, lambda c=original_code: self.fix_code_from_ide(c, _is_auto_retry=True))
                         return
                     else:
@@ -10280,10 +10060,57 @@ Based on the above context, please answer: {input_text}"""
                 
         self.display_status_message(f"Switched to {backend} backend")
     
+    # Model-specific recommended sampling parameters (from vendor docs).
+    # Applied on model load ONLY if user hasn't manually adjusted sliders.
+    _MODEL_SAMPLING_DEFAULTS = {
+        'gemma': {'temperature': 1.0, 'top_p': 0.95, 'top_k': 64, 'repetition_penalty': 1.0},
+        'qwen3': {'temperature': 0.6, 'top_p': 0.95, 'top_k': 20, 'repetition_penalty': 1.0},
+        'deepseek': {'temperature': 0.6, 'top_p': 0.95, 'top_k': 40, 'repetition_penalty': 1.0},
+        'glm': {'temperature': 0.6, 'top_p': 0.95, 'top_k': 40, 'repetition_penalty': 1.0},
+        'llama-4': {'temperature': 0.6, 'top_p': 0.9, 'top_k': 40, 'repetition_penalty': 1.0},
+    }
+
+    def _apply_model_sampling_defaults(self):
+        """Apply vendor-recommended sampling defaults for the loaded model.
+
+        Only applies if the user hasn't manually adjusted any slider/preset
+        since the last model load. Resets the manual-change flag so the next
+        model load can set its own defaults.
+        """
+        if self._user_changed_sampling:
+            return
+
+        # Determine model name from all possible sources
+        model_name = self.model_var.get().lower()
+        for attr in ('selected_mlx_path', 'selected_gguf_path', 'selected_transformers_path'):
+            v = getattr(self, attr, None)
+            if v:
+                val = v.get() if hasattr(v, 'get') else str(v)
+                if val:
+                    model_name = val.lower()
+                    break
+
+        # Check each model family pattern
+        for pattern, defaults in self._MODEL_SAMPLING_DEFAULTS.items():
+            if pattern in model_name:
+                self.temperature.set(defaults['temperature'])
+                self.top_p.set(defaults['top_p'])
+                self.top_k.set(defaults['top_k'])
+                self.repetition_penalty.set(defaults['repetition_penalty'])
+                self.update_temp_label(defaults['temperature'])
+                self.display_status_message(
+                    f"Auto-set sampling for {pattern}: temp={defaults['temperature']}, "
+                    f"top_p={defaults['top_p']}, top_k={defaults['top_k']}, "
+                    f"rep_penalty={defaults['repetition_penalty']}")
+                break
+
     def load_current_backend_model(self):
         """Load model for the currently selected backend"""
         backend = self.backend_var.get()
         
+        # Reset manual-change flag so model-specific defaults can apply
+        self._user_changed_sampling = False
+
         if backend == "ollama":
             self.load_ollama_model()
         elif backend == "llama_cpp":
@@ -10304,6 +10131,9 @@ Based on the above context, please answer: {input_text}"""
                 self.model_status_label.config(text=f"Selected: {selected_model}", fg="green")
             else:
                 self.model_status_label.config(text="Select an OpenAI model", fg="orange")
+
+        # Apply model-specific sampling defaults (respects manual overrides)
+        self._apply_model_sampling_defaults()
 
         # Update Ollama status indicator based on current backend
         self.update_ollama_status()
@@ -11115,9 +10945,11 @@ Based on the above context, please answer: {input_text}"""
     def update_temp_label(self, value):
         """Update the temperature label when slider is moved"""
         self.temp_value_label.config(text=f"{float(value):.2f}")
+        self._user_changed_sampling = True
 
     def set_temperature(self, value):
         """Set temperature to a preset value"""
+        self._user_changed_sampling = True
         self.temperature.set(value)
         self.update_temp_label(value)
         
@@ -11186,22 +11018,21 @@ Based on the above context, please answer: {input_text}"""
                 content = msg['content']
 
                 # 1. Fenced code blocks with explicit language tags
-                code_blocks = re.findall(r'```(?:python|py|html|javascript|js)\s*\n([\s\S]*?)```', content, re.DOTALL)
+                # \n? handles local LLMs that omit the newline after language tag
+                code_blocks = re.findall(r'```(?:python|py|Python|html|HTML|javascript|js)\s*\n?([\s\S]*?)```', content, re.DOTALL)
                 if code_blocks:
-                    if len(code_blocks) == 1:
-                        return _normalize_html(code_blocks[0]).strip('\n\r')
-                    # Multiple code blocks — combine them all so partial
-                    # fixes spread across blocks aren't lost.
-                    combined = '\n\n'.join(b.strip('\n\r') for b in code_blocks)
-                    return _normalize_html(combined).strip('\n\r')
+                    # Take the largest block — the actual program is almost
+                    # always the longest.  Small blocks are explanation
+                    # snippets or usage examples that shouldn't be combined
+                    # into the main program.
+                    best = max(code_blocks, key=len)
+                    return _normalize_html(best).strip('\n\r')
 
                 # 2. Any fenced code block (with or without language tag)
-                code_blocks = re.findall(r'```\w*\s*\n([\s\S]*?)```', content, re.DOTALL)
+                code_blocks = re.findall(r'```\w*\s*\n?([\s\S]*?)```', content, re.DOTALL)
                 if code_blocks:
-                    if len(code_blocks) == 1:
-                        return _normalize_html(code_blocks[0]).strip('\n\r')
-                    combined = '\n\n'.join(b.strip('\n\r') for b in code_blocks)
-                    return _normalize_html(combined).strip('\n\r')
+                    best = max(code_blocks, key=len)
+                    return _normalize_html(best).strip('\n\r')
 
                 # 3. Raw HTML document
                 html_blocks = re.findall(r'<html[\s\S]*?</html>', content, re.IGNORECASE)
@@ -11515,11 +11346,11 @@ Based on the above context, please answer: {input_text}"""
     # Called by both "Ask LLM to Fix" and Run & Fix (F6) after error detection.
 
     def get_model_tier(self):
-        """Detect model capability tier: 'weak', 'medium', or 'strong'.
+        """Detect model capability tier: 'strong' (cloud APIs) or 'local' (everything else).
 
-        Used to select the right fix prompt format.  MLX local models
-        default to 'weak' unless they match a known-capable pattern.
-        Cloud APIs (Claude, OpenAI) default to 'strong'.
+        Used to select the right fix prompt format.
+        Cloud APIs (Claude, OpenAI with strong models) get SEARCH/REPLACE mode.
+        All local models get the best full-code or targeted-fix treatment.
         """
         backend = self.backend_var.get()
         if backend == 'claude':
@@ -11528,11 +11359,10 @@ Based on the above context, please answer: {input_text}"""
             model = self.model_var.get().lower()
             if any(p in model for p in _STRONG_MODEL_PATTERNS):
                 return 'strong'
-            return 'medium'
+            return 'local'
 
         # Local backends: MLX, Ollama, GGUF, vLLM, Transformers
         model = self.model_var.get().lower()
-        # Check selected MLX/GGUF/Transformers path for model name
         for attr in ('selected_mlx_path', 'selected_gguf_path', 'selected_transformers_path'):
             v = getattr(self, attr, None)
             if v:
@@ -11543,17 +11373,14 @@ Based on the above context, please answer: {input_text}"""
         for p in _STRONG_MODEL_PATTERNS:
             if p in model:
                 return 'strong'
-        for p in _MEDIUM_MODEL_PATTERNS:
-            if p in model:
-                return 'medium'
-        return 'weak'
+        return 'local'
 
     def _log_fix_event(self, event, **kwargs):
         """Write a structured, timestamped line to the debug console for the fix pipeline.
 
         Example output:
-            [15:30:01] FIX START | error: runtime | line: 42 | lang: python | tier: weak | mode: full_code
-            [15:30:01] PROMPT    | 2450 chars | tier: weak | mode: full_code
+            [15:30:01] FIX START | error: runtime | line: 42 | lang: python | tier: local | mode: full_code
+            [15:30:01] PROMPT    | 2450 chars | tier: local | mode: full_code
             [15:30:15] MERGE     | strategy: partial | result: SUCCESS
         """
         import datetime
@@ -11567,10 +11394,8 @@ Based on the above context, please answer: {input_text}"""
     def fix_code_from_ide(self, code_content, _is_auto_retry=False):
         """Fix code from IDE with tier-aware prompting.
 
-        Adapts the fix prompt based on model capability:
-        - weak models (Qwen 3.5, small Llama): full code for short programs,
-          targeted with better guidance for long programs
-        - medium models (Qwen3 32B, Codestral): targeted fix with strict rules
+        Two tiers:
+        - local models: full code for programs <=350 lines, targeted fix for longer
         - strong models (Claude, GPT-4): SEARCH/REPLACE blocks
 
         The 'Return full code' checkbox in the IDE toolbar overrides to full
@@ -11598,18 +11423,47 @@ Based on the above context, please answer: {input_text}"""
 
         error_section = ""
         if self.last_run_stderr and self.last_run_stderr.strip():
-            error_section = f"\nError ({error_type}):\n```\n{self.last_run_stderr.strip()[-800:]}\n```"
+            # Send full traceback — Python tracebacks for single-file programs
+            # are almost never >4KB, and the call chain at the TOP is critical
+            # context.  Truncating from the front ([-800:]) loses the entry
+            # point.  Only truncate truly huge output (>4KB).
+            stderr_text = self.last_run_stderr.strip()
+            if len(stderr_text) > 4096:
+                # Keep first 1500 chars (call chain) + last 1500 chars (error)
+                stderr_text = stderr_text[:1500] + "\n... (truncated) ...\n" + stderr_text[-1500:]
+            error_section = f"\nError ({error_type}):\n```\n{stderr_text}\n```"
         if self.last_run_stdout and self.last_run_stdout.strip():
-            error_section += f"\nProgram output:\n```\n{self.last_run_stdout.strip()[-400:]}\n```"
+            stdout_text = self.last_run_stdout.strip()
+            if len(stdout_text) > 2048:
+                stdout_text = stdout_text[:800] + "\n... (truncated) ...\n" + stdout_text[-800:]
+            error_section += f"\nProgram output:\n```\n{stdout_text}\n```"
 
-        # Show code around the error line to help weak models focus
+        # Show the full function containing the error line, not just a fixed window.
+        # Uses the existing _find_functions() parser.  Falls back to ±10 lines
+        # if no function boundary is found (e.g. top-level code).
+        # Proven by Cursor & Claude Code: function-scoped context > fixed window.
         error_context = ""
         if error_line:
             lines = code_content.split('\n')
-            start = max(0, error_line - 6)
-            end = min(len(lines), error_line + 4)
+            # Try to find the enclosing function
+            is_js = '<script' in code_content or 'function ' in code_content
+            func_lang = 'js' if is_js else 'python'
+            funcs = self._find_functions(lines, func_lang)
+            enclosing_start, enclosing_end = None, None
+            for fname, (fs, fe) in funcs.items():
+                if fs < error_line <= fe:  # error_line is 1-based, fs/fe are 0-based
+                    enclosing_start, enclosing_end = fs, fe
+                    break
+            if enclosing_start is not None:
+                # Show full function with some surrounding context
+                start = max(0, enclosing_start - 2)
+                end = min(len(lines), enclosing_end + 2)
+            else:
+                # Fallback: ±10 lines around error
+                start = max(0, error_line - 10)
+                end = min(len(lines), error_line + 6)
             numbered = '\n'.join(f"{i+1:4d}| {l}" for i, l in enumerate(lines[start:end], start))
-            error_context = f"\nCode around error (line {error_line}):\n```\n{numbered}\n```"
+            error_context = f"\nCode around error (lines {start+1}-{end}, error on line {error_line}):\n```\n{numbered}\n```"
 
         problem_desc = f"Problem: {user_message}" if user_message else "Find and fix the bugs."
 
@@ -11621,38 +11475,68 @@ Based on the above context, please answer: {input_text}"""
 
         if user_forced_full or _is_auto_retry:
             # User toggled "Return full code" or auto-retry after merge failure
-            fix_fmt = FIX_FORMAT_INSTRUCTIONS['weak_short'].format(language=language)
-            fix_sys = FIX_SYSTEM_PROMPTS['weak']
+            fix_fmt = FIX_FORMAT_INSTRUCTIONS['local_full'].format(language=language)
+            fix_sys = FIX_SYSTEM_PROMPTS['local_full']
             mode_label = "full code" + (" (auto-retry)" if _is_auto_retry else "")
         elif tier == 'strong':
             fix_fmt = FIX_FORMAT_INSTRUCTIONS['strong'].format(language=language)
             fix_sys = FIX_SYSTEM_PROMPTS['strong']
             mode_label = "SEARCH/REPLACE"
-        elif tier == 'medium':
-            fix_fmt = FIX_FORMAT_INSTRUCTIONS['medium'].format(language=language)
-            fix_sys = FIX_SYSTEM_PROMPTS['medium']
-            mode_label = "targeted fix"
         else:
-            # Weak model — adaptive: full code for short, targeted for long
-            if code_line_count <= 200:
-                fix_fmt = FIX_FORMAT_INSTRUCTIONS['weak_short'].format(language=language)
-                fix_sys = FIX_SYSTEM_PROMPTS['weak']
-                mode_label = "full code (short program)"
+            # Local model — adaptive: full code for short/medium, targeted for long
+            if code_line_count <= 350:
+                fix_fmt = FIX_FORMAT_INSTRUCTIONS['local_full'].format(language=language)
+                fix_sys = FIX_SYSTEM_PROMPTS['local_full']
+                mode_label = "full code"
             else:
-                fix_fmt = FIX_FORMAT_INSTRUCTIONS['weak_long'].format(language=language)
-                fix_sys = FIX_SYSTEM_PROMPTS['medium']
-                mode_label = "targeted fix (long program)"
+                fix_fmt = FIX_FORMAT_INSTRUCTIONS['local_targeted'].format(language=language)
+                fix_sys = FIX_SYSTEM_PROMPTS['local_targeted']
+                mode_label = "targeted fix"
+
+        # --- Build retry context (tells LLM its previous fix failed) ---
+        # Proven by Aider & Cline: without this, the LLM often repeats
+        # the same broken fix.
+        retry_context = ""
+        if _is_auto_retry:
+            prev_syntax_err = getattr(self, '_last_syntax_error', None)
+            prev_fix_err = getattr(self, '_previous_fix_error', None)
+            if prev_syntax_err:
+                retry_context = (
+                    f"\n⚠ PREVIOUS FIX ATTEMPT FAILED — your code had a syntax error:\n"
+                    f"  {prev_syntax_err}\n"
+                    f"Do NOT repeat the same mistake. Return syntactically valid code.\n"
+                )
+            elif prev_fix_err:
+                retry_context = (
+                    f"\n⚠ PREVIOUS FIX ATTEMPT FAILED — the error was NOT resolved.\n"
+                    f"Previous error after your fix: {prev_fix_err}\n"
+                    f"Try a DIFFERENT approach.\n"
+                )
+            else:
+                retry_context = (
+                    "\n⚠ PREVIOUS FIX ATTEMPT FAILED — the partial fix could not be merged.\n"
+                    "This time, return the COMPLETE program.\n"
+                )
 
         # --- Build the fix prompt ---
+        # Place error info and instructions BEFORE the code so local LLMs see them first
+        # Number every line so the LLM can cross-reference traceback line numbers
+        # directly against the source. Proven by Aider to improve fix accuracy.
+        numbered_code = '\n'.join(
+            f"{i+1:4d}| {line}"
+            for i, line in enumerate(code_content.split('\n'))
+        )
         prompt = f"""Fix this {code_type} program.
-{error_section}{error_context}
 {problem_desc}
+{error_section}{error_context}{retry_context}
 
+{fix_fmt}
+
+Here is the full program (with line numbers for reference):
 ```{language}
-{code_content}
+{numbered_code}
 ```
-
-{fix_fmt}"""
+IMPORTANT: Return code WITHOUT line numbers — the numbers above are only for reference."""
 
         # --- Display what we're sending ---
         if error_summary:
@@ -11783,49 +11667,111 @@ Based on the above context, please answer: {input_text}"""
                 "3) Type problem in chat -> 'Ask LLM to Fix' -> Accept/Reject diff."
             )
 
+    def _strip_llm_preamble(self, fragment):
+        """Strip explanation text that local LLMs prepend before the actual code.
+
+        Local LLMs often return lines like:
+          'The bug is in the draw() function...'
+          'Here is the fixed function:'
+          ''
+          'def draw():'
+          '    ...'
+
+        This strips everything before the first line that looks like code.
+        """
+        lines = fragment.splitlines()
+        # Find first line that looks like actual code (not explanation prose)
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            # Python function/class/import/decorator/assignment/control flow
+            if re.match(r'^(def |class |import |from |@\w|if |for |while |return |try:|except |with |async |#)', stripped):
+                return '\n'.join(lines[i:])
+            # JS function / var / const / let / assignment / HTML tags
+            if re.match(r'^(function |async function |const |let |var |document\.|window\.|<|//|/\*)', stripped):
+                return '\n'.join(lines[i:])
+            # Line with typical code chars (indented, or has = { } ( ) ; at meaningful positions)
+            if re.match(r'^[\s]*(self\.|this\.|return |elif |else:|\w+\s*=\s*|[\}\]\)])', stripped):
+                return '\n'.join(lines[i:])
+            # If line starts with indentation, it's probably code
+            if line and line[0] in (' ', '\t') and len(stripped) > 2:
+                return '\n'.join(lines[i:])
+        return fragment
+
     def _merge_partial_fix(self, full_code, fragment):
         """Merge a partial code fragment back into the full program.
 
         Layered approach — tries the most reliable method first:
+          0. Strip LLM preamble (explanation text before actual code)
           1. Function-name matching: find functions by name in both the
              original and fragment, swap matched ones in-place.
-          2. SequenceMatcher fallback: for non-function code or when
-             function names don't match, align via longest common
-             subsequences and splice in changes.
+          1b. Retry function-name match with stripped indentation
+          2. SequenceMatcher: align via longest common subsequences.
 
         Returns the merged code string, or None if merging failed.
         """
+        # Strip explanation preamble that local LLMs often add
+        clean_fragment = self._strip_llm_preamble(fragment)
+
         full_lines = full_code.splitlines()
-        frag_lines = fragment.splitlines()
+        frag_lines = clean_fragment.splitlines()
 
         # If the fragment is nearly the full program, let caller diff directly
         if len(frag_lines) > len(full_lines) * 0.95:
             return None
-        if len(frag_lines) < 3:
+        if len(frag_lines) < 2:
             return None
 
-        # --- LAYER 1: function-name replacement (deterministic) ---
         is_js = '<script' in full_code or 'function ' in full_code
-        if is_js:
-            merged = self._merge_by_function_name(full_lines, frag_lines, lang='js')
-        else:
-            merged = self._merge_by_function_name(full_lines, frag_lines, lang='python')
+        lang = 'js' if is_js else 'python'
 
+        # --- LAYER 1: function-name replacement (deterministic) ---
+        merged = self._merge_by_function_name(full_lines, frag_lines, lang)
         if merged is not None:
+            self._log_fix_event("merge_detail", layer="function-name", result="OK")
             result = '\n'.join(merged)
             if full_code.endswith('\n'):
                 result += '\n'
             return result
 
+        # --- LAYER 1b: function-name match with normalized indentation ---
+        # Local LLMs sometimes change indentation (e.g. returning a method
+        # without its class-level indent). Normalize both sides and retry.
+        frag_stripped_lines = self._normalize_indent(frag_lines)
+        if frag_stripped_lines != frag_lines:
+            merged = self._merge_by_function_name(full_lines, frag_stripped_lines, lang)
+            if merged is not None:
+                self._log_fix_event("merge_detail", layer="function-name (indent-normalized)", result="OK")
+                result = '\n'.join(merged)
+                if full_code.endswith('\n'):
+                    result += '\n'
+                return result
+
         # --- LAYER 2: SequenceMatcher with edge protection ---
         merged = self._merge_by_sequence_match(full_lines, frag_lines)
         if merged is not None:
+            self._log_fix_event("merge_detail", layer="sequence-match", result="OK")
             result = '\n'.join(merged)
             if full_code.endswith('\n'):
                 result += '\n'
             return result
 
         return None
+
+    def _normalize_indent(self, lines):
+        """Re-indent lines so the minimum indentation becomes zero.
+
+        Handles local LLMs that return functions with wrong base indent
+        (e.g. a method body without the class-level indentation).
+        """
+        non_empty = [l for l in lines if l.strip()]
+        if not non_empty:
+            return lines
+        min_indent = min(len(l) - len(l.lstrip()) for l in non_empty)
+        if min_indent == 0:
+            return lines
+        return [l[min_indent:] if len(l) >= min_indent else l for l in lines]
 
     # ---- Layer 1: function-name merge ----
 
@@ -11856,17 +11802,29 @@ Based on the above context, please answer: {input_text}"""
                     indent = len(m.group(1))
                     name = m.group(2)
                     start = i
+                    # Include decorators above the def
                     while start > 0 and lines[start - 1].strip().startswith('@'):
                         start -= 1
                     end = i + 1
+                    # Walk forward: function body = lines indented deeper than 'def',
+                    # plus blank lines between them. Stop at a line at same or lesser indent.
+                    trailing_blanks = 0
                     while end < len(lines):
                         s = lines[end].strip()
                         if s == '':
+                            trailing_blanks += 1
                             end += 1
                             continue
-                        if (len(lines[end]) - len(lines[end].lstrip())) <= indent:
+                        line_indent = len(lines[end]) - len(lines[end].lstrip())
+                        if line_indent <= indent:
                             break
+                        trailing_blanks = 0
                         end += 1
+                    # Don't include trailing blank lines — they belong to the gap between functions
+                    end -= trailing_blanks
+                    # If function is at end of file, include up to last non-blank line
+                    if end <= i:
+                        end = i + 1
                     functions[name] = (start, end)
                     i = end
                     continue
@@ -11894,16 +11852,31 @@ Based on the above context, please answer: {input_text}"""
         return None
 
     def _find_brace_end(self, lines, start):
-        """Find closing brace for a JS function starting at `start`. Returns end line index."""
+        """Find closing brace for a JS function starting at `start`. Returns end line index.
+
+        Strips string literals and comments before counting braces so that
+        braces inside strings like '{ "key": "value" }' don't throw off the count.
+        """
         depth = 0
         for j in range(start, len(lines)):
-            depth += lines[j].count('{') - lines[j].count('}')
+            # Remove string contents and comments before counting braces
+            line = lines[j]
+            cleaned = re.sub(r'`[^`]*`', '', line)           # template literals (single-line)
+            cleaned = re.sub(r'"(?:[^"\\]|\\.)*"', '', cleaned)  # double-quoted strings
+            cleaned = re.sub(r"'(?:[^'\\]|\\.)*'", '', cleaned)  # single-quoted strings
+            cleaned = re.sub(r'//.*$', '', cleaned)            # line comments
+            depth += cleaned.count('{') - cleaned.count('}')
             if depth <= 0 and j > start:
                 return j + 1
         return len(lines)
 
     def _merge_by_function_name(self, full_lines, frag_lines, lang):
-        """Replace functions in full_lines with same-named functions from frag_lines."""
+        """Replace functions in full_lines with same-named functions from frag_lines.
+
+        Also handles non-function code in the fragment (imports, globals,
+        event listeners) by appending them near the matched function if they
+        appear to be new lines that don't exist in the original.
+        """
         orig_funcs = self._find_functions(full_lines, lang)
         fix_funcs = self._find_functions(frag_lines, lang)
 
@@ -11915,11 +11888,47 @@ Based on the above context, please answer: {input_text}"""
             return None
 
         result = list(full_lines)
-        # Replace in reverse order so indices stay valid
+
+        # Collect non-function lines from fragment (imports, globals, etc.)
+        # that aren't in the original — these are new lines the LLM added.
+        frag_func_ranges = set()
+        for name in fix_funcs:
+            s, e = fix_funcs[name]
+            for idx in range(s, e):
+                frag_func_ranges.add(idx)
+        new_non_func_lines = []
+        orig_stripped = set(l.strip() for l in full_lines if l.strip())
+        for idx, line in enumerate(frag_lines):
+            if idx not in frag_func_ranges and line.strip():
+                if line.strip() not in orig_stripped:
+                    new_non_func_lines.append(line)
+
+        # Replace matched functions in reverse order so indices stay valid
         for name in sorted(matched, key=lambda n: orig_funcs[n][0], reverse=True):
             orig_start, orig_end = orig_funcs[name]
             fix_start, fix_end = fix_funcs[name]
             result[orig_start:orig_end] = frag_lines[fix_start:fix_end]
+
+        # Insert new non-function lines (imports at top, others before first matched func)
+        if new_non_func_lines:
+            import_lines = [l for l in new_non_func_lines
+                           if l.strip().startswith(('import ', 'from ', '#include'))]
+            other_lines = [l for l in new_non_func_lines if l not in import_lines]
+
+            if import_lines:
+                # Insert imports after the last existing import in the original
+                insert_pos = 0
+                for i, line in enumerate(result):
+                    if line.strip().startswith(('import ', 'from ')):
+                        insert_pos = i + 1
+                for i, il in enumerate(import_lines):
+                    result.insert(insert_pos + i, il)
+
+            if other_lines:
+                # Insert other new lines right before the first matched function
+                first_match_pos = min(orig_funcs[n][0] for n in matched)
+                for i, ol in enumerate(other_lines):
+                    result.insert(first_match_pos + i, ol)
 
         if len(result) < len(full_lines) * 0.5:
             return None
@@ -11936,20 +11945,39 @@ Based on the above context, please answer: {input_text}"""
           - 'replace' inside anchored region -> use fragment (the fix)
           - 'replace' outside anchored region -> keep original (HTML header etc)
           - 'insert' inside anchored region -> include (new code from fix)
+
+        Tries exact lines first, then rstrip'd lines, then fully stripped lines.
+        When using stripped comparison, the opcodes are mapped back to the
+        ORIGINAL lines so indentation from the original is preserved for
+        'equal' and 'delete' blocks, and the fragment's indentation is used
+        for 'replace' and 'insert' blocks (since those are the actual fix).
         """
+        use_stripped = False
+
         sm = difflib.SequenceMatcher(None, full_lines, frag_lines, autojunk=False)
         opcodes = sm.get_opcodes()
         total_equal = sum(i2 - i1 for tag, i1, i2, j1, j2 in opcodes if tag == 'equal')
 
-        if total_equal < 3:
-            # Try stripped comparison for indentation mismatches
+        if total_equal < 2:
+            # Try rstrip comparison (trailing whitespace drift)
+            full_r = [l.rstrip() for l in full_lines]
+            frag_r = [l.rstrip() for l in frag_lines]
+            sm = difflib.SequenceMatcher(None, full_r, frag_r, autojunk=False)
+            opcodes = sm.get_opcodes()
+            total_equal = sum(i2 - i1 for tag, i1, i2, j1, j2 in opcodes if tag == 'equal')
+            use_stripped = True
+
+        if total_equal < 2:
+            # Try fully stripped comparison (indentation mismatches)
             full_s = [l.strip() for l in full_lines]
             frag_s = [l.strip() for l in frag_lines]
             sm = difflib.SequenceMatcher(None, full_s, frag_s, autojunk=False)
             opcodes = sm.get_opcodes()
             total_equal = sum(i2 - i1 for tag, i1, i2, j1, j2 in opcodes if tag == 'equal')
-            if total_equal < 3:
-                return None
+            use_stripped = True
+
+        if total_equal < 2:
+            return None
 
         # Find anchored region (between first and last equal blocks)
         first_eq = last_eq = None
@@ -11961,25 +11989,76 @@ Based on the above context, please answer: {input_text}"""
         if first_eq is None:
             return None
 
+        # Build merged result — always index into the ORIGINAL line arrays
+        # so we preserve correct indentation. Opcodes from stripped comparison
+        # give us the right index ranges even though matching was on stripped text.
         merged = []
         for idx, (tag, i1, i2, j1, j2) in enumerate(opcodes):
             inside = first_eq <= idx <= last_eq
             if tag == 'equal':
+                # Always use original full_lines for equal regions (preserve original indent)
                 merged.extend(full_lines[i1:i2])
             elif tag == 'replace':
                 if inside:
-                    merged.extend(frag_lines[j1:j2])  # the fix
+                    if use_stripped:
+                        # Re-indent fragment lines to match original indentation
+                        merged.extend(self._reindent_to_match(full_lines[i1:i2], frag_lines[j1:j2]))
+                    else:
+                        merged.extend(frag_lines[j1:j2])
                 else:
-                    merged.extend(full_lines[i1:i2])  # preserve edge
+                    merged.extend(full_lines[i1:i2])
             elif tag == 'delete':
-                merged.extend(full_lines[i1:i2])  # keep — fragment is partial
+                merged.extend(full_lines[i1:i2])
             elif tag == 'insert':
                 if inside:
-                    merged.extend(frag_lines[j1:j2])  # new lines from fix
+                    if use_stripped:
+                        # Guess indentation from surrounding original lines
+                        ref_lines = full_lines[max(0, i1-2):i1]
+                        merged.extend(self._reindent_to_match(ref_lines, frag_lines[j1:j2]))
+                    else:
+                        merged.extend(frag_lines[j1:j2])
 
-        if len(merged) < len(full_lines) * 0.85:
+        if len(merged) < len(full_lines) * 0.75:
             return None
         return merged
+
+    def _reindent_to_match(self, reference_lines, target_lines):
+        """Re-indent target_lines to match the base indentation of reference_lines.
+
+        Used when merging with stripped comparison — the fragment may have
+        different indentation than the original code.
+        """
+        if not reference_lines or not target_lines:
+            return target_lines
+
+        # Find base indent of reference (first non-empty line)
+        ref_indent = ''
+        for rl in reference_lines:
+            if rl.strip():
+                ref_indent = rl[:len(rl) - len(rl.lstrip())]
+                break
+
+        # Find base indent of target (first non-empty line)
+        tgt_indent = ''
+        for tl in target_lines:
+            if tl.strip():
+                tgt_indent = tl[:len(tl) - len(tl.lstrip())]
+                break
+
+        # If indentation already matches, return as-is
+        if ref_indent == tgt_indent:
+            return target_lines
+
+        # Re-indent: swap target's base indent for reference's
+        result = []
+        for tl in target_lines:
+            if tl.strip() and tl.startswith(tgt_indent):
+                result.append(ref_indent + tl[len(tgt_indent):])
+            elif not tl.strip():
+                result.append(tl)
+            else:
+                result.append(ref_indent + tl.lstrip())
+        return result
 
     def move_code_to_ide(self):
         """Move code from chat to IDE.
@@ -12063,7 +12142,31 @@ Based on the above context, please answer: {input_text}"""
         self.show_copy_status("Code loaded into IDE — press F5 to Run")
             
     def propose_code_changes(self, proposed_code):
-        """Propose code changes to the IDE window for user review"""
+        """Propose code changes to the IDE window for user review.
+
+        Validates syntax before proposing. If the LLM returned code that
+        doesn't parse, auto-retry with the syntax error rather than showing
+        the user a broken proposal.  Proven by Aider & Claude Code.
+        """
+        is_valid, syntax_err = self._validate_proposed_code(proposed_code)
+        if not is_valid and not getattr(self, '_syntax_retry_done', False):
+            self._syntax_retry_done = True
+            self._log_fix_event("syntax_check", result="FAILED", error=syntax_err)
+            self.display_status_message(f"LLM returned invalid code ({syntax_err}). Auto-retrying...")
+            self.add_to_debug_console(f"SYNTAX VALIDATION FAILED: {syntax_err} — retrying fix")
+            # Store the syntax error so the retry prompt includes it
+            self._last_syntax_error = syntax_err
+            original_code = self.ide_window.get_content() if self.ide_window else ""
+            self._auto_fix_in_progress = False
+            self.ide_original_code = None
+            self.root.after(100, lambda c=original_code: self.fix_code_from_ide(c, _is_auto_retry=True))
+            return
+        # Reset syntax retry flag on successful validation
+        self._syntax_retry_done = False
+        self._last_syntax_error = None
+        if not is_valid:
+            # Already retried once — show it anyway, user can see the issue
+            self.add_to_debug_console(f"⚠ Proposed code has syntax issue: {syntax_err} (showing anyway after retry)")
         if hasattr(self, 'ide_window'):
             self.ide_window.show_diff(proposed_code)
             self.ide_window.show_window()
@@ -12076,11 +12179,11 @@ Based on the above context, please answer: {input_text}"""
         """Parse SEARCH/REPLACE blocks from LLM response and apply them to original code.
 
         Uses a 4-layer matching cascade (inspired by Aider) to handle
-        whitespace drift and indentation differences from weak models:
+        whitespace drift and indentation differences from local models:
           Layer 1: Exact string match
           Layer 2: Whitespace-insensitive (rstrip per line, sliding window)
           Layer 3: Indentation-normalized (strip leading whitespace, match, re-indent)
-          Layer 4: Fuzzy match (difflib SequenceMatcher ratio >= 0.85)
+          Layer 4: Fuzzy match with variable-size window (ratio >= 0.70, ±3 lines)
 
         Returns the modified code, or None if no SEARCH/REPLACE blocks were found.
         """
@@ -12172,29 +12275,40 @@ Based on the above context, please answer: {input_text}"""
 
                 if not found:
                     # Layer 4: Fuzzy match using difflib SequenceMatcher
+                    # Tries the exact window size first, then ±3 lines to handle
+                    # LLMs that add/remove lines in their SEARCH block vs the actual code.
                     from difflib import SequenceMatcher
                     search_lines_clean = [line.rstrip() for line in search_text.split('\n')]
                     result_lines = result.split('\n')
                     search_len = len(search_lines_clean)
+                    search_joined = '\n'.join(search_lines_clean)
                     best_ratio = 0.0
                     best_idx = -1
+                    best_win = search_len
 
-                    for i in range(len(result_lines) - search_len + 1):
-                        candidate = '\n'.join(result_lines[i:i + search_len])
-                        search_joined = '\n'.join(search_lines_clean)
-                        ratio = SequenceMatcher(None, search_joined, candidate).ratio()
-                        if ratio > best_ratio:
-                            best_ratio = ratio
-                            best_idx = i
+                    # Try window sizes from exact match to ±3 lines
+                    for window_delta in range(0, 4):
+                        for sign in ([0] if window_delta == 0 else [-1, 1]):
+                            win = search_len + sign * window_delta
+                            if win < 2:
+                                continue
+                            for i in range(len(result_lines) - win + 1):
+                                candidate = '\n'.join(result_lines[i:i + win])
+                                ratio = SequenceMatcher(None, search_joined, candidate).ratio()
+                                if ratio > best_ratio:
+                                    best_ratio = ratio
+                                    best_idx = i
+                                    best_win = win
 
-                    if best_ratio >= 0.85 and best_idx >= 0:
+                    if best_ratio >= 0.70 and best_idx >= 0:
                         replace_lines = replace_text.split('\n')
-                        result_lines[best_idx:best_idx + search_len] = replace_lines
+                        result_lines[best_idx:best_idx + best_win] = replace_lines
                         result = '\n'.join(result_lines)
                         applied += 1
                         found = True
                         self.add_to_debug_console(
-                            f"SEARCH/REPLACE: fuzzy match at line {best_idx+1} (ratio={best_ratio:.2f})")
+                            f"SEARCH/REPLACE: fuzzy match at line {best_idx+1} "
+                            f"(ratio={best_ratio:.2f}, window={best_win} vs search={search_len})")
 
                 if not found:
                     self.add_to_debug_console(f"SEARCH/REPLACE: could not match block ({search_text[:50]}...)")

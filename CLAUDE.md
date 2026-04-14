@@ -28,7 +28,7 @@ There are no tests, linter configs, or build steps. The project is a single Pyth
 Everything is in `CodeRunner_IDE_clean.py`. The two main classes are:
 
 - **`OllamaGUI`** — The main application window (300+ methods). Manages chat, LLM backends, message routing, threading, and the three-panel layout (Chat | IDE | System/Debug Console).
-- **`IDEWindow`** — The code editor. Handles syntax highlighting, inline diff view, Run/Run&Fix execution, Accept/Reject workflow, and SEARCH/REPLACE block parsing.
+- **`IDEWindow`** — The code editor. Handles syntax highlighting, inline diff view, Run/Run&Fix execution, Accept/Reject workflow, and SEARCH/REPLACE block parsing. **Analyze** (right-click in the editor): built-in Python AST summary; optional **MyPy** if `mypy` is installed. F1 help includes an “Analyze tools” section.
 - **`BrowserErrorServer`** — A local HTTP server (port 8765) that captures JavaScript errors from generated HTML games running in the browser.
 
 ### Backend System

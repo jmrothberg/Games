@@ -37,11 +37,8 @@ flake8>=7.0.0            # Linting
 black>=24.0.0            # Code formatting
 
 # Advanced Code Analysis (optional)
-mypy>=1.8.0              # Type checking
-bandit>=1.7.0            # Security scanning
-radon>=6.0.0             # Complexity analysis
+mypy>=1.8.0              # Type checking (IDE: right-click → Analyze → MyPy)
 coverage>=7.4.0          # Test coverage
-astor>=0.8.0             # AST manipulation
 
 # Enhanced Debugging (optional)
 icecream>=2.1.0          # Better print debugging

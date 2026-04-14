@@ -1,0 +1,1272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>window.addEventListener('error',function(e){try{var x=new XMLHttpRequest();x.open('POST','http://localhost:8765/report_error',true);x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');var d='type='+encodeURIComponent('JavaScript Error')+'&message='+encodeURIComponent(e.message)+'&source='+encodeURIComponent(e.filename||'')+'&line='+encodeURIComponent(e.lineno||'')+'&column='+encodeURIComponent(e.colno||'')+'&stack='+encodeURIComponent(e.error&&e.error.stack||'');x.send(d);}catch(_){}});window.addEventListener('unhandledrejection',function(e){try{var x=new XMLHttpRequest();x.open('POST','http://localhost:8765/report_error',true);x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');var d='type='+encodeURIComponent('Unhandled Promise Rejection')+'&message='+encodeURIComponent((e.reason&&e.reason.toString())||'')+'&stack='+encodeURIComponent((e.reason&&e.reason.stack)||'');x.send(d);}catch(_){}});(function(){var oe=console.error;console.error=function(){try{var m=Array.prototype.map.call(arguments,function(a){return (typeof a==='object')?JSON.stringify(a):String(a)}).join(' ');var x=new XMLHttpRequest();x.open('POST','http://localhost:8765/report_error',true);x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');x.send('type='+encodeURIComponent('Console Error')+'&message='+encodeURIComponent(m));}catch(_){ } oe&&oe.apply(console,arguments);};})();</script>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Q*bert</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Courier New', monospace;
+        }
+        canvas {
+            border: 2px solid #333;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas" width="600" height="700"></canvas>
+    
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Audio Context
+        let audioCtx = null;
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+        
+        // Sound Effects using Web Audio API
+        function playSound(type) {
+            if (!audioCtx) return;
+            
+            const now = audioCtx.currentTime;
+            
+            switch(type) {
+                case 'hop': {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.frequency.setValueAtTime(200, now);
+                    osc.frequency.exponentialRampToValueAtTime(400, now + 0.1);
+                    gain.gain.setValueAtTime(0.3, now);
+                    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+                    osc.start(now);
+                    osc.stop(now + 0.1);
+                    break;
+                }
+                case 'colorChange': {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = 'square';
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.frequency.setValueAtTime(523, now);
+                    osc.frequency.setValueAtTime(659, now + 0.1);
+                    osc.frequency.setValueAtTime(784, now + 0.2);
+                    gain.gain.setValueAtTime(0.2, now);
+                    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+                    osc.start(now);
+                    osc.stop(now + 0.3);
+                    break;
+                }
+                case 'coilyBounce': {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = 'sawtooth';
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    for (let i = 0; i < 4; i++) {
+                        osc.frequency.setValueAtTime(300 + i * 100, now + i * 0.1);
+                    }
+                    gain.gain.setValueAtTime(0.2, now);
+                    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
+                    osc.start(now);
+                    osc.stop(now + 0.4);
+                    break;
+                }
+                case 'fall': {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.frequency.setValueAtTime(600, now);
+                    osc.frequency.exponentialRampToValueAtTime(100, now + 0.5);
+                    gain.gain.setValueAtTime(0.3, now);
+                    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+                    osc.start(now);
+                    osc.stop(now + 0.5);
+                    break;
+                }
+                case 'levelComplete': {
+                    const notes = [523, 659, 784, 1047];
+                    notes.forEach((freq, i) => {
+                        const osc = audioCtx.createOscillator();
+                        const gain = audioCtx.createGain();
+                        osc.type = 'square';
+                        osc.connect(gain);
+                        gain.connect(audioCtx.destination);
+                        osc.frequency.setValueAtTime(freq, now + i * 0.15);
+                        gain.gain.setValueAtTime(0.2, now + i * 0.15);
+                        gain.gain.exponentialRampToValueAtTime(0.01, now + i * 0.15 + 0.3);
+                        osc.start(now + i * 0.15);
+                        osc.stop(now + i * 0.15 + 0.3);
+                    });
+                    break;
+                }
+                case 'enemyHit': {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = 'sawtooth';
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.frequency.setValueAtTime(200, now);
+                    osc.frequency.exponentialRampToValueAtTime(50, now + 0.3);
+                    gain.gain.setValueAtTime(0.3, now);
+                    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+                    osc.start(now);
+                    osc.stop(now + 0.3);
+                    break;
+                }
+                case 'discTeleport': {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = 'sine';
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.frequency.setValueAtTime(300, now);
+                    osc.frequency.exponentialRampToValueAtTime(1200, now + 0.2);
+                    gain.gain.setValueAtTime(0.3, now);
+                    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+                    osc.start(now);
+                    osc.stop(now + 0.2);
+                    break;
+                }
+            }
+        }
+        
+        // Game Constants
+        const CUBE_WIDTH = 60;
+        const CUBE_HEIGHT = 30;
+        const PYRAMID_ROWS = 7;
+        const CENTER_X = 300;
+        const START_Y = 120;
+        
+        // Colors
+        const COLORS = {
+            cubeTop: ['#1a472a', '#2d5a3f', '#4a8c5e'],
+            cubeLeft: ['#0f2d1a', '#1a3d26', '#2d5038'],
+            cubeRight: ['#082010', '#102518', '#1a3525'],
+            targetTop: ['#ff6b35', '#ff8c42', '#ffa94d'],
+            targetLeft: ['#cc5429', '#e65c24', '#ff6b35'],
+            targetRight: ['#993f1f', '#b3471a', '#cc4d22']
+        };
+        // Unlit cube colors rotate by level so stage 2+ looks visibly new (target oranges stay COLORS.target*)
+        const LEVEL_UNSET_PALETTES = [
+            { top: COLORS.cubeTop, left: COLORS.cubeLeft, right: COLORS.cubeRight },
+            { top: ['#1e3a52', '#2e5678', '#4a78a0'], left: ['#122a3d', '#1a3d52', '#2a5070'], right: ['#0a1a28', '#142838', '#1e4055'] },
+            { top: ['#3a1e52', '#553078', '#7048a0'], left: ['#281438', '#3d2055', '#523070'], right: ['#180a28', '#281438', '#382050'] }
+        ];
+        
+        // Game State
+        let gameState = 'start';
+        let score = 0;
+        let lives = 3;
+        let level = 1;
+        let cubes = [];
+        let qbert = null;
+        let enemies = [];
+        let discs = [];
+        let particles = [];
+        let animatingEntities = [];
+        
+        // Input
+        const keys = {};
+        
+        // Initialize cubes (pyramid structure)
+        function initCubes() {
+            cubes = [];
+            for (let row = 0; row < PYRAMID_ROWS; row++) {
+                for (let col = 0; col <= row; col++) {
+                    cubes.push({
+                        gridRow: row,
+                        gridCol: col,
+                        colorLevel: 0,
+                        targetColorLevel: Math.min(level, 3)
+                    });
+                }
+            }
+        }
+        
+        // Get cube position on screen
+        function getCubeScreenPos(row, col) {
+            const x = CENTER_X + (col - row / 2) * CUBE_WIDTH;
+            const y = START_Y + row * CUBE_HEIGHT * 1.5;
+            return { x, y };
+        }
+        
+        // Get cube by grid position
+        function getCube(row, col) {
+            return cubes.find(c => c.gridRow === row && c.gridCol === col);
+        }
+        
+        // Initialize Q*bert
+        function initQbert() {
+            qbert = {
+                gridRow: 0,
+                gridCol: 0,
+                x: CENTER_X,
+                y: START_Y,
+                targetX: CENTER_X,
+                targetY: START_Y,
+                hopProgress: 1,
+                direction: 'down-right',
+                isHopping: false,
+                falling: false,
+                fallY: 0
+            };
+        }
+        
+        // Discs beside bottom pyramid corners (fixed y=280 was mid-pyramid; teleport never fired)
+        function getDiscCenters() {
+            const br = PYRAMID_ROWS - 1;
+            const left = getCubeScreenPos(br, 0);
+            const right = getCubeScreenPos(br, br);
+            return [
+                { x: left.x - CUBE_WIDTH * 0.58, y: left.y + 18 },
+                { x: right.x + CUBE_WIDTH * 0.58, y: right.y + 18 }
+            ];
+        }
+        
+        function initDiscs() {
+            const c = getDiscCenters();
+            discs = [
+                { x: c[0].x, y: c[0].y, rotation: 0 },
+                { x: c[1].x, y: c[1].y, rotation: Math.PI }
+            ];
+        }
+        
+        // Spawn enemies
+        function spawnEnemy(type) {
+            const side = Math.random() < 0.5 ? 'left' : 'right';
+            const discIndex = side === 'left' ? 0 : 1;
+            
+            if (type === 'coily') {
+                enemies.push({
+                    type: 'coily',
+                    isBall: true,
+                    gridRow: -1,
+                    gridCol: 0,
+                    x: discs[discIndex].x,
+                    y: discs[discIndex].y,
+                    targetX: discs[discIndex].x,
+                    targetY: discs[discIndex].y,
+                    hopProgress: 1,
+                    direction: 'down-right',
+                    bounceTime: 0
+                });
+            } else if (type === 'slick') {
+                enemies.push({
+                    type: 'slick',
+                    gridRow: -1,
+                    gridCol: 0,
+                    x: discs[discIndex].x,
+                    y: discs[discIndex].y,
+                    targetX: discs[discIndex].x,
+                    targetY: discs[discIndex].y,
+                    hopProgress: 1,
+                    direction: 'down-right'
+                });
+            } else if (type === 'sam') {
+                enemies.push({
+                    type: 'sam',
+                    gridRow: -1,
+                    gridCol: 0,
+                    x: discs[discIndex].x,
+                    y: discs[discIndex].y,
+                    targetX: discs[discIndex].x,
+                    targetY: discs[discIndex].y,
+                    hopProgress: 1,
+                    direction: 'down-right'
+                });
+            }
+        }
+        
+        // Draw isometric cube
+        function drawCube(cube) {
+            const pos = getCubeScreenPos(cube.gridRow, cube.gridCol);
+            const x = pos.x;
+            const y = pos.y;
+            
+            const isTargetColor = cube.colorLevel >= cube.targetColorLevel;
+            const colorIndex = Math.min(cube.colorLevel, 2);
+            
+            let topColor, leftColor, rightColor;
+            
+            if (isTargetColor) {
+                topColor = COLORS.targetTop[Math.min(colorIndex, 2)];
+                leftColor = COLORS.targetLeft[Math.min(colorIndex, 2)];
+                rightColor = COLORS.targetRight[Math.min(colorIndex, 2)];
+            } else {
+                const pal = LEVEL_UNSET_PALETTES[(level - 1) % LEVEL_UNSET_PALETTES.length];
+                topColor = pal.top[colorIndex];
+                leftColor = pal.left[colorIndex];
+                rightColor = pal.right[colorIndex];
+            }
+            
+            // Top face
+            ctx.fillStyle = topColor;
+            ctx.beginPath();
+            ctx.moveTo(x, y - CUBE_HEIGHT);
+            ctx.lineTo(x + CUBE_WIDTH / 2, y - CUBE_HEIGHT / 2);
+            ctx.lineTo(x, y);
+            ctx.lineTo(x - CUBE_WIDTH / 2, y - CUBE_HEIGHT / 2);
+            ctx.closePath();
+            ctx.fill();
+            
+            // Add highlight to top
+            ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(x - CUBE_WIDTH / 4, y - CUBE_HEIGHT * 0.75);
+            ctx.lineTo(x + CUBE_WIDTH / 4, y - CUBE_HEIGHT * 0.25);
+            ctx.stroke();
+            
+            // Left face
+            ctx.fillStyle = leftColor;
+            ctx.beginPath();
+            ctx.moveTo(x - CUBE_WIDTH / 2, y - CUBE_HEIGHT / 2);
+            ctx.lineTo(x, y);
+            ctx.lineTo(x, y + CUBE_HEIGHT);
+            ctx.lineTo(x - CUBE_WIDTH / 2, y + CUBE_HEIGHT / 2);
+            ctx.closePath();
+            ctx.fill();
+            
+            // Right face
+            ctx.fillStyle = rightColor;
+            ctx.beginPath();
+            ctx.moveTo(x + CUBE_WIDTH / 2, y - CUBE_HEIGHT / 2);
+            ctx.lineTo(x, y);
+            ctx.lineTo(x, y + CUBE_HEIGHT);
+            ctx.lineTo(x + CUBE_WIDTH / 2, y + CUBE_HEIGHT / 2);
+            ctx.closePath();
+            ctx.fill();
+            
+            // Edge highlights
+            ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+            ctx.lineWidth = 1;
+            
+            // Top edges
+            ctx.beginPath();
+            ctx.moveTo(x - CUBE_WIDTH / 2, y - CUBE_HEIGHT / 2);
+            ctx.lineTo(x, y);
+            ctx.lineTo(x + CUBE_WIDTH / 2, y - CUBE_HEIGHT / 2);
+            ctx.stroke();
+            
+            // Vertical edge
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(x, y + CUBE_HEIGHT);
+            ctx.stroke();
+        }
+        
+        // Draw Q*bert
+        function drawQbert() {
+            if (!qbert) return;
+            
+            const x = qbert.x;
+            const y = qbert.y;
+            
+            // Body (blue blob)
+            ctx.fillStyle = '#0066cc';
+            ctx.beginPath();
+            ctx.ellipse(x, y - 15, 18, 22, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Highlight
+            ctx.fillStyle = '#3399ff';
+            ctx.beginPath();
+            ctx.ellipse(x - 5, y - 20, 8, 10, -0.3, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Eyes
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.ellipse(x - 6, y - 18, 7, 8, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(x + 6, y - 18, 7, 8, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Pupils
+            ctx.fillStyle = 'black';
+            ctx.beginPath();
+            ctx.arc(x - 4, y - 17, 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(x + 8, y - 17, 3, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Nose
+            ctx.fillStyle = '#ff6600';
+            ctx.beginPath();
+            ctx.ellipse(x + 2, y - 10, 5, 4, 0.3, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Legs
+            ctx.strokeStyle = '#0066cc';
+            ctx.lineWidth = 6;
+            ctx.lineCap = 'round';
+            
+            const legOffset = qbert.isHopping ? Math.sin(qbert.hopProgress * Math.PI) * 5 : 0;
+            
+            ctx.beginPath();
+            ctx.moveTo(x - 8, y + 2);
+            ctx.lineTo(x - 12, y + 15 + legOffset);
+            ctx.stroke();
+            
+            ctx.beginPath();
+            ctx.moveTo(x + 8, y + 2);
+            ctx.lineTo(x + 12, y + 15 - legOffset);
+            ctx.stroke();
+        }
+        
+        // Draw Coily
+        function drawCoily(enemy) {
+            const x = enemy.x;
+            const y = enemy.y;
+            
+            if (enemy.isBall) {
+                // Ball form - purple ball with eyes
+                ctx.fillStyle = '#9933ff';
+                ctx.beginPath();
+                ctx.arc(x, y - 10, 15, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Highlight
+                ctx.fillStyle = '#cc66ff';
+                ctx.beginPath();
+                ctx.arc(x - 5, y - 15, 5, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Eyes
+                ctx.fillStyle = 'yellow';
+                ctx.beginPath();
+                ctx.ellipse(x - 5, y - 12, 4, 5, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.ellipse(x + 5, y - 12, 4, 5, 0, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Pupils
+                ctx.fillStyle = 'black';
+                ctx.beginPath();
+                ctx.arc(x - 4, y - 11, 2, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(x + 6, y - 11, 2, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Bounce animation
+                enemy.bounceTime += 0.15;
+            } else {
+                // Snake form
+                const bounce = Math.sin(enemy.bounceTime) * 3;
+                
+                // Body segments
+                for (let i = 4; i >= 0; i--) {
+                    const segY = y - 5 + i * 8 + bounce;
+                    const segSize = 12 - i * 1.5;
+                    
+                    if (i === 0) {
+                        // Head
+                        ctx.fillStyle = '#ff3300';
+                        ctx.beginPath();
+                        ctx.arc(x, segY, segSize, 0, Math.PI * 2);
+                        ctx.fill();
+                        
+                        // Eyes
+                        ctx.fillStyle = 'white';
+                        ctx.beginPath();
+                        ctx.arc(x - 4, segY - 3, 4, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.beginPath();
+                        ctx.arc(x + 4, segY - 3, 4, 0, Math.PI * 2);
+                        ctx.fill();
+                        
+                        // Pupils
+                        ctx.fillStyle = 'black';
+                        ctx.beginPath();
+                        ctx.arc(x - 3, segY - 2, 2, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.beginPath();
+                        ctx.arc(x + 5, segY - 2, 2, 0, Math.PI * 2);
+                        ctx.fill();
+                        
+                        // Tongue
+                        ctx.strokeStyle = '#ff0000';
+                        ctx.lineWidth = 2;
+                        ctx.beginPath();
+                        ctx.moveTo(x, segY + segSize);
+                        ctx.lineTo(x - 4, segY + segSize + 8);
+                        ctx.moveTo(x, segY + segSize);
+                        ctx.lineTo(x + 4, segY + segSize + 8);
+                        ctx.stroke();
+                    } else {
+                        // Body segments
+                        const gradient = ctx.createRadialGradient(x, segY, 0, x, segY, segSize);
+                        gradient.addColorStop(0, '#ff6600');
+                        gradient.addColorStop(1, '#cc3300');
+                        ctx.fillStyle = gradient;
+                        ctx.beginPath();
+                        ctx.arc(x, segY, segSize, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+                
+                enemy.bounceTime += 0.1;
+            }
+        }
+        
+        // Draw Slick
+        function drawSlick(enemy) {
+            const x = enemy.x;
+            const y = enemy.y;
+            
+            // Green blob body
+            ctx.fillStyle = '#00cc66';
+            ctx.beginPath();
+            ctx.ellipse(x, y - 12, 16, 20, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Highlight
+            ctx.fillStyle = '#33ff99';
+            ctx.beginPath();
+            ctx.ellipse(x - 4, y - 18, 6, 8, -0.3, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Eyes (looking down)
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.ellipse(x - 5, y - 14, 5, 6, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(x + 5, y - 14, 5, 6, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Pupils (looking down)
+            ctx.fillStyle = 'black';
+            ctx.beginPath();
+            ctx.arc(x - 4, y - 12, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(x + 6, y - 12, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Evil smile
+            ctx.strokeStyle = '#006633';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(x, y - 4, 8, 0.2, Math.PI - 0.2);
+            ctx.stroke();
+        }
+        
+        // Draw Sam
+        function drawSam(enemy) {
+            const x = enemy.x;
+            const y = enemy.y;
+            
+            // Red blob body
+            ctx.fillStyle = '#cc0033';
+            ctx.beginPath();
+            ctx.ellipse(x, y - 12, 16, 20, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Highlight
+            ctx.fillStyle = '#ff3366';
+            ctx.beginPath();
+            ctx.ellipse(x - 4, y - 18, 6, 8, -0.3, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Eyes (looking down)
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.ellipse(x - 5, y - 14, 5, 6, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(x + 5, y - 14, 5, 6, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Pupils (looking down)
+            ctx.fillStyle = 'black';
+            ctx.beginPath();
+            ctx.arc(x - 4, y - 12, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(x + 6, y - 12, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Evil smile
+            ctx.strokeStyle = '#990033';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(x, y - 4, 8, 0.2, Math.PI - 0.2);
+            ctx.stroke();
+        }
+        
+        // Draw spinning disc
+        function drawDisc(disc) {
+            const x = disc.x;
+            const y = disc.y;
+            
+            disc.rotation += 0.05;
+            
+            // Outer ring
+            ctx.strokeStyle = '#ffcc00';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.arc(x, y, 25, 0, Math.PI * 2);
+            ctx.stroke();
+            
+            // Inner spinning part
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate(disc.rotation);
+            
+            for (let i = 0; i < 4; i++) {
+                const angle = (i / 4) * Math.PI * 2;
+                const colors = ['#ff3333', '#ffff33', '#33ff33', '#3333ff'];
+                ctx.fillStyle = colors[i];
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.arc(0, 0, 20, angle, angle + Math.PI / 2);
+                ctx.closePath();
+                ctx.fill();
+            }
+            
+            ctx.restore();
+            
+            // Center
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(x, y, 5, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        // Draw particles
+        function drawParticles() {
+            particles.forEach((p, i) => {
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life -= 0.02;
+                
+                if (p.life <= 0) {
+                    particles.splice(i, 1);
+                    return;
+                }
+                
+                ctx.fillStyle = `rgba(${p.color}, ${p.life})`;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+        
+        // Create particles
+        function createParticles(x, y, color) {
+            for (let i = 0; i < 10; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: (Math.random() - 0.5) * 4,
+                    vy: (Math.random() - 0.5) * 4 - 2,
+                    size: Math.random() * 6 + 3,
+                    color: color,
+                    life: 1
+                });
+            }
+        }
+        
+        // One hop on the pyramid grid; on bottom row, "down" arrows slide along the base (no row below)
+        function pyramidStep(row, col, direction) {
+            const onBottom = row === PYRAMID_ROWS - 1;
+            let nr = row;
+            let nc = col;
+            let eff = direction;
+            switch (direction) {
+                case 'up-left':
+                    nr--;
+                    nc--;
+                    break;
+                case 'up-right':
+                    nr--;
+                    break;
+                case 'down-left':
+                    if (onBottom && col > 0) {
+                        nr = row;
+                        nc = col - 1;
+                        eff = 'base-left';
+                    } else {
+                        nr++;
+                    }
+                    break;
+                case 'down-right':
+                    if (onBottom && col < row) {
+                        nr = row;
+                        nc = col + 1;
+                        eff = 'base-right';
+                    } else {
+                        nr++;
+                        nc++;
+                    }
+                    break;
+            }
+            return { nr, nc, eff };
+        }
+        
+        // Move Q*bert
+        function moveQbert(direction) {
+            if (qbert.isHopping || qbert.falling) return;
+            
+            const { nr, nc, eff } = pyramidStep(qbert.gridRow, qbert.gridCol, direction);
+            
+            // Check if valid position
+            const cube = getCube(nr, nc);
+            
+            if (!cube) {
+                const br = PYRAMID_ROWS - 1;
+                const r = qbert.gridRow;
+                const c = qbert.gridCol;
+                // Bottom corner + Left/Right aimed off-map: do nothing (lets you stand on corner and color it)
+                if (r === br && c === 0 && direction === 'down-left') return;
+                if (r === br && c === br && direction === 'down-right') return;
+                qbert.falling = true;
+                qbert.targetY = 700;
+                playSound('fall');
+                return;
+            }
+            
+            // Start hop animation
+            qbert.isHopping = true;
+            qbert.hopProgress = 0;
+            qbert.direction = eff;
+            
+            const startPos = getCubeScreenPos(qbert.gridRow, qbert.gridCol);
+            const endPos = getCubeScreenPos(nr, nc);
+            
+            qbert.startX = startPos.x;
+            qbert.startY = startPos.y;
+            qbert.targetX = endPos.x;
+            qbert.targetY = endPos.y;
+            
+            playSound('hop');
+        }
+        
+        // Toward the peak only one diagonal may exist (col 0 → only up-right; col===row → only up-left)
+        function moveQbertUp(preferUpLeft) {
+            if (!qbert || qbert.isHopping || qbert.falling) return;
+            const r = qbert.gridRow;
+            const c = qbert.gridCol;
+            const canUL = r >= 1 && c >= 1 && getCube(r - 1, c - 1);
+            const canUR = r >= 1 && c < r && getCube(r - 1, c);
+            if (preferUpLeft) {
+                if (canUL) moveQbert('up-left');
+                else if (canUR) moveQbert('up-right');
+            } else {
+                if (canUR) moveQbert('up-right');
+                else if (canUL) moveQbert('up-left');
+            }
+        }
+        
+        // Saucer: manual only (auto proximity stole hop landing before cube could tint)
+        function tryDiscEscape() {
+            if (!qbert || qbert.isHopping || qbert.falling || gameState !== 'playing') return;
+            const br = PYRAMID_ROWS - 1;
+            if (qbert.gridRow !== br) return;
+            if (qbert.gridCol !== 0 && qbert.gridCol !== br) return;
+            playSound('discTeleport');
+            qbert.gridRow = 0;
+            qbert.gridCol = 0;
+            const newPos = getCubeScreenPos(0, 0);
+            qbert.x = newPos.x;
+            qbert.y = newPos.y;
+            qbert.targetX = newPos.x;
+            qbert.targetY = newPos.y;
+        }
+        
+        // Update Q*bert
+        function updateQbert() {
+            if (!qbert) return;
+            
+            if (qbert.falling) {
+                qbert.y += 8;
+                if (qbert.y > 700) {
+                    lives--;
+                    console.log(`Life lost! Lives remaining: ${lives}`);
+                    
+                    if (lives <= 0) {
+                        gameState = 'gameover';
+                        console.log('Game Over! Final score:', score);
+                    } else {
+                        initQbert();
+                    }
+                }
+                return;
+            }
+            
+            if (qbert.isHopping) {
+                qbert.hopProgress += 0.08;
+                
+                // Arc movement
+                const t = qbert.hopProgress;
+                qbert.x = qbert.startX + (qbert.targetX - qbert.startX) * t;
+                
+                // Parabolic arc for Y
+                const baseY = qbert.startY + (qbert.targetY - qbert.startY) * t;
+                const arcHeight = 25;
+                qbert.y = baseY - Math.sin(t * Math.PI) * arcHeight;
+                
+                if (qbert.hopProgress >= 1) {
+                    qbert.isHopping = false;
+                    qbert.x = qbert.targetX;
+                    qbert.y = qbert.targetY;
+                    
+                    // Update grid position
+                    switch (qbert.direction) {
+                        case 'up-left':
+                            qbert.gridRow--;
+                            qbert.gridCol--;
+                            break;
+                        case 'up-right':
+                            qbert.gridRow--;
+                            break;
+                        case 'down-left':
+                            qbert.gridRow++;
+                            break;
+                        case 'down-right':
+                            qbert.gridRow++;
+                            qbert.gridCol++;
+                            break;
+                        case 'base-left':
+                            qbert.gridCol--;
+                            break;
+                        case 'base-right':
+                            qbert.gridCol++;
+                            break;
+                    }
+                    
+                    // Tint cube you landed on (always; saucer is SPACE on bottom corners only)
+                    {
+                        const cube = getCube(qbert.gridRow, qbert.gridCol);
+                        if (cube && cube.colorLevel < cube.targetColorLevel) {
+                            cube.colorLevel++;
+                            score += 25;
+                            playSound('colorChange');
+                            createParticles(qbert.x, qbert.y - 10, '255, 200, 50');
+                            checkWinCondition();
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Update enemies
+        function updateEnemies() {
+            enemies.forEach((enemy, index) => {
+                if (enemy.hopProgress < 1) {
+                    enemy.hopProgress += 0.06;
+                    
+                    const t = enemy.hopProgress;
+                    enemy.x = enemy.startX + (enemy.targetX - enemy.startX) * t;
+                    
+                    const baseY = enemy.startY + (enemy.targetY - enemy.startY) * t;
+                    const arcHeight = 20;
+                    enemy.y = baseY - Math.sin(t * Math.PI) * arcHeight;
+                    
+                    if (enemy.hopProgress >= 1) {
+                        enemy.x = enemy.targetX;
+                        enemy.y = enemy.targetY;
+                        
+                        // Update grid position
+                        switch (enemy.direction) {
+                            case 'up-left':
+                                enemy.gridRow--;
+                                enemy.gridCol--;
+                                break;
+                            case 'up-right':
+                                enemy.gridRow--;
+                                break;
+                            case 'down-left':
+                                enemy.gridRow++;
+                                break;
+                            case 'down-right':
+                                enemy.gridRow++;
+                                enemy.gridCol++;
+                                break;
+                            case 'base-left':
+                                enemy.gridCol--;
+                                break;
+                            case 'base-right':
+                                enemy.gridCol++;
+                                break;
+                        }
+                        
+                        // Coily becomes snake after first hop
+                        if (enemy.type === 'coily' && enemy.isBall) {
+                            enemy.isBall = false;
+                            enemy.bounceTime = 0;
+                        }
+                    }
+                } else {
+                    // AI movement for enemies
+                    if (enemy.gridRow >= 0) {
+                        moveEnemy(enemy);
+                    }
+                }
+                
+                // Check collision with Q*bert
+                if (qbert && !qbert.falling) {
+                    const dist = Math.sqrt(Math.pow(qbert.x - enemy.x, 2) + Math.pow(qbert.y - enemy.y, 2));
+                    if (dist < 25) {
+                        lives--;
+                        playSound('enemyHit');
+                        console.log(`Enemy collision! Lives remaining: ${lives}`);
+                        
+                        if (lives <= 0) {
+                            gameState = 'gameover';
+                            console.log('Game Over! Final score:', score);
+                        } else {
+                            initQbert();
+                            enemies.splice(index, 1);
+                        }
+                    }
+                }
+            });
+        }
+        
+        // Move enemy AI
+        function moveEnemy(enemy) {
+            if (!qbert || enemy.gridRow < 0) return;
+            
+            let bestDir = null;
+            let bestDist = Infinity;
+            
+            const directions = ['up-left', 'up-right', 'down-left', 'down-right'];
+            
+            directions.forEach(dir => {
+                const { nr, nc } = pyramidStep(enemy.gridRow, enemy.gridCol, dir);
+                
+                const cube = getCube(nr, nc);
+                if (cube) {
+                    const pos = getCubeScreenPos(nr, nc);
+                    
+                    if (enemy.type === 'coily') {
+                        // Coily chases Q*bert
+                        const dist = Math.sqrt(Math.pow(pos.x - qbert.x, 2) + Math.pow(pos.y - qbert.y, 2));
+                        if (dist < bestDist) {
+                            bestDist = dist;
+                            bestDir = dir;
+                        }
+                    } else {
+                        // Slick and Sam move randomly
+                        if (Math.random() < 0.25) {
+                            bestDir = dir;
+                        }
+                    }
+                }
+            });
+            
+            if (!bestDir && Math.random() < 0.1) {
+                // Random direction if no better option
+                bestDir = directions[Math.floor(Math.random() * directions.length)];
+            }
+            
+            if (bestDir) {
+                const { nr, nc, eff } = pyramidStep(enemy.gridRow, enemy.gridCol, bestDir);
+                
+                const cube = getCube(nr, nc);
+                if (cube) {
+                    enemy.startX = enemy.x;
+                    enemy.startY = enemy.y;
+                    
+                    const pos = getCubeScreenPos(nr, nc);
+                    enemy.targetX = pos.x;
+                    enemy.targetY = pos.y;
+                    
+                    enemy.direction = eff;
+                    enemy.hopProgress = 0.01;
+                    
+                    if (enemy.type === 'coily') {
+                        playSound('coilyBounce');
+                    }
+                }
+            }
+        }
+        
+        // Check win condition
+        function checkWinCondition() {
+            const allTargetColor = cubes.every(c => c.colorLevel >= c.targetColorLevel);
+            
+            if (allTargetColor) {
+                score += 1000 * level;
+                playSound('levelComplete');
+                console.log(`Level ${level} complete! Score: ${score}`);
+                
+                level++;
+                // Full cube rebuild so targets/levels stay in sync; unset palette comes from `level` in drawCube
+                initCubes();
+                initDiscs();
+                initQbert();
+                enemies = [];
+            }
+        }
+        
+        // Spawn timer
+        let spawnTimer = 0;
+        function updateSpawns() {
+            spawnTimer++;
+            
+            if (spawnTimer > 180 && enemies.length < 4) {
+                const rand = Math.random();
+                if (rand < 0.5) {
+                    spawnEnemy('coily');
+                } else if (rand < 0.75) {
+                    spawnEnemy('slick');
+                } else {
+                    spawnEnemy('sam');
+                }
+                spawnTimer = 0;
+            }
+        }
+        
+        // Draw UI
+        function drawUI() {
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 20px Courier New';
+            ctx.textAlign = 'left';
+            ctx.fillText(`SCORE: ${score}`, 20, 30);
+            
+            ctx.textAlign = 'right';
+            ctx.fillText(`LEVEL: ${level}`, 580, 30);
+            
+            // Lives
+            ctx.textAlign = 'center';
+            for (let i = 0; i < lives; i++) {
+                const x = CENTER_X - 40 + i * 40;
+                
+                // Mini Q*bert
+                ctx.fillStyle = '#0066cc';
+                ctx.beginPath();
+                ctx.ellipse(x, 665, 12, 15, 0, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.fillStyle = 'white';
+                ctx.beginPath();
+                ctx.arc(x - 4, 660, 4, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(x + 4, 660, 4, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.fillStyle = 'black';
+                ctx.beginPath();
+                ctx.arc(x - 3, 661, 2, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(x + 5, 661, 2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        
+        // Draw start screen
+        function drawStartScreen() {
+            ctx.fillStyle = '#000033';
+            ctx.fillRect(0, 0, 600, 700);
+            
+            // Title
+            ctx.fillStyle = '#ff6600';
+            ctx.font = 'bold 60px Courier New';
+            ctx.textAlign = 'center';
+            ctx.fillText('Q*BERT', CENTER_X, 200);
+            
+            // Q*bert preview
+            const previewX = CENTER_X;
+            const previewY = 350;
+            
+            ctx.fillStyle = '#0066cc';
+            ctx.beginPath();
+            ctx.ellipse(previewX, previewY, 40, 50, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.ellipse(previewX - 12, previewY - 10, 14, 16, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(previewX + 12, previewY - 10, 14, 16, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.fillStyle = 'black';
+            ctx.beginPath();
+            ctx.arc(previewX - 8, previewY - 7, 6, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(previewX + 16, previewY - 7, 6, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.fillStyle = '#ff6600';
+            ctx.beginPath();
+            ctx.ellipse(previewX + 4, previewY + 10, 10, 8, 0.3, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Instructions — arrows = 4 diagonal hops (not N/S/E/W); pairs = down-row vs up-row
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '16px Courier New';
+            ctx.fillText('Each key is one diagonal hop on the pyramid.', CENTER_X, 455);
+            ctx.fillText('Left / Right  →  hop DOWN; on bottom row = slide along the base', CENTER_X, 482);
+            ctx.fillText('Up / Down  →  climb toward peak (either key picks a valid diagonal)', CENTER_X, 507);
+            ctx.fillText('From the top cube only Left and Right work (no row above you).', CENTER_X, 532);
+            ctx.fillText('Bottom-left / bottom-right cube: SPACE = saucer ride to the top', CENTER_X, 555);
+            ctx.font = '18px Courier New';
+            ctx.fillText('Change all cubes to orange!', CENTER_X, 580);
+            
+            ctx.fillStyle = '#ffcc00';
+            ctx.font = 'bold 24px Courier New';
+            ctx.fillText('PRESS SPACE TO START', CENTER_X, 618);
+        }
+        
+        // Draw game over screen
+        function drawGameOverScreen() {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+            ctx.fillRect(0, 0, 600, 700);
+            
+            ctx.fillStyle = '#ff0000';
+            ctx.font = 'bold 50px Courier New';
+            ctx.textAlign = 'center';
+            ctx.fillText('GAME OVER', CENTER_X, 300);
+            
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '30px Courier New';
+            ctx.fillText(`FINAL SCORE: ${score}`, CENTER_X, 370);
+            ctx.fillText(`LEVEL REACHED: ${level}`, CENTER_X, 410);
+            
+            ctx.fillStyle = '#ffcc00';
+            ctx.font = 'bold 24px Courier New';
+            ctx.fillText('PRESS SPACE TO RESTART', CENTER_X, 500);
+        }
+        
+        // Main game loop
+        function gameLoop() {
+            // Clear canvas
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, 600, 700);
+            
+            if (gameState === 'start') {
+                drawStartScreen();
+            } else if (gameState === 'playing') {
+                // Draw discs
+                discs.forEach(disc => drawDisc(disc));
+                
+                // Draw cubes (back to front for proper layering)
+                for (let row = 0; row < PYRAMID_ROWS; row++) {
+                    for (let col = 0; col <= row; col++) {
+                        const cube = getCube(row, col);
+                        if (cube) drawCube(cube);
+                    }
+                }
+                
+                // Draw enemies
+                enemies.forEach(enemy => {
+                    if (enemy.type === 'coily') drawCoily(enemy);
+                    else if (enemy.type === 'slick') drawSlick(enemy);
+                    else if (enemy.type === 'sam') drawSam(enemy);
+                });
+                
+                // Draw Q*bert
+                drawQbert();
+                
+                // Draw particles
+                drawParticles();
+                
+                // Draw UI
+                drawUI();
+                
+                // Update game logic
+                updateQbert();
+                updateEnemies();
+                updateSpawns();
+                
+            } else if (gameState === 'gameover') {
+                // Still show the pyramid
+                for (let row = 0; row < PYRAMID_ROWS; row++) {
+                    for (let col = 0; col <= row; col++) {
+                        const cube = getCube(row, col);
+                        if (cube) drawCube(cube);
+                    }
+                }
+                
+                drawGameOverScreen();
+            }
+            
+            requestAnimationFrame(gameLoop);
+        }
+        
+        // Start new game
+        function startGame() {
+            score = 0;
+            lives = 3;
+            level = 1;
+            enemies = [];
+            particles = [];
+            spawnTimer = 0;
+            
+            initCubes();
+            initQbert();
+            initDiscs();
+            
+            gameState = 'playing';
+            console.log('Game started! Score: 0, Lives: 3, Level: 1');
+        }
+        
+        // Input handling
+        document.addEventListener('keydown', (e) => {
+            if (keys[e.code]) return;
+            keys[e.code] = true;
+            
+            if (gameState === 'start' && e.code === 'Space') {
+                initAudio();
+                startGame();
+            } else if (gameState === 'gameover' && e.code === 'Space') {
+                startGame();
+            } else if (gameState === 'playing') {
+                if (e.code === 'Space') {
+                    tryDiscEscape();
+                } else if (e.code === 'ArrowUp') {
+                    moveQbertUp(true);
+                } else if (e.code === 'ArrowRight') {
+                    moveQbert('down-right');
+                } else if (e.code === 'ArrowDown') {
+                    moveQbertUp(false);
+                } else if (e.code === 'ArrowLeft') {
+                    moveQbert('down-left');
+                }
+            }
+            
+            e.preventDefault();
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            keys[e.code] = false;
+        });
+        
+        // Initialize and start
+        initCubes();
+        gameLoop();
+    </script>
+</body>
+</html>
