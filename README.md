@@ -12,7 +12,7 @@ These games were generated in **one shot** by local LLMs using CodeRunner:
 
 | Game | Play Now | Model Used |
 |------|----------|------------|
-| **Space Invaders** | [Play](https://jmrothberg.github.io/Code_Runner/Generated_games/Invaders_Qwen3-Coder_next_BESTEVER.html) | Qwen3-Coder |
+| **Space Invaders (Animated)** | [Play](https://jmrothberg.github.io/Games/Generated_games/space_invaders_animated.html) | Qwen3-Coder |
 
 ---
 
