@@ -1,0 +1,968 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VECTOR TANKS</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; overflow: hidden; font-family: monospace; }
+canvas { display: block; }
+#overlay {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  pointer-events: none; z-index: 10;
+}
+#periscope {
+  position: absolute; top: 10px; left: 10px;
+  border: 2px solid #00ff41; border-radius: 50%;
+  overflow: hidden; box-shadow: 0 0 15px #00ff4166, inset 0 0 20px #00ff4133;
+}
+#periscope canvas { display: block; }
+#periscope-label {
+  position: absolute; top: 10px; left: 10px; color: #00ff41;
+  font-size: 10px; font-family: monospace; z-index: 11;
+  text-shadow: 0 0 5px #00ff41;
+}
+#radar {
+  position: absolute; top: 10px; right: 10px;
+  border: 2px solid #00ff41;
+  box-shadow: 0 0 15px #00ff4166, inset 0 0 20px #00ff4133;
+}
+#radar canvas { display: block; }
+#radar-label {
+  position: absolute; top: 10px; right: 10px; color: #00ff41;
+  font-size: 10px; font-family: monospace; z-index: 11;
+  text-shadow: 0 0 5px #00ff41;
+}
+#hud {
+  position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+  color: #00ff41; font-family: monospace; font-size: 14px;
+  text-shadow: 0 0 8px #00ff41; z-index: 11; text-align: center;
+  pointer-events: none;
+}
+#score-display {
+  position: absolute; top: 15px; left: 50%; transform: translateX(-50%);
+  color: #00ff41; font-family: monospace; font-size: 18px;
+  text-shadow: 0 0 10px #00ff41; z-index: 11;
+  pointer-events: none;
+}
+#crosshair {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  z-index: 11; pointer-events: none;
+}
+#start-screen {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  background: #000; z-index: 100; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; color: #00ff41;
+  font-family: monospace; text-shadow: 0 0 10px #00ff41;
+}
+#start-screen h1 { font-size: 48px; margin-bottom: 20px; letter-spacing: 8px; }
+#start-screen p { font-size: 16px; margin: 5px 0; }
+#start-screen .blink { animation: blink 1s infinite; margin-top: 30px; font-size: 20px; }
+@keyframes blink { 50% { opacity: 0; } }
+#game-over {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  background: rgba(0,0,0,0.85); z-index: 100; display: none;
+  flex-direction: column; align-items: center; justify-content: center;
+  color: #00ff41; font-family: monospace; text-shadow: 0 0 10px #00ff41;
+}
+#game-over h1 { font-size: 48px; margin-bottom: 20px; letter-spacing: 8px; }
+#game-over p { font-size: 18px; margin: 5px 0; }
+#game-over .blink { animation: blink 1s infinite; margin-top: 30px; font-size: 20px; }
+</style>
+</head>
+<body>
+
+<canvas id="main"></canvas>
+
+<div id="overlay">
+  <div id="periscope-label">PERISCOPE</div>
+  <div id="periscope"><canvas id="peri-canvas"></canvas></div>
+  <div id="radar-label">TACTICAL MAP</div>
+  <div id="radar"><canvas id="radar-canvas"></canvas></div>
+  <div id="score-display">SCORE: 0 &nbsp; ENEMIES: 0</div>
+  <div id="hud">
+    <span id="speed-display">SPEED: 0</span> &nbsp;&nbsp;
+    <span id="ammo-display">AMMO: ∞</span> &nbsp;&nbsp;
+    <span id="lives-display">LIVES: 3</span>
+  </div>
+  <canvas id="crosshair" width="60" height="60"></canvas>
+</div>
+
+<div id="start-screen">
+  <h1>VECTOR TANKS</h1>
+  <p>↑↓ - FORWARD / REVERSE</p>
+  <p>←→ - ROTATE LEFT / RIGHT</p>
+  <p>SPACE - FIRE CANNON</p>
+  <p style="color:#ffff00">■ SPEED BOOST</p>
+  <p style="color:#00ffff">■ AMMO REFILL</p>
+  <p style="color:#ff3333">■ HEALTH REPAIR</p>
+  <p class="blink">PRESS ENTER TO BEGIN</p>
+</div>
+
+<div id="game-over">
+  <h1>GAME OVER</h1>
+  <p id="final-score">FINAL SCORE: 0</p>
+  <p class="blink">PRESS ENTER TO RESTART</p>
+</div>
+
+<script>
+const GREEN = '#00ff41';
+const GREEN_DIM = '#00aa2a';
+const GREEN_BRIGHT = '#33ff66';
+const GREEN_GLOW = '#00ff4144';
+const CYAN = '#00ffff';
+const YELLOW = '#ffff00';
+const RED = '#ff3333';
+const FIELD_SIZE = 2000;
+const HALF_FIELD = FIELD_SIZE / 2;
+
+let mainCanvas, mainCtx, periCanvas, periCtx, radarCanvas, radarCtx, crossCanvas, crossCtx;
+let W, H, PERI_SIZE = 160, RADAR_SIZE = 160;
+
+let gameState = 'start';
+let score = 0;
+let lives = 3;
+let keys = {};
+let lastTime = 0;
+let gameTime = 0;
+
+let player, enemies, obstacles, projectiles, explosions, particles, powerups;
+
+function init() {
+  mainCanvas = document.getElementById('main');
+  mainCtx = mainCanvas.getContext('2d');
+  periCanvas = document.getElementById('peri-canvas');
+  periCtx = periCanvas.getContext('2d');
+  radarCanvas = document.getElementById('radar-canvas');
+  radarCtx = radarCanvas.getContext('2d');
+  crossCanvas = document.getElementById('crosshair');
+  crossCtx = crossCanvas.getContext('2d');
+
+  resize();
+  window.addEventListener('resize', resize);
+  window.addEventListener('keydown', e => {
+    keys[e.code] = true;
+    if (e.code === 'Enter') {
+      if (gameState === 'start') { startGame(); }
+      else if (gameState === 'gameover') { startGame(); }
+    }
+    if (e.code === 'Space') e.preventDefault();
+  });
+  window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+  drawCrosshair();
+  requestAnimationFrame(gameLoop);
+}
+
+function resize() {
+  W = window.innerWidth;
+  H = window.innerHeight;
+  mainCanvas.width = W;
+  mainCanvas.height = H;
+  periCanvas.width = PERI_SIZE;
+  periCanvas.height = PERI_SIZE;
+  radarCanvas.width = RADAR_SIZE;
+  radarCanvas.height = RADAR_SIZE;
+}
+
+function drawCrosshair() {
+  crossCtx.strokeStyle = GREEN;
+  crossCtx.lineWidth = 1;
+  crossCtx.shadowColor = GREEN;
+  crossCtx.shadowBlur = 5;
+  crossCtx.beginPath();
+  crossCtx.moveTo(30, 20); crossCtx.lineTo(30, 26);
+  crossCtx.moveTo(30, 34); crossCtx.lineTo(30, 40);
+  crossCtx.moveTo(20, 30); crossCtx.lineTo(26, 30);
+  crossCtx.moveTo(34, 30); crossCtx.lineTo(40, 30);
+  crossCtx.stroke();
+  crossCtx.beginPath();
+  crossCtx.arc(30, 30, 10, 0, Math.PI * 2);
+  crossCtx.stroke();
+}
+
+function startGame() {
+  document.getElementById('start-screen').style.display = 'none';
+  document.getElementById('game-over').style.display = 'none';
+  gameState = 'playing';
+  score = 0;
+  lives = 3;
+
+  player = {
+    x: 0, z: 0, y: 0,
+    angle: 0, speed: 0,
+    turretAngle: 0,
+    fireCooldown: 0,
+    alive: true,
+    respawnTimer: 0,
+    health: 100,
+    ammo: 50,
+    speedBoost: 0
+  };
+
+  enemies = [];
+  obstacles = [];
+  projectiles = [];
+  explosions = [];
+  particles = [];
+  powerups = [];
+
+  generateObstacles();
+  generatePowerups();
+  spawnEnemyWave();
+}
+
+function generateObstacles() {
+  obstacles = [];
+  let types = ['box', 'pyramid', 'diamond', 'wall'];
+  for (let i = 0; i < 40; i++) {
+    let type = types[Math.floor(Math.random() * types.length)];
+    let x = (Math.random() - 0.5) * FIELD_SIZE * 0.9;
+    let z = (Math.random() - 0.5) * FIELD_SIZE * 0.9;
+    if (Math.abs(x) < 100 && Math.abs(z) < 100) { x += 200 * Math.sign(x || 1); z += 200 * Math.sign(z || 1); }
+    let size = 20 + Math.random() * 40;
+    obstacles.push({ x, z, type, size, destroyed: false });
+  }
+  for (let i = 0; i < 8; i++) {
+    let x = (Math.random() - 0.5) * FIELD_SIZE * 0.8;
+    let z = (Math.random() - 0.5) * FIELD_SIZE * 0.8;
+    if (Math.abs(x) < 150 && Math.abs(z) < 150) { x += 250 * Math.sign(x || 1); z += 250 * Math.sign(z || 1); }
+    obstacles.push({ x, z, type: 'wall', size: 80 + Math.random() * 60, destroyed: false });
+  }
+}
+
+function generatePowerups() {
+  powerups = [];
+  let types = ['speed', 'ammo', 'health'];
+  let colors = { speed: YELLOW, ammo: CYAN, health: RED };
+  for (let i = 0; i < 15; i++) {
+    let type = types[Math.floor(Math.random() * types.length)];
+    let x = (Math.random() - 0.5) * FIELD_SIZE * 0.85;
+    let z = (Math.random() - 0.5) * FIELD_SIZE * 0.85;
+    if (Math.abs(x) < 80 && Math.abs(z) < 80) { x += 150 * Math.sign(x || 1); z += 150 * Math.sign(z || 1); }
+    powerups.push({ x, z, type, color: colors[type], collected: false, pulse: Math.random() * Math.PI * 2 });
+  }
+}
+
+function spawnEnemyWave() {
+  let count = 3 + Math.floor(score / 500);
+  if (count > 10) count = 10;
+  for (let i = 0; i < count; i++) {
+    spawnEnemy();
+  }
+}
+
+function spawnEnemy() {
+  let angle = Math.random() * Math.PI * 2;
+  let dist = 400 + Math.random() * 600;
+  enemies.push({
+    x: player.x + Math.cos(angle) * dist,
+    z: player.z + Math.sin(angle) * dist,
+    y: 0,
+    angle: Math.random() * Math.PI * 2,
+    speed: 0,
+    maxSpeed: 30 + Math.random() * 20,
+    fireCooldown: 2 + Math.random() * 3,
+    alive: true,
+    ai: { state: 'patrol', timer: 0, targetAngle: 0 }
+  });
+}
+
+function getObstacleVerts(obs) {
+  let s = obs.size;
+  let x = obs.x, z = obs.z;
+  switch (obs.type) {
+    case 'box':
+      return {
+        verts: [
+          [x-s,0,z-s],[x+s,0,z-s],[x+s,0,z+s],[x-s,0,z+s],
+          [x-s,s*1.5,z-s],[x+s,s*1.5,z-s],[x+s,s*1.5,z+s],[x-s,s*1.5,z+s]
+        ],
+        edges: [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]]
+      };
+    case 'pyramid':
+      return {
+        verts: [
+          [x-s,0,z-s],[x+s,0,z-s],[x+s,0,z+s],[x-s,0,z+s],
+          [x,s*2,z]
+        ],
+        edges: [[0,1],[1,2],[2,3],[3,0],[0,4],[1,4],[2,4],[3,4]]
+      };
+    case 'diamond':
+      return {
+        verts: [
+          [x,0,z-s],[x+s,0,z],[x,0,z+s],[x-s,0,z],
+          [x,s*1.8,z],[x,-s*0.3,z]
+        ],
+        edges: [[0,1],[1,2],[2,3],[3,0],[0,4],[1,4],[2,4],[3,4],[0,5],[1,5],[2,5],[3,5]]
+      };
+    case 'wall':
+      return {
+        verts: [
+          [x-s,0,z-3],[x+s,0,z-3],[x+s,0,z+3],[x-s,0,z+3],
+          [x-s,s*1.2,z-3],[x+s,s*1.2,z-3],[x+s,s*1.2,z+3],[x-s,s*1.2,z+3]
+        ],
+        edges: [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]]
+      };
+  }
+}
+
+function getTankVerts(tank) {
+  let x = tank.x, z = tank.z, a = tank.angle;
+  let ca = Math.cos(a), sa = Math.sin(a);
+  let bodyW = 14, bodyL = 20, bodyH = 8;
+  let turretR = 7, turretH = 10, barrelL = 26;
+  function rot(px, pz) { return [x + px*ca + pz*sa, z - px*sa + pz*ca]; }
+
+  let bodyVerts = [];
+  let hw = bodyW/2, hl = bodyL/2;
+  let btl = rot(-hw, -hl), btr = rot(hw, -hl), bfr = rot(hw, hl), bfl = rot(-hw, hl);
+  bodyVerts.push([btl[0], bodyH, btl[1]]);
+  bodyVerts.push([btr[0], bodyH, btr[1]]);
+  bodyVerts.push([bfr[0], bodyH, bfr[1]]);
+  bodyVerts.push([bfl[0], bodyH, bfl[1]]);
+  bodyVerts.push([btl[0], 0, btl[1]]);
+  bodyVerts.push([btr[0], 0, btr[1]]);
+  bodyVerts.push([bfr[0], 0, bfr[1]]);
+  bodyVerts.push([bfl[0], 0, bfl[1]]);
+
+  let slopedH = bodyH * 0.6;
+  let stl = rot(-hw*0.7, -hl*0.8), str = rot(hw*0.7, -hl*0.8), sfr = rot(hw*0.7, hl*0.8), sfl = rot(-hw*0.7, hl*0.8);
+  bodyVerts.push([stl[0], slopedH, stl[1]]);
+  bodyVerts.push([str[0], slopedH, str[1]]);
+  bodyVerts.push([sfr[0], slopedH, sfr[1]]);
+  bodyVerts.push([sfl[0], slopedH, sfl[1]]);
+
+  let bodyEdges = [
+    [0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7],
+    [8,9],[9,10],[10,11],[11,8],[0,8],[1,9],[2,10],[3,11]
+  ];
+
+  let treadVerts = [];
+  let tw = hw + 3, tl = hl + 2;
+  for (let side = -1; side <= 1; side += 2) {
+    let base = treadVerts.length;
+    let c1 = rot(side * tw, -tl), c2 = rot(side * tw, tl);
+    let c3 = rot(side * (tw - 3), -tl), c4 = rot(side * (tw - 3), tl);
+    treadVerts.push([c1[0], 5, c1[1]]);
+    treadVerts.push([c2[0], 5, c2[1]]);
+    treadVerts.push([c3[0], 5, c3[1]]);
+    treadVerts.push([c4[0], 5, c4[1]]);
+    treadVerts.push([c1[0], 0, c1[1]]);
+    treadVerts.push([c2[0], 0, c2[1]]);
+    treadVerts.push([c3[0], 0, c3[1]]);
+    treadVerts.push([c4[0], 0, c4[1]]);
+    bodyEdges.push([base,base+1],[base+2,base+3],[base+4,base+5],[base+6,base+7]);
+    bodyEdges.push([base,base+4],[base+1,base+5],[base+2,base+6],[base+3,base+7]);
+    bodyEdges.push([base,base+2],[base+1,base+3],[base+4,base+6],[base+5,base+7]);
+  }
+
+  let tc = [x, turretH + bodyH, z];
+  let turretVerts = [];
+  let tRad = turretR;
+  for (let i = 0; i < 12; i++) {
+    let ang = (i / 12) * Math.PI * 2;
+    turretVerts.push([tc[0] + Math.cos(ang)*tRad, tc[1], tc[2] + Math.sin(ang)*tRad]);
+    turretVerts.push([tc[0] + Math.cos(ang)*tRad, tc[1] + turretH*0.5, tc[2] + Math.sin(ang)*tRad]);
+  }
+  let turretEdges = [];
+  for (let i = 0; i < 12; i++) {
+    turretEdges.push([i*2, ((i+1)%12)*2]);
+    turretEdges.push([i*2+1, ((i+1)%12)*2+1]);
+    turretEdges.push([i*2, i*2+1]);
+  }
+
+  let hatchTop = [tc[0], tc[1] + turretH*0.5, tc[2]];
+  turretVerts.push(hatchTop);
+  for (let i = 0; i < 12; i++) {
+    turretEdges.push([i*2+1, turretVerts.length - 1]);
+  }
+
+  let barrelBase = [tc[0], tc[1] + turretH*0.25, tc[2]];
+  let barrelMid = [tc[0] + Math.sin(a)*barrelL*0.6, tc[1] + turretH*0.25, tc[2] + Math.cos(a)*barrelL*0.6];
+  let barrelTip = [tc[0] + Math.sin(a)*barrelL, tc[1] + turretH*0.25, tc[2] + Math.cos(a)*barrelL];
+  let muzzleW = 2;
+  let m1 = [barrelTip[0] + Math.cos(a)*muzzleW, barrelTip[1] - muzzleW, barrelTip[2] - Math.sin(a)*muzzleW];
+  let m2 = [barrelTip[0] - Math.cos(a)*muzzleW, barrelTip[1] - muzzleW, barrelTip[2] + Math.sin(a)*muzzleW];
+  let m3 = [barrelTip[0] + Math.cos(a)*muzzleW, barrelTip[1] + muzzleW, barrelTip[2] - Math.sin(a)*muzzleW];
+  let m4 = [barrelTip[0] - Math.cos(a)*muzzleW, barrelTip[1] + muzzleW, barrelTip[2] + Math.sin(a)*muzzleW];
+  let barrelVerts = [barrelBase, barrelMid, barrelTip, m1, m2, m3, m4];
+  let barrelEdges = [[0,1],[1,2],[3,4],[4,6],[6,5],[5,3],[2,3],[2,4],[2,5],[2,6]];
+
+  let antennaBase = [tc[0] - Math.sin(a)*3, tc[1] + turretH*0.5, tc[2] - Math.cos(a)*3];
+  let antennaTip = [antennaBase[0], tc[1] + turretH*1.2, antennaBase[2]];
+  barrelVerts.push(antennaBase, antennaTip);
+  barrelEdges.push([barrelVerts.length-2, barrelVerts.length-1]);
+
+  return {
+    body: { verts: bodyVerts.concat(treadVerts), edges: bodyEdges },
+    turret: { verts: turretVerts, edges: turretEdges },
+    barrel: { verts: barrelVerts, edges: barrelEdges }
+  };
+}
+
+function project(px, py, pz, camX, camY, camZ, camAngle, fov, screenW, screenH) {
+  let dx = px - camX, dy = py - camY, dz = pz - camZ;
+  let ca = Math.cos(camAngle), sa = Math.sin(camAngle);
+  let rx = dx * ca - dz * sa;
+  let rz = dx * sa + dz * ca;
+  let ry = dy;
+
+  if (rz < 5) return null;
+
+  let f = fov / rz;
+  let sx = screenW / 2 + rx * f;
+  let sy = screenH / 2 - ry * f;
+  return { x: sx, y: sy, z: rz };
+}
+
+function drawWireframe(ctx, verts, edges, camX, camY, camZ, camAngle, fov, sw, sh, color, lineW) {
+  ctx.strokeStyle = color || GREEN;
+  ctx.lineWidth = lineW || 1;
+  let projected = verts.map(v => project(v[0], v[1], v[2], camX, camY, camZ, camAngle, fov, sw, sh));
+
+  ctx.beginPath();
+  for (let e of edges) {
+    let a = projected[e[0]], b = projected[e[1]];
+    if (!a || !b) continue;
+    if (a.z > 5 && b.z > 5) {
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+    }
+  }
+  ctx.stroke();
+}
+
+function drawGroundGrid(ctx, camX, camY, camZ, camAngle, fov, sw, sh) {
+  ctx.strokeStyle = GREEN_DIM;
+  ctx.lineWidth = 0.5;
+  let gridSize = 100;
+  let range = 800;
+  let startX = Math.floor((camX - range) / gridSize) * gridSize;
+  let startZ = Math.floor((camZ - range) / gridSize) * gridSize;
+
+  ctx.beginPath();
+  for (let gx = startX; gx < camX + range; gx += gridSize) {
+    let p1 = project(gx, 0, camZ - range, camX, 15, camZ, camAngle, fov, sw, sh);
+    let p2 = project(gx, 0, camZ + range, camX, 15, camZ, camAngle, fov, sw, sh);
+    if (p1 && p2) { ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); }
+  }
+  for (let gz = startZ; gz < camZ + range; gz += gridSize) {
+    let p1 = project(camX - range, 0, gz, camX, 15, camZ, camAngle, fov, sw, sh);
+    let p2 = project(camX + range, 0, gz, camX, 15, camZ, camAngle, fov, sw, sh);
+    if (p1 && p2) { ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); }
+  }
+  ctx.stroke();
+}
+
+function drawMountains(ctx, camX, camY, camZ, camAngle, fov, sw, sh) {
+}
+
+function drawScene(ctx, camX, camY, camZ, camAngle, fov, sw, sh, isPeriscope) {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, sw, sh);
+
+  ctx.shadowColor = GREEN;
+  ctx.shadowBlur = isPeriscope ? 2 : 4;
+
+  drawGroundGrid(ctx, camX, camY, camZ, camAngle, fov, sw, sh);
+  drawMountains(ctx, camX, camY, camZ, camAngle, fov, sw, sh);
+
+  for (let obs of obstacles) {
+    if (obs.destroyed) continue;
+    let dist = Math.hypot(obs.x - camX, obs.z - camZ);
+    if (dist > 1000) continue;
+    let ov = getObstacleVerts(obs);
+    let alpha = Math.max(0.3, 1 - dist / 1000);
+    let col = obs.type === 'pyramid' ? GREEN_BRIGHT : GREEN;
+    ctx.globalAlpha = alpha;
+    drawWireframe(ctx, ov.verts, ov.edges, camX, camY, camZ, camAngle, fov, sw, sh, col, isPeriscope ? 0.5 : 1);
+    ctx.globalAlpha = 1;
+  }
+
+  for (let pu of powerups) {
+    if (pu.collected) continue;
+    let dist = Math.hypot(pu.x - camX, pu.z - camZ);
+    if (dist > 600) continue;
+    pu.pulse += 0.05;
+    let s = 8 + Math.sin(pu.pulse) * 2;
+    let h = s * 1.5;
+    let px = pu.x, pz = pu.z;
+    let verts = [
+      [px-s,0,pz-s],[px+s,0,pz-s],[px+s,0,pz+s],[px-s,0,pz+s],
+      [px-s,h,pz-s],[px+s,h,pz-s],[px+s,h,pz+s],[px-s,h,pz+s]
+    ];
+    let edges = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+    ctx.shadowColor = pu.color;
+    ctx.shadowBlur = isPeriscope ? 4 : 8;
+    drawWireframe(ctx, verts, edges, camX, camY, camZ, camAngle, fov, sw, sh, pu.color, isPeriscope ? 0.8 : 1.5);
+    ctx.shadowColor = GREEN;
+    ctx.shadowBlur = isPeriscope ? 2 : 4;
+  }
+
+  for (let enemy of enemies) {
+    if (!enemy.alive) continue;
+    let dist = Math.hypot(enemy.x - camX, enemy.z - camZ);
+    if (dist > 900) continue;
+    let tv = getTankVerts(enemy);
+    drawWireframe(ctx, tv.body.verts, tv.body.edges, camX, camY, camZ, camAngle, fov, sw, sh, GREEN_BRIGHT, isPeriscope ? 0.5 : 1.5);
+    drawWireframe(ctx, tv.turret.verts, tv.turret.edges, camX, camY, camZ, camAngle, fov, sw, sh, GREEN, isPeriscope ? 0.3 : 0.8);
+    drawWireframe(ctx, tv.barrel.verts, tv.barrel.edges, camX, camY, camZ, camAngle, fov, sw, sh, GREEN_BRIGHT, isPeriscope ? 0.5 : 1.5);
+  }
+
+  for (let proj of projectiles) {
+    let dist = Math.hypot(proj.x - camX, proj.z - camZ);
+    if (dist > 900) continue;
+    let pVerts = [[proj.x, 2, proj.z], [proj.x, 6, proj.z]];
+    let pEdges = [[0, 1]];
+    drawWireframe(ctx, pVerts, pEdges, camX, camY, camZ, camAngle, fov, sw, sh, GREEN_BRIGHT, isPeriscope ? 1 : 2);
+  }
+
+  for (let exp of explosions) {
+    let dist = Math.hypot(exp.x - camX, exp.z - camZ);
+    if (dist > 900) continue;
+    let r = exp.radius;
+    let verts = [];
+    let edges = [];
+    for (let i = 0; i < 12; i++) {
+      let a1 = (i / 12) * Math.PI * 2;
+      let a2 = ((i + 1) / 12) * Math.PI * 2;
+      let h1 = Math.sin(a1 * 3 + exp.time * 5) * r * 0.5;
+      let h2 = Math.sin(a2 * 3 + exp.time * 5) * r * 0.5;
+      verts.push([exp.x + Math.cos(a1) * r, h1, exp.z + Math.sin(a1) * r]);
+      verts.push([exp.x + Math.cos(a2) * r, h2, exp.z + Math.sin(a2) * r]);
+      edges.push([i * 2, i * 2 + 1]);
+      if (i > 0) edges.push([i * 2, (i - 1) * 2 + 1]);
+    }
+    ctx.globalAlpha = Math.max(0, 1 - exp.time / exp.maxTime);
+    drawWireframe(ctx, verts, edges, camX, camY, camZ, camAngle, fov, sw, sh, GREEN_BRIGHT, isPeriscope ? 1 : 2);
+    ctx.globalAlpha = 1;
+  }
+
+  for (let p of particles) {
+    let dist = Math.hypot(p.x - camX, p.z - camZ);
+    if (dist > 900) continue;
+    let pp = project(p.x, p.y, p.z, camX, camY, camZ, camAngle, fov, sw, sh);
+    if (pp && pp.z > 5) {
+      ctx.globalAlpha = Math.max(0, 1 - p.life / p.maxLife);
+      ctx.fillStyle = GREEN_BRIGHT;
+      ctx.fillRect(pp.x - 1, pp.y - 1, 2, 2);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  ctx.shadowBlur = 0;
+
+  if (!isPeriscope) {
+    ctx.strokeStyle = GREEN;
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.3;
+    ctx.beginPath();
+    ctx.moveTo(sw/2 - 30, sh); ctx.lineTo(sw/2 - 15, sh - 40);
+    ctx.moveTo(sw/2 + 30, sh); ctx.lineTo(sw/2 + 15, sh - 40);
+    ctx.moveTo(sw/2 - 15, sh - 40); ctx.lineTo(sw/2 - 15, sh - 50);
+    ctx.moveTo(sw/2 + 15, sh - 40); ctx.lineTo(sw/2 + 15, sh - 50);
+    ctx.moveTo(sw/2 - 15, sh - 50); ctx.lineTo(sw/2 + 15, sh - 50);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawRadar() {
+  let ctx = radarCtx;
+  let s = RADAR_SIZE;
+  ctx.fillStyle = '#000a00';
+  ctx.fillRect(0, 0, s, s);
+
+  ctx.strokeStyle = GREEN_DIM;
+  ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  ctx.arc(s/2, s/2, s/2 - 4, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(s/2, s/2, (s/2 - 4) * 0.5, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(s/2, 4); ctx.lineTo(s/2, s - 4);
+  ctx.moveTo(4, s/2); ctx.lineTo(s - 4, s/2);
+  ctx.stroke();
+
+  let scale = (s / 2 - 8) / (FIELD_SIZE / 2);
+
+  for (let obs of obstacles) {
+    if (obs.destroyed) continue;
+    let rx = s/2 + (obs.x - player.x) * scale;
+    let ry = s/2 - (obs.z - player.z) * scale;
+    if (rx < 2 || rx > s-2 || ry < 2 || ry > s-2) continue;
+    ctx.fillStyle = GREEN_DIM;
+    ctx.fillRect(rx - 1, ry - 1, 2, 2);
+  }
+
+  for (let pu of powerups) {
+    if (pu.collected) continue;
+    let rx = s/2 + (pu.x - player.x) * scale;
+    let ry = s/2 - (pu.z - player.z) * scale;
+    if (rx < 2 || rx > s-2 || ry < 2 || ry > s-2) continue;
+    ctx.fillStyle = pu.color;
+    ctx.shadowColor = pu.color;
+    ctx.shadowBlur = 3;
+    ctx.fillRect(rx - 2, ry - 2, 4, 4);
+    ctx.shadowBlur = 0;
+  }
+
+  for (let enemy of enemies) {
+    if (!enemy.alive) continue;
+    let rx = s/2 + (enemy.x - player.x) * scale;
+    let ry = s/2 - (enemy.z - player.z) * scale;
+    if (rx < 2 || rx > s-2 || ry < 2 || ry > s-2) continue;
+    ctx.fillStyle = GREEN_BRIGHT;
+    ctx.shadowColor = GREEN_BRIGHT;
+    ctx.shadowBlur = 3;
+    ctx.beginPath();
+    ctx.arc(rx, ry, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+
+  let px = s/2, py = s/2;
+  ctx.strokeStyle = GREEN_BRIGHT;
+  ctx.lineWidth = 2;
+  ctx.shadowColor = GREEN_BRIGHT;
+  ctx.shadowBlur = 5;
+  ctx.beginPath();
+  ctx.moveTo(px, py);
+  ctx.lineTo(px + Math.sin(player.angle) * 12, py - Math.cos(player.angle) * 12);
+  ctx.stroke();
+  ctx.fillStyle = GREEN_BRIGHT;
+  ctx.beginPath();
+  ctx.arc(px, py, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  ctx.strokeStyle = GREEN;
+  ctx.lineWidth = 1;
+  let fovAngle = 0.6;
+  ctx.beginPath();
+  ctx.moveTo(px + Math.sin(player.angle - fovAngle) * 30, py - Math.cos(player.angle - fovAngle) * 30);
+  ctx.lineTo(px, py);
+  ctx.lineTo(px + Math.sin(player.angle + fovAngle) * 30, py - Math.cos(player.angle + fovAngle) * 30);
+  ctx.stroke();
+}
+
+function update(dt) {
+  if (gameState !== 'playing') return;
+  if (!player.alive) {
+    player.respawnTimer -= dt;
+    if (player.respawnTimer <= 0) {
+      if (lives > 0) {
+        player.alive = true;
+        player.x = 0; player.z = 0; player.angle = 0;
+        player.speed = 0;
+      } else {
+        gameState = 'gameover';
+        document.getElementById('game-over').style.display = 'flex';
+        document.getElementById('final-score').textContent = 'FINAL SCORE: ' + score;
+      }
+    }
+    return;
+  }
+
+  if (keys['ArrowLeft'] || keys['KeyA']) player.angle -= 2.0 * dt;
+  if (keys['ArrowRight'] || keys['KeyD']) player.angle += 2.0 * dt;
+  if (keys['ArrowUp'] || keys['KeyW']) player.speed = Math.min(player.speed + 60 * dt, player.speedBoost > 0 ? 120 : 80);
+  else if (keys['ArrowDown'] || keys['KeyS']) player.speed = Math.max(player.speed - 80 * dt, -40);
+  else player.speed *= 0.97;
+
+  if (Math.abs(player.speed) < 0.5) player.speed = 0;
+
+  let nx = player.x + Math.sin(player.angle) * player.speed * dt;
+  let nz = player.z + Math.cos(player.angle) * player.speed * dt;
+
+  let blocked = false;
+  for (let obs of obstacles) {
+    if (obs.destroyed) continue;
+    let dist = Math.hypot(nx - obs.x, nz - obs.z);
+    let minDist = obs.type === 'wall' ? obs.size * 0.5 + 8 : obs.size * 0.4 + 8;
+    if (dist < minDist) { blocked = true; player.speed *= -0.3; break; }
+  }
+
+  nx = Math.max(-HALF_FIELD + 20, Math.min(HALF_FIELD - 20, nx));
+  nz = Math.max(-HALF_FIELD + 20, Math.min(HALF_FIELD - 20, nz));
+
+  if (!blocked) { player.x = nx; player.z = nz; }
+
+  for (let pu of powerups) {
+    if (pu.collected) continue;
+    let dist = Math.hypot(player.x - pu.x, player.z - pu.z);
+    if (dist < 20) {
+      pu.collected = true;
+      if (pu.type === 'speed') { player.speedBoost = 8; }
+      else if (pu.type === 'ammo') { player.ammo = Math.min(player.ammo + 25, 99); }
+      else if (pu.type === 'health') { player.health = Math.min(player.health + 30, 100); }
+      spawnExplosion(pu.x, 0, pu.z, 15);
+    }
+  }
+
+  if (player.speedBoost > 0) player.speedBoost -= dt;
+
+  player.fireCooldown -= dt;
+  if (keys['Space'] && player.fireCooldown <= 0 && player.ammo > 0) {
+    player.fireCooldown = 0.4;
+    player.ammo--;
+    let bx = player.x + Math.sin(player.angle) * 30;
+    let bz = player.z + Math.cos(player.angle) * 30;
+    projectiles.push({
+      x: bx, z: bz, y: 10,
+      vx: Math.sin(player.angle) * 200,
+      vz: Math.cos(player.angle) * 200,
+      owner: 'player', life: 3
+    });
+  }
+
+  for (let enemy of enemies) {
+    if (!enemy.alive) continue;
+    updateEnemyAI(enemy, dt);
+  }
+
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    let p = projectiles[i];
+    p.x += p.vx * dt;
+    p.z += p.vz * dt;
+    p.life -= dt;
+
+    if (p.life <= 0 || Math.abs(p.x) > HALF_FIELD || Math.abs(p.z) > HALF_FIELD) {
+      projectiles.splice(i, 1); continue;
+    }
+
+    let hitObs = false;
+    for (let obs of obstacles) {
+      if (obs.destroyed) continue;
+      let dist = Math.hypot(p.x - obs.x, p.z - obs.z);
+      let hitR = obs.type === 'wall' ? obs.size * 0.5 : obs.size * 0.6;
+      if (dist < hitR) {
+        if (p.owner === 'player' && obs.type !== 'wall') {
+          obs.destroyed = true;
+          score += 25;
+          spawnExplosion(obs.x, 0, obs.z, 30);
+        } else {
+          spawnExplosion(p.x, 0, p.z, 15);
+        }
+        projectiles.splice(i, 1);
+        hitObs = true;
+        break;
+      }
+    }
+    if (hitObs) continue;
+
+    if (p.owner === 'player') {
+      for (let enemy of enemies) {
+        if (!enemy.alive) continue;
+        let dist = Math.hypot(p.x - enemy.x, p.z - enemy.z);
+        if (dist < 18) {
+          enemy.alive = false;
+          score += 100;
+          spawnExplosion(enemy.x, 0, enemy.z, 40);
+          projectiles.splice(i, 1);
+          break;
+        }
+      }
+    } else if (p.owner === 'enemy' && player.alive) {
+      let dist = Math.hypot(p.x - player.x, p.z - player.z);
+      if (dist < 18) {
+        player.health -= 34;
+        projectiles.splice(i, 1);
+        spawnExplosion(p.x, 0, p.z, 20);
+        if (player.health <= 0) {
+          player.alive = false;
+          lives--;
+          player.respawnTimer = 2;
+          player.speed = 0;
+          player.health = 100;
+          spawnExplosion(player.x, 0, player.z, 40);
+        }
+      }
+    }
+  }
+
+  for (let i = explosions.length - 1; i >= 0; i--) {
+    explosions[i].time += dt;
+    explosions[i].radius += dt * 40;
+    if (explosions[i].time >= explosions[i].maxTime) explosions.splice(i, 1);
+  }
+
+  for (let i = particles.length - 1; i >= 0; i--) {
+    let p = particles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.z += p.vz * dt;
+    p.vy -= 30 * dt;
+    p.life -= dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+
+  let aliveEnemies = enemies.filter(e => e.alive);
+  if (aliveEnemies.length === 0) {
+    score += 200;
+    spawnEnemyWave();
+  }
+
+  if (powerups.every(p => p.collected)) {
+    generatePowerups();
+  }
+
+  document.getElementById('score-display').textContent = 'SCORE: ' + score + '   ENEMIES: ' + aliveEnemies.length;
+  document.getElementById('speed-display').textContent = 'SPEED: ' + Math.abs(Math.round(player.speed)) + (player.speedBoost > 0 ? ' BOOST!' : '');
+  document.getElementById('ammo-display').textContent = 'AMMO: ' + player.ammo;
+  document.getElementById('lives-display').textContent = 'LIVES: ' + lives + '  HP: ' + player.health;
+}
+
+function updateEnemyAI(enemy, dt) {
+  let distToPlayer = Math.hypot(enemy.x - player.x, enemy.z - player.z);
+  let angleToPlayer = Math.atan2(player.x - enemy.x, player.z - enemy.z);
+
+  enemy.ai.timer -= dt;
+
+  switch (enemy.ai.state) {
+    case 'patrol':
+      if (enemy.ai.timer <= 0) {
+        enemy.ai.targetAngle = Math.random() * Math.PI * 2;
+        enemy.ai.timer = 2 + Math.random() * 3;
+        enemy.speed = enemy.maxSpeed * 0.4;
+      }
+      if (distToPlayer < 500) {
+        enemy.ai.state = 'chase';
+        enemy.ai.timer = 0;
+      }
+      break;
+    case 'chase':
+      enemy.ai.targetAngle = angleToPlayer;
+      enemy.speed = enemy.maxSpeed * 0.7;
+      if (distToPlayer < 300) {
+        enemy.ai.state = 'attack';
+        enemy.ai.timer = 0;
+      }
+      if (distToPlayer > 700) {
+        enemy.ai.state = 'patrol';
+        enemy.ai.timer = 0;
+      }
+      break;
+    case 'attack':
+      enemy.ai.targetAngle = angleToPlayer;
+      enemy.speed = enemy.maxSpeed * 0.3;
+      if (distToPlayer < 200) {
+        enemy.speed = -enemy.maxSpeed * 0.3;
+        enemy.ai.targetAngle = angleToPlayer + Math.PI;
+      }
+      if (distToPlayer > 400) {
+        enemy.ai.state = 'chase';
+        enemy.ai.timer = 0;
+      }
+
+      enemy.fireCooldown -= dt;
+      if (enemy.fireCooldown <= 0) {
+        let angleDiff = Math.abs(normalizeAngle(enemy.angle - angleToPlayer));
+        if (angleDiff < 0.3) {
+          enemy.fireCooldown = 1.5 + Math.random() * 2;
+          let bx = enemy.x + Math.sin(enemy.angle) * 25;
+          let bz = enemy.z + Math.cos(enemy.angle) * 25;
+          projectiles.push({
+            x: bx, z: bz, y: 8,
+            vx: Math.sin(enemy.angle) * 150,
+            vz: Math.cos(enemy.angle) * 150,
+            owner: 'enemy', life: 3
+          });
+        }
+      }
+      break;
+  }
+
+  let angleDiff = normalizeAngle(enemy.ai.targetAngle - enemy.angle);
+  enemy.angle += angleDiff * 2.5 * dt;
+
+  let nx = enemy.x + Math.sin(enemy.angle) * enemy.speed * dt;
+  let nz = enemy.z + Math.cos(enemy.angle) * enemy.speed * dt;
+
+  let blocked = false;
+  for (let obs of obstacles) {
+    if (obs.destroyed) continue;
+    let d = Math.hypot(nx - obs.x, nz - obs.z);
+    let minD = obs.type === 'wall' ? obs.size + 15 : obs.size * 0.7 + 15;
+    if (d < minD) { blocked = true; enemy.speed *= -0.5; enemy.ai.targetAngle += Math.PI * 0.5; break; }
+  }
+  for (let other of enemies) {
+    if (other === enemy || !other.alive) continue;
+    let d = Math.hypot(nx - other.x, nz - other.z);
+    if (d < 30) { blocked = true; enemy.speed *= -0.3; break; }
+  }
+
+  nx = Math.max(-HALF_FIELD + 20, Math.min(HALF_FIELD - 20, nx));
+  nz = Math.max(-HALF_FIELD + 20, Math.min(HALF_FIELD - 20, nz));
+  if (!blocked) { enemy.x = nx; enemy.z = nz; }
+}
+
+function normalizeAngle(a) {
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a < -Math.PI) a += Math.PI * 2;
+  return a;
+}
+
+function spawnExplosion(x, y, z, radius) {
+  explosions.push({ x, y, z, radius: 5, time: 0, maxTime: 1.2 });
+  for (let i = 0; i < 20; i++) {
+    let a = Math.random() * Math.PI * 2;
+    let spd = 20 + Math.random() * 60;
+    particles.push({
+      x, y: y + 5, z,
+      vx: Math.cos(a) * spd,
+      vy: 20 + Math.random() * 40,
+      vz: Math.sin(a) * spd,
+      life: 0.5 + Math.random() * 1,
+      maxLife: 1.5
+    });
+  }
+}
+
+function gameLoop(time) {
+  let dt = Math.min((time - lastTime) / 1000, 0.05);
+  lastTime = time;
+
+  update(dt);
+
+  if (gameState === 'playing' || gameState === 'gameover') {
+    let camX = player.x, camZ = player.z, camAngle = player.angle;
+    let camY = 15;
+    let fov = W * 0.8;
+
+    mainCtx.clearRect(0, 0, W, H);
+    drawScene(mainCtx, camX, camY, camZ, camAngle, fov, W, H, false);
+
+    let periCamX = player.x, periCamZ = player.z;
+    let periCamAngle = player.angle;
+    let periCamY = 22;
+    let periFov = PERI_SIZE * 12;
+    drawScene(periCtx, periCamX, periCamY, periCamZ, periCamAngle, periFov, PERI_SIZE, PERI_SIZE, true);
+
+    drawRadar();
+
+    if (!player.alive) {
+      mainCtx.fillStyle = 'rgba(255,0,0,0.15)';
+      mainCtx.fillRect(0, 0, W, H);
+      mainCtx.fillStyle = GREEN;
+      mainCtx.font = '24px monospace';
+      mainCtx.textAlign = 'center';
+      mainCtx.shadowColor = GREEN;
+      mainCtx.shadowBlur = 10;
+      mainCtx.fillText('DESTROYED', W/2, H/2 - 20);
+      if (lives > 0) mainCtx.fillText('RESPAWNING...', W/2, H/2 + 20);
+      mainCtx.shadowBlur = 0;
+    }
+  }
+
+  requestAnimationFrame(gameLoop);
+}
+
+init();
+</script>
+</body>
+</html>
