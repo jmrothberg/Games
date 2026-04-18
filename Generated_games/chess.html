@@ -53,6 +53,9 @@
       <option value="2" selected>Depth 2</option>
       <option value="3">Depth 3</option>
       <option value="4">Depth 4</option>
+      <option value="5">Depth 5</option>
+      <option value="6">Depth 6</option>
+      <option value="7">Depth 7</option>
     </select>
     <select class="model-picker hidden" data-color="white"></select>
   </div>
@@ -68,6 +71,9 @@
       <option value="2" selected>Depth 2</option>
       <option value="3">Depth 3</option>
       <option value="4">Depth 4</option>
+      <option value="5">Depth 5</option>
+      <option value="6">Depth 6</option>
+      <option value="7">Depth 7</option>
     </select>
     <select class="model-picker hidden" data-color="black"></select>
   </div>
@@ -92,6 +98,11 @@ let llmStats = {
   white: { tries: 0, fallbacks: 0, sumRank: 0, maxRank: 0, lastRank: 0 },
   black: { tries: 0, fallbacks: 0, sumRank: 0, maxRank: 0, lastRank: 0 }
 };
+let thinkingStartMs = 0;
+let thinkingDepth = 0;
+let thinkingMaxDepth = 0;
+let thinkingTimerId = null;
+let positionCounts = new Map();
 
 function readPlayerConfig(color) {
   const typeSel = document.querySelector(`.player-type[data-color="${color}"]`);
@@ -131,6 +142,9 @@ function init() {
     black: { tries: 0, fallbacks: 0, sumRank: 0, maxRank: 0, lastRank: 0 }
   };
   computerThinking = false;
+  stopThinkingClock();
+  positionCounts = new Map();
+  recordPosition();
   render();
   updateStatus();
   updateLlmStats();
@@ -207,25 +221,129 @@ function updateStatus() {
   const status = document.getElementById('status');
   if (gameOver) return;
   if (computerThinking) {
-    status.textContent = (turn === 'white' ? 'White' : 'Black') + ' is thinking...';
+    const who = turn === 'white' ? 'White' : 'Black';
+    const elapsed = thinkingStartMs ? ((Date.now() - thinkingStartMs) / 1000).toFixed(1) : '0.0';
+    const dtag = thinkingDepth ? ` \u00b7 depth ${thinkingDepth}/${thinkingMaxDepth}` : '';
+    status.textContent = `${who} is thinking... ${elapsed}s${dtag}`;
     return;
   }
   const inCheck = isInCheck(turn);
+  const hasMoves = hasLegalMoves(turn);
+  if (inCheck && !hasMoves) {
+    status.textContent = (turn === 'white' ? 'White' : 'Black') + ' is checkmated! ' + (turn === 'white' ? 'Black' : 'White') + ' wins!';
+    gameOver = true; return;
+  }
+  if (!inCheck && !hasMoves) {
+    status.textContent = 'Stalemate! Draw.';
+    gameOver = true; return;
+  }
+  const draw = detectNonMateDraw();
+  if (draw) { status.textContent = draw; gameOver = true; return; }
   if (inCheck) {
-    if (hasLegalMoves(turn)) {
-      status.textContent = (turn === 'white' ? 'White' : 'Black') + ' is in check!';
-    } else {
-      status.textContent = (turn === 'white' ? 'White' : 'Black') + ' is checkmated! ' + (turn === 'white' ? 'Black' : 'White') + ' wins!';
-      gameOver = true;
-    }
+    status.textContent = (turn === 'white' ? 'White' : 'Black') + ' is in check!';
   } else {
-    if (!hasLegalMoves(turn)) {
-      status.textContent = 'Stalemate! Draw.';
-      gameOver = true;
-    } else {
-      status.textContent = (turn === 'white' ? 'White' : 'Black') + ' to move';
+    status.textContent = (turn === 'white' ? 'White' : 'Black') + ' to move';
+  }
+}
+
+function startThinkingClock() {
+  thinkingStartMs = Date.now();
+  if (thinkingTimerId) clearInterval(thinkingTimerId);
+  thinkingTimerId = setInterval(updateStatus, 200);
+}
+
+function stopThinkingClock() {
+  if (thinkingTimerId) { clearInterval(thinkingTimerId); thinkingTimerId = null; }
+  thinkingStartMs = 0;
+  thinkingDepth = 0;
+  thinkingMaxDepth = 0;
+}
+
+function positionKey() {
+  let b = '';
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) b += board[r][c] || '.';
+  const c = (castling.white.kingSide?'K':'') + (castling.white.queenSide?'Q':'') + (castling.black.kingSide?'k':'') + (castling.black.queenSide?'q':'') || '-';
+  const ep = enPassant ? `${enPassant.row},${enPassant.col}` : '-';
+  return `${b}|${turn}|${c}|${ep}`;
+}
+
+function recordPosition() {
+  const key = positionKey();
+  positionCounts.set(key, (positionCounts.get(key) || 0) + 1);
+  return positionCounts.get(key);
+}
+
+function isInsufficientMaterial() {
+  const pieces = { white: [], black: [] };
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const p = board[r][c]; if (!p) continue;
+    const t = p.toLowerCase();
+    if (t === 'k') continue;
+    if (t === 'p' || t === 'r' || t === 'q') return false;
+    const side = p === p.toUpperCase() ? 'white' : 'black';
+    pieces[side].push({ t, sq: (r + c) % 2 });
+  }
+  const w = pieces.white, b = pieces.black;
+  if (w.length === 0 && b.length === 0) return true;
+  if ((w.length === 1 && b.length === 0) || (b.length === 1 && w.length === 0)) return true;
+  if (w.length === 1 && b.length === 1 && w[0].t === 'b' && b[0].t === 'b' && w[0].sq === b[0].sq) return true;
+  return false;
+}
+
+function detectNonMateDraw() {
+  if (halfMoveClock >= 100) return 'Draw: 50-move rule.';
+  if (isInsufficientMaterial()) return 'Draw: insufficient material.';
+  const count = positionCounts.get(positionKey()) || 0;
+  if (count >= 3) return 'Draw: threefold repetition.';
+  return null;
+}
+
+const PIECE_VAL = { p: 100, n: 320, b: 330, r: 500, q: 900, k: 20000 };
+
+function moveScore(move, pv) {
+  if (pv && move.fromRow === pv.fromRow && move.fromCol === pv.fromCol && move.toRow === pv.toRow && move.toCol === pv.toCol) return 1e9;
+  const victim = board[move.toRow][move.toCol];
+  const attacker = board[move.fromRow][move.fromCol];
+  if (victim) return 100000 + PIECE_VAL[victim.toLowerCase()] * 10 - PIECE_VAL[attacker.toLowerCase()];
+  if (attacker && attacker.toLowerCase() === 'p' && (move.toRow === 0 || move.toRow === 7)) return 80000;
+  return 0;
+}
+
+function orderMoves(moves, pv) {
+  const scored = moves.map(m => ({ m, s: moveScore(m, pv) }));
+  scored.sort((a, b) => b.s - a.s);
+  return scored.map(x => x.m);
+}
+
+function collectMoves(color, capturesOnly) {
+  const out = [];
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const p = board[r][c]; if (!p) continue;
+    if ((color === 'white' && p !== p.toUpperCase()) || (color === 'black' && p !== p.toLowerCase())) continue;
+    for (const m of getLegalMoves(r, c)) {
+      if (capturesOnly && !board[m.row][m.col]) continue;
+      out.push({ fromRow: r, fromCol: c, toRow: m.row, toCol: m.col });
     }
   }
+  return out;
+}
+
+function quiescence(alpha, beta, color, ply) {
+  if (ply > 8) return evaluateBoard();
+  const stand = evaluateBoard();
+  const isMax = color === 'white';
+  if (isMax) { if (stand >= beta) return beta; if (stand > alpha) alpha = stand; }
+  else       { if (stand <= alpha) return alpha; if (stand < beta) beta = stand; }
+  const caps = orderMoves(collectMoves(color, true));
+  for (const move of caps) {
+    const sim = simulateMove(move.fromRow, move.fromCol, move.toRow, move.toCol);
+    applySimulatedMove(sim);
+    const score = quiescence(alpha, beta, color === 'white' ? 'black' : 'white', ply + 1);
+    undoSimulatedMove(sim);
+    if (isMax) { if (score >= beta) return beta; if (score > alpha) alpha = score; }
+    else       { if (score <= alpha) return alpha; if (score < beta) beta = score; }
+  }
+  return isMax ? alpha : beta;
 }
 
 function isInCheck(color) {
@@ -413,7 +531,7 @@ function makeMove(fromRow, fromCol, move) {
   }
   board[move.row][move.col] = piece;
   board[fromRow][fromCol] = '';
-  if (piece.toLowerCase() === 'p' || captured) halfMoveClock = 0;
+  if (piece.toLowerCase() === 'p' || captured || move.castle || isEnPassant) { halfMoveClock = 0; positionCounts.clear(); }
   else halfMoveClock++;
   if (piece.toLowerCase() === 'k') {
     castling[color].kingSide = false;
@@ -434,12 +552,14 @@ function makeMove(fromRow, fromCol, move) {
       board[move.row][move.col] = p;
       recordUci(fromRow, fromCol, move.row, move.col, move.promo);
       turn = turn === 'white' ? 'black' : 'white';
+      positionCounts.clear(); recordPosition();
       return;
     }
     if (players[turn].type !== 'human') {
       board[move.row][move.col] = color === 'white' ? 'Q' : 'q';
       recordUci(fromRow, fromCol, move.row, move.col, 'q');
       turn = turn === 'white' ? 'black' : 'white';
+      positionCounts.clear(); recordPosition();
       return;
     }
     showPromotion(fromRow, fromCol, move.row, move.col, color);
@@ -447,6 +567,7 @@ function makeMove(fromRow, fromCol, move) {
   }
   recordUci(fromRow, fromCol, move.row, move.col, '');
   turn = turn === 'white' ? 'black' : 'white';
+  recordPosition();
 }
 
 function showPromotion(fromRow, fromCol, row, col, color) {
@@ -466,6 +587,7 @@ function showPromotion(fromRow, fromCol, row, col, color) {
       overlay.classList.remove('active');
       recordUci(fromRow, fromCol, row, col, p.toLowerCase());
       turn = turn === 'white' ? 'black' : 'white';
+      positionCounts.clear(); recordPosition();
       render();
       updateStatus();
       maybeTriggerEngine();
@@ -582,43 +704,35 @@ function undoSimulatedMove(sim) {
 
 function minimax(depth, alpha, beta, isMaximizing, color) {
   if (depth === 0) {
-    return evaluateBoard();
+    return quiescence(alpha, beta, color, 0);
   }
-  const allMoves = [];
-  for (let r = 0; r < 8; r++) {
-    for (let c = 0; c < 8; c++) {
-      const piece = board[r][c];
-      if (!piece) continue;
-      if ((color === 'white' && piece !== piece.toUpperCase()) || (color === 'black' && piece !== piece.toLowerCase())) continue;
-      const moves = getLegalMoves(r, c);
-      moves.forEach(m => allMoves.push({ fromRow: r, fromCol: c, toRow: m.row, toCol: m.col }));
-    }
-  }
+  const allMoves = collectMoves(color, false);
   if (allMoves.length === 0) {
     if (isInCheck(color)) return isMaximizing ? -10000 - depth : 10000 + depth;
     return 0;
   }
+  const ordered = orderMoves(allMoves);
   if (isMaximizing) {
     let maxEval = -Infinity;
-    for (const move of allMoves) {
+    for (const move of ordered) {
       const sim = simulateMove(move.fromRow, move.fromCol, move.toRow, move.toCol);
       applySimulatedMove(sim);
       const evalScore = minimax(depth - 1, alpha, beta, false, color === 'white' ? 'black' : 'white');
       undoSimulatedMove(sim);
-      maxEval = Math.max(maxEval, evalScore);
-      alpha = Math.max(alpha, evalScore);
+      if (evalScore > maxEval) maxEval = evalScore;
+      if (evalScore > alpha) alpha = evalScore;
       if (beta <= alpha) break;
     }
     return maxEval;
   } else {
     let minEval = Infinity;
-    for (const move of allMoves) {
+    for (const move of ordered) {
       const sim = simulateMove(move.fromRow, move.fromCol, move.toRow, move.toCol);
       applySimulatedMove(sim);
       const evalScore = minimax(depth - 1, alpha, beta, true, color === 'white' ? 'black' : 'white');
       undoSimulatedMove(sim);
-      minEval = Math.min(minEval, evalScore);
-      beta = Math.min(beta, evalScore);
+      if (evalScore < minEval) minEval = evalScore;
+      if (evalScore < beta) beta = evalScore;
       if (beta <= alpha) break;
     }
     return minEval;
@@ -648,30 +762,55 @@ function recordUci(fromR, fromC, toR, toC, promoChar) {
   uciHistory.push(coordsToUci(fromR, fromC, toR, toC, promoChar));
 }
 
-function findLegalSearchMove() {
-  const allMoves = [];
-  for (let r = 0; r < 8; r++) {
-    for (let c = 0; c < 8; c++) {
-      const piece = board[r][c];
-      if (!piece) continue;
-      if ((turn === 'white' && piece !== piece.toUpperCase()) || (turn === 'black' && piece !== piece.toLowerCase())) continue;
-      const moves = getLegalMoves(r, c);
-      moves.forEach(m => allMoves.push({ fromRow: r, fromCol: c, toRow: m.row, toCol: m.col, piece }));
-    }
-  }
+function bestMoveAtDepth(depth, pv) {
+  const allMoves = collectMoves(turn, false);
   if (allMoves.length === 0) return null;
-  const depth = players[turn].depth || 2;
+  const ordered = orderMoves(allMoves, pv);
   let bestMove = null;
   let bestScore = turn === 'white' ? -Infinity : Infinity;
-  for (const move of allMoves) {
+  let alpha = -Infinity, beta = Infinity;
+  for (const move of ordered) {
     const sim = simulateMove(move.fromRow, move.fromCol, move.toRow, move.toCol);
     applySimulatedMove(sim);
-    const score = minimax(depth, -Infinity, Infinity, turn === 'black', turn === 'white' ? 'black' : 'white');
+    const score = minimax(depth - 1, alpha, beta, turn === 'black', turn === 'white' ? 'black' : 'white');
     undoSimulatedMove(sim);
-    if (turn === 'white' && score > bestScore) { bestScore = score; bestMove = move; }
-    else if (turn === 'black' && score < bestScore) { bestScore = score; bestMove = move; }
+    if (turn === 'white') {
+      if (score > bestScore) { bestScore = score; bestMove = move; }
+      if (score > alpha) alpha = score;
+    } else {
+      if (score < bestScore) { bestScore = score; bestMove = move; }
+      if (score < beta) beta = score;
+    }
   }
-  return bestMove || allMoves[Math.floor(Math.random() * allMoves.length)];
+  return bestMove || ordered[0];
+}
+
+function findLegalSearchMove(maxDepth) {
+  const md = maxDepth || players[turn].depth || 2;
+  if (collectMoves(turn, false).length === 0) return null;
+  let pv = null;
+  for (let d = 1; d <= md; d++) {
+    thinkingDepth = d;
+    thinkingMaxDepth = md;
+    const best = bestMoveAtDepth(d, pv);
+    if (best) pv = best;
+  }
+  return pv;
+}
+
+async function findLegalSearchMoveAsync(maxDepth) {
+  const md = maxDepth || players[turn].depth || 2;
+  if (collectMoves(turn, false).length === 0) return null;
+  let pv = null;
+  for (let d = 1; d <= md; d++) {
+    thinkingDepth = d;
+    thinkingMaxDepth = md;
+    updateStatus();
+    await new Promise(r => setTimeout(r, 0));
+    const best = bestMoveAtDepth(d, pv);
+    if (best) pv = best;
+  }
+  return pv;
 }
 
 function engineMove(color) {
@@ -684,18 +823,19 @@ function engineMove(color) {
   }
 }
 
-function searchMove() {
+async function searchMove() {
   computerThinking = true;
+  startThinkingClock();
   updateStatus();
-  setTimeout(() => {
-    const best = findLegalSearchMove();
-    computerThinking = false;
-    if (!best) { render(); updateStatus(); return; }
-    makeMove(best.fromRow, best.fromCol, { row: best.toRow, col: best.toCol });
-    render();
-    updateStatus();
-    maybeTriggerEngine();
-  }, 100);
+  await new Promise(r => setTimeout(r, 50));
+  const best = await findLegalSearchMoveAsync();
+  stopThinkingClock();
+  computerThinking = false;
+  if (!best) { render(); updateStatus(); return; }
+  makeMove(best.fromRow, best.fromCol, { row: best.toRow, col: best.toCol });
+  render();
+  updateStatus();
+  maybeTriggerEngine();
 }
 
 function pickLegalFromCandidates(candidates) {
