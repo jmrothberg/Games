@@ -2739,13 +2739,16 @@ function itemIcon(type) {
 
 function drawTitle() {
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, CW, CH);
-  ctx.fillStyle = '#d9a441';
+  ctx.fillStyle = '#c33333';
   ctx.textAlign = 'center';
-  ctx.font = 'bold 22px Courier New, monospace';
-  ctx.fillText('GAUNTLET', CW/2, 80);
+  ctx.font = 'bold 14px Courier New, monospace';
+  ctx.fillText("JMR's", CW/2, 58);
+  ctx.fillStyle = '#d9a441';
+  ctx.font = 'bold 26px Courier New, monospace';
+  ctx.fillText('GAUNTLET', CW/2, 88);
   ctx.fillStyle = '#6db33a';
   ctx.font = 'bold 14px Courier New, monospace';
-  ctx.fillText('THE THIRD ENCOUNTER', CW/2, 110);
+  ctx.fillText('THE THIRD ENCOUNTER', CW/2, 114);
   ctx.fillStyle = '#888';
   ctx.font = '12px Courier New, monospace';
   ctx.fillText('(HTML/JS recreation)', CW/2, 135);
