@@ -144,9 +144,11 @@ Classic dig-and-collect arcade action! Based on the 1982 Universal classic.
 
 Full-rules chess with independent per-side player choice — any of:
 
-- **Human** — click-to-move, with a promotion overlay
-- **Search** — the built-in minimax + alpha-beta engine, depth 1–5
-- **LLM** — a PyTorch chess transformer loaded from `Generated_games/Chess_LLM_models copy/*.pth`
+- **Human** — click-to-move, with a promotion overlay. Works anywhere the page loads.
+- **Search** — built-in minimax + alpha-beta with iterative deepening, MVV-LVA move ordering, and quiescence. Depth 1–7. Works anywhere the page loads.
+- **LLM** — a PyTorch chess transformer loaded from `Generated_games/Chess_LLM_models copy/*.pth`. **Requires running `chess_server.py` locally** — the LLM dropdown is disabled when the bridge isn't reachable.
+
+> **Note on the web link:** opening `chess.html` via the Quick Links table (GitHub / raw.githack) gives you **Human + Search only**. To use an LLM you must clone the repo, place `.pth` checkpoints in `Chess_LLM_models copy/`, and run `chess_server.py` on your own machine — model files are 1.7–4.7 GB and can't be hosted or loaded in a browser.
 
 Pick any combination on the two dropdowns (White Player / Black Player). Human-vs-LLM, Search-vs-LLM, and full self-play (LLM-vs-LLM, Search-vs-Search) all work from a single **New Game** click.
 
@@ -164,8 +166,6 @@ The bridge is stdlib-only (`http.server`) — no pip installs beyond PyTorch its
 - `last rank` — rank (1 = top pick) of the legal move the LLM played this turn
 - `avg` / `max` — running average and worst rank across the game
 - `fallbacks` — how many times none of the top 20 were legal and the built-in search (depth 2) had to rescue the move
-
-Note: LLM play requires the local bridge because the model checkpoints are 1.7–4.7 GB and run in PyTorch — they can't be loaded in the browser. Human + Search still work fully offline in any browser.
 
 ---
 
@@ -189,6 +189,7 @@ Note: LLM play requires the local bridge because the model checkpoints are 1.7�
 | Mr. Do! | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/mrdo.html) |
 | 3D Tank Battle | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/3D_Tank_Battle.html) |
 | Vector Tanks | Desktop | [Play](https://jmrothberg.github.io/Games/Generated_games/vector_tanks.html) |
+| Chess (Human + Search only — LLM needs local bridge) | Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/Generated_games/chess.html) |
 
 ---
 
