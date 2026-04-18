@@ -1,0 +1,3103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>JMR's Gauntlet: The Third Encounter</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; touch-action:none; -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }
+html, body { width:100%; height:100%; overflow:hidden; background:#000; display:flex; flex-direction:column; align-items:center; justify-content:center; font-family:'Courier New',monospace; color:#6db33a; }
+#wrap { display:flex; flex-direction:column; align-items:center; justify-content:center; width:100%; height:100%; padding:8px; }
+#game { image-rendering:pixelated; image-rendering:crisp-edges; background:#000; border:2px solid #444; max-width:100%; max-height:calc(100vh - 180px); }
+#controls { display:flex; gap:16px; margin-top:10px; align-items:center; justify-content:center; width:100%; max-width:500px; padding:0 12px; }
+.dpad { position:relative; width:140px; height:140px; flex-shrink:0; }
+.btn { position:absolute; background:rgba(109,179,58,0.15); border:2px solid rgba(109,179,58,0.5); border-radius:8px; color:#6db33a; font-size:20px; font-weight:bold; display:flex; align-items:center; justify-content:center; }
+.btn:active { background:rgba(109,179,58,0.4); }
+.dpad .btn { width:46px; height:46px; }
+.u { top:0; left:47px; } .d { bottom:0; left:47px; } .l { top:47px; left:0; } .r { top:47px; right:0; }
+.actions { display:flex; flex-direction:column; gap:8px; flex-shrink:0; }
+.arow { display:flex; gap:8px; }
+.abtn { position:relative; width:60px; height:50px; font-size:14px; }
+#hint { color:#888; font-size:11px; margin-top:6px; text-align:center; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="320" height="480"></canvas>
+  <div id="controls">
+    <div class="dpad">
+      <div class="btn u" id="bu">▲</div>
+      <div class="btn d" id="bd">▼</div>
+      <div class="btn l" id="bl">◀</div>
+      <div class="btn r" id="br">▶</div>
+    </div>
+    <div class="actions">
+      <div class="arow"><div class="btn abtn" id="ba">MELEE</div><div class="btn abtn" id="bb">SHOOT</div></div>
+      <div class="arow"><div class="btn abtn" id="bi">INV</div><div class="btn abtn" id="bs">START</div></div>
+    </div>
+  </div>
+  <div id="hint">Arrows/WASD move · J melee · K shoot · I inventory · Space start · 1-4 use item</div>
+</div>
+<script>
+'use strict';
+// ============================================================================
+// Gauntlet: The Third Encounter — HTML/JS recreation
+// Single file, pure canvas 2D + Web Audio. Original pixel art in Lynx idiom.
+// ============================================================================
+
+const CW = 320, CH = 480;
+const VIEW_H = 352;          // top viewport (320 x 352)
+const HUD_Y = VIEW_H;        // HUD panel starts here, 320 x 128
+const HUD_H = CH - VIEW_H;   // 128
+const TILE = 16;             // source sprite size
+const SCALE = 2;             // render at 2x -> 32px tiles on screen
+const TS = TILE * SCALE;     // 32 px per tile on canvas
+const VIEW_COLS = CW / TS;   // 10
+const VIEW_ROWS = VIEW_H / TS; // 11
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+// ----- palette ---------------------------------------------------------------
+// 0 = transparent; 1-F = 15 colors (Lynx-inspired)
+const PAL = [
+  null,       // 0 transparent
+  '#000000',  // 1 outline / black
+  '#2d5016',  // 2 dark grass
+  '#4a7c1e',  // 3 mid grass
+  '#6db33a',  // 4 light grass
+  '#3d2817',  // 5 dark dirt / wall shadow
+  '#8b5a2b',  // 6 mid dirt / wood
+  '#555555',  // 7 dark stone
+  '#888888',  // 8 mid stone
+  '#c8c8c8',  // 9 light stone / bone
+  '#f4d4a8',  // A skin
+  '#d9a441',  // B gold / torch
+  '#e8c547',  // C bright gold / fire
+  '#c33333',  // D red
+  '#3399cc',  // E blue
+  '#8b1a1a',  // F dark red
+];
+
+// ----- sprite baker ----------------------------------------------------------
+// Input: array of equal-length strings. '.' transparent, '0'-'F' palette idx.
+// Output: canvas at native pixel resolution (not scaled). Renderer scales on draw.
+function bakeSprite(rows) {
+  const h = rows.length, w = rows[0].length;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const cx = c.getContext('2d');
+  for (let y = 0; y < h; y++) {
+    const row = rows[y];
+    if (row.length !== w) console.warn('sprite row length mismatch', y, row);
+    for (let x = 0; x < w; x++) {
+      const ch = row[x];
+      if (ch === '.') continue;
+      const idx = parseInt(ch, 16);
+      const col = PAL[idx];
+      if (!col) continue;
+      cx.fillStyle = col;
+      cx.fillRect(x, y, 1, 1);
+    }
+  }
+  return c;
+}
+
+// Mirror a sprite canvas horizontally.
+function mirrorSprite(src) {
+  const c = document.createElement('canvas');
+  c.width = src.width; c.height = src.height;
+  const cx = c.getContext('2d');
+  cx.imageSmoothingEnabled = false;
+  cx.translate(src.width, 0); cx.scale(-1, 1);
+  cx.drawImage(src, 0, 0);
+  return c;
+}
+
+// Procedural noise tile: entries = [[weight, palIdx], ...].
+function bakeNoiseTile(w, h, entries, seed) {
+  let s = seed >>> 0;
+  const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 0x100000000; };
+  const total = entries.reduce((a, [w]) => a + w, 0);
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const cx = c.getContext('2d');
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let r = rnd() * total, pick = entries[0][1];
+    for (const [wt, idx] of entries) { r -= wt; if (r <= 0) { pick = idx; break; } }
+    cx.fillStyle = PAL[pick]; cx.fillRect(x, y, 1, 1);
+  }
+  return c;
+}
+
+// Overlay a hand-authored detail on top of a baked tile.
+function overlayDetail(base, rows) {
+  const c = document.createElement('canvas');
+  c.width = base.width; c.height = base.height;
+  const cx = c.getContext('2d');
+  cx.drawImage(base, 0, 0);
+  for (let y = 0; y < rows.length; y++) for (let x = 0; x < rows[y].length; x++) {
+    const ch = rows[y][x];
+    if (ch === '.') continue;
+    const col = PAL[parseInt(ch, 16)];
+    if (!col) continue;
+    cx.fillStyle = col; cx.fillRect(x, y, 1, 1);
+  }
+  return c;
+}
+
+// ----- sprite data -----------------------------------------------------------
+
+// Grass tile — noise base, 4 variants with scattered details
+const GRASS_BASE_ENTRIES = [[6, 3], [2, 4], [1, 2]]; // mid dominant, light sparse, dark rare
+const DIRT_BASE_ENTRIES  = [[6, 6], [3, 5], [1, 7]]; // mid dirt dominant, dark dirt, rare dark stone
+const STONE_FLOOR_ENTRIES = [[6, 8], [3, 7], [1, 9]]; // mid stone dominant
+
+// Wall detail — solid stone block look (for screenshot-3 style dungeon walls)
+const WALL_DATA = [
+  '7788778877887788',
+  '7888778878887788',
+  '8888888888888888',
+  '8899889988998899',
+  '8999889988998899',
+  '5555555555555555',
+  '7788778877887788',
+  '7888778877887788',
+  '8888888888888888',
+  '8899889988998899',
+  '8999889988998899',
+  '5555555555555555',
+  '7788778877887788',
+  '7888778877887788',
+  '8888888888888888',
+  '8899889988998899',
+];
+// Wall with grass edge on top (outdoor boundary) — top 2 rows grass-transition
+const WALL_OUTDOOR_DATA = [
+  '3434343434343434',
+  '8434343434343434',
+  '8888888888888888',
+  '8899889988998899',
+  '8999889988998899',
+  '5555555555555555',
+  '7788778877887788',
+  '7888778877887788',
+  '8888888888888888',
+  '8899889988998899',
+  '8999889988998899',
+  '5555555555555555',
+  '7788778877887788',
+  '7888778877887788',
+  '8888888888888888',
+  '8899889988998899',
+];
+
+// Grass decorations (overlays)
+const GRASS_PEBBLE = [
+  '................','................','................','................',
+  '................','........99......','.......9889.....','.......9889.....',
+  '........88......','................','................','................',
+  '................','................','................','................',
+];
+const GRASS_FLOWER = [
+  '................','................','................','................',
+  '................','.......C........','......CBC.......','......CC........',
+  '.......3........','.......3........','................','................',
+  '................','................','................','................',
+];
+const GRASS_TUFT = [
+  '................','................','................','................',
+  '................','................','.....4..4.......','....4.44.4......',
+  '.....444.4......','......44........','................','................',
+  '................','................','................','................',
+];
+
+// Dirt decoration
+const DIRT_CRACK = [
+  '................','................','................','................',
+  '.....5..........','....5...........','...5...55.......','...5..5.........',
+  '...5.5..........','....55..........','................','................',
+  '................','................','................','................',
+];
+
+// Door closed — heavy wooden door
+const DOOR_CLOSED = [
+  '5555555555555555',
+  '5666666666666665',
+  '5655555555555565',
+  '5656666666666565',
+  '5656555555556565',
+  '5656566666656565',
+  '5656566556656565',
+  '56565665BB656565',
+  '56565665BB656565',
+  '5656566556656565',
+  '5656566666656565',
+  '5656555555556565',
+  '5656666666666565',
+  '5655555555555565',
+  '5666666666666665',
+  '5555555555555555',
+];
+// Door open — opening with floor visible
+const DOOR_OPEN = [
+  '5555555555555555',
+  '5555555555555555',
+  '5888888888888885',
+  '5877777777777785',
+  '5877777777777785',
+  '5877777777777785',
+  '5877777777777785',
+  '5877777777777785',
+  '5877777777777785',
+  '5877777777777785',
+  '5877777777777785',
+  '5877777777777785',
+  '5877777777777785',
+  '5888888888888885',
+  '5555555555555555',
+  '5555555555555555',
+];
+
+// Exit warp / level exit — pulsing pad
+const EXIT_WARP_0 = [
+  '................',
+  '......EEEE......',
+  '....EE....EE....',
+  '...E...EE...E...',
+  '..E..EE..EE..E..',
+  '.E..EE....EE..E.',
+  '.E.EE..EE..EE.E.',
+  '.EEE..EEEE..EEE.',
+  '.EEE..EEEE..EEE.',
+  '.E.EE..EE..EE.E.',
+  '.E..EE....EE..E.',
+  '..E..EE..EE..E..',
+  '...E...EE...E...',
+  '....EE....EE....',
+  '......EEEE......',
+  '................',
+];
+const EXIT_WARP_1 = [
+  '................',
+  '......CCCC......',
+  '....CC....CC....',
+  '...C...CC...C...',
+  '..C..CC..CC..C..',
+  '.C..CC....CC..C.',
+  '.C.CC..CC..CC.C.',
+  '.CCC..CCCC..CCC.',
+  '.CCC..CCCC..CCC.',
+  '.C.CC..CC..CC.C.',
+  '.C..CC....CC..C.',
+  '..C..CC..CC..C..',
+  '...C...CC...C...',
+  '....CC....CC....',
+  '......CCCC......',
+  '................',
+];
+
+// Torch — warm glow, 2 frames
+const TORCH_0 = [
+  '................',
+  '................',
+  '......CC........',
+  '.....CCCB.......',
+  '.....CBCC.......',
+  '.....CCBC.......',
+  '......CC........',
+  '......DD........',
+  '......DD........',
+  '.....6556.......',
+  '.....5665.......',
+  '.....6556.......',
+  '.....6556.......',
+  '................',
+  '................',
+  '................',
+];
+const TORCH_1 = [
+  '................',
+  '......CC........',
+  '.....CBBC.......',
+  '.....CCCC.......',
+  '....CCBCCC......',
+  '.....CCCB.......',
+  '......CC........',
+  '......DD........',
+  '......DD........',
+  '.....6556.......',
+  '.....5665.......',
+  '.....6556.......',
+  '.....6556.......',
+  '................',
+  '................',
+  '................',
+];
+
+// ============================================================================
+// Player sprites — Warrior (D red) as base. 16x16.
+// Facing S (down), N (up), E (right). W is mirror of E.
+// Each facing has 2 walk frames.
+// ============================================================================
+
+const WARRIOR_S_0 = [
+  '................',
+  '.....DDDDDDD....',
+  '....D1111111D...',
+  '....1DDDDDDD1...',
+  '....1AAAAAAA1...',
+  '....1A1AAA1A1...',
+  '....1AAAAAAA1...',
+  '...DD1AAAAA1DD..',
+  '..D11DDDDDDD11D.',
+  '..D1DDDDDDDDD1D.',
+  '...1DDDBBBDDD1..',
+  '....DDDBCBDDD...',
+  '....1DDDDDDD1...',
+  '....1DD1.1DD1...',
+  '....1AA1.1AA1...',
+  '....111...111...',
+];
+const WARRIOR_S_1 = [
+  '................',
+  '.....DDDDDDD....',
+  '....D1111111D...',
+  '....1DDDDDDD1...',
+  '....1AAAAAAA1...',
+  '....1A1AAA1A1...',
+  '....1AAAAAAA1...',
+  '...DD1AAAAA1DD..',
+  '..D11DDDDDDD11D.',
+  '..D1DDDDDDDDD1D.',
+  '...1DDDBBBDDD1..',
+  '....DDDBCBDDD...',
+  '....1DDDDDDD1...',
+  '.....1DD1DD1....',
+  '.....1AA1AA1....',
+  '......11.11.....',
+];
+const WARRIOR_N_0 = [
+  '................',
+  '.....DDDDDDD....',
+  '....D1111111D...',
+  '....DDDDDDDDD...',
+  '....DDDDDDDDD...',
+  '....DDDDDDDDD...',
+  '....DDDDDDDDD...',
+  '...DDDDDDDDDDD..',
+  '..D11DDDDDDD11D.',
+  '..D1DDDDDDDDD1D.',
+  '...1DDDDDDDDD1..',
+  '....DDDDDDDDD...',
+  '....1DDDDDDD1...',
+  '....1DD1.1DD1...',
+  '....1DD1.1DD1...',
+  '....111...111...',
+];
+const WARRIOR_N_1 = [
+  '................',
+  '.....DDDDDDD....',
+  '....D1111111D...',
+  '....DDDDDDDDD...',
+  '....DDDDDDDDD...',
+  '....DDDDDDDDD...',
+  '....DDDDDDDDD...',
+  '...DDDDDDDDDDD..',
+  '..D11DDDDDDD11D.',
+  '..D1DDDDDDDDD1D.',
+  '...1DDDDDDDDD1..',
+  '....DDDDDDDDD...',
+  '....1DDDDDDD1...',
+  '.....1DD1DD1....',
+  '.....1DD1DD1....',
+  '......11.11.....',
+];
+const WARRIOR_E_0 = [
+  '................',
+  '......DDDDDD....',
+  '.....D111111D...',
+  '.....1DDDDDDD...',
+  '.....1AAAAADD...',
+  '.....1AA1A1DD...',
+  '.....1AAAADDD...',
+  '......1DDDDD....',
+  '......DDDDDD11..',
+  '.....DDDDDDD111.',
+  '.....DDBBBDD11..',
+  '.....DDBCBDD1...',
+  '......DDDDDD....',
+  '......1DDDD1....',
+  '......1AA1A1....',
+  '......111.11....',
+];
+const WARRIOR_E_1 = [
+  '................',
+  '......DDDDDD....',
+  '.....D111111D...',
+  '.....1DDDDDDD...',
+  '.....1AAAAADD...',
+  '.....1AA1A1DD...',
+  '.....1AAAADDD...',
+  '......1DDDDD....',
+  '......DDDDDD11..',
+  '.....DDDDDDD111.',
+  '.....DDBBBDD11..',
+  '.....DDBCBDD1...',
+  '......DDDDDD....',
+  '.....1DDDDDD1...',
+  '....1AA.1AA1....',
+  '....111..111....',
+];
+
+// ============================================================================
+// Other character classes (south-facing, 2-frame walk). Same pose framework
+// as Warrior; hat/weapon/color distinguishes class.
+// ============================================================================
+
+// Valkyrie — blue armor, winged helm, sword+shield
+const VALKYRIE_S_0 = [
+  '................',
+  '....9........9..',
+  '...99.EEEEE.99..',
+  '....9.E111E.9...',
+  '......EAAAAE....',
+  '......1A1A1E....',
+  '......EAAAAE....',
+  '.....EE1111EE...',
+  '....1EEEEEEE1...',
+  '....1EEEEEEE1...',
+  '...1EEE999EEE1..',
+  '....EEE9D9EEE...',
+  '....1EEEEEEE1...',
+  '....1EE1.1EE1...',
+  '....1AA1.1AA1...',
+  '....111...111...',
+];
+const VALKYRIE_S_1 = [
+  '................',
+  '....9........9..',
+  '...99.EEEEE.99..',
+  '....9.E111E.9...',
+  '......EAAAAE....',
+  '......1A1A1E....',
+  '......EAAAAE....',
+  '.....EE1111EE...',
+  '....1EEEEEEE1...',
+  '....1EEEEEEE1...',
+  '...1EEE999EEE1..',
+  '....EEE9D9EEE...',
+  '....1EEEEEEE1...',
+  '.....1EE1EE1....',
+  '.....1AA1AA1....',
+  '......11.11.....',
+];
+
+// Wizard — tall pointed hat, yellow robe, staff
+const WIZARD_S_0 = [
+  '................',
+  '.......B........',
+  '......BBB.......',
+  '.....BBCBB......',
+  '....BBCCBB1.....',
+  '...BBCCBBB11....',
+  '....BBBBBB1.....',
+  '.....AAAAA......',
+  '.....1A1A1......',
+  '....BBAAABBB....',
+  '....BBBBBBBB....',
+  '....BBCBBCBB....',
+  '....BBBCBCBB1...',
+  '....BBBBBBB1....',
+  '....B11.B11.....',
+  '....1.....1.....',
+];
+const WIZARD_S_1 = [
+  '................',
+  '.......B........',
+  '......BBB.......',
+  '.....BBCBB......',
+  '....BBCCBB1.....',
+  '...BBCCBBB11....',
+  '....BBBBBB1.....',
+  '.....AAAAA......',
+  '.....1A1A1......',
+  '....BBAAABBB....',
+  '....BBBBBBBB....',
+  '....BBCBBCBB....',
+  '....BBBCBCBB1...',
+  '....BBBBBBB1....',
+  '.....B1.1B......',
+  '.....1...1......',
+];
+
+// Archer — green hood, bow
+const ARCHER_S_0 = [
+  '................',
+  '.....33333......',
+  '....3222223.....',
+  '....32AAAA23....',
+  '....32A11A23....',
+  '....322AA223....',
+  '....3332AA33....',
+  '....333AAAA3....',
+  '....3332222B....',
+  '...33322222BB...',
+  '...3332AAA2BB...',
+  '....33322222B...',
+  '....1332223B1...',
+  '....13222221....',
+  '.....11..11.....',
+  '.....AA..AA.....',
+];
+const ARCHER_S_1 = [
+  '................',
+  '.....33333......',
+  '....3222223.....',
+  '....32AAAA23....',
+  '....32A11A23....',
+  '....322AA223....',
+  '....3332AA33....',
+  '....333AAAA3....',
+  '....3332222B....',
+  '...33322222BB...',
+  '...3332AAA2BB...',
+  '....33322222B...',
+  '....1332223B1...',
+  '.....1322221....',
+  '.....1A1AA1.....',
+  '.....11..11.....',
+];
+
+// Android — grey boxy head with antenna, laser
+const ANDROID_S_0 = [
+  '................',
+  '........1.......',
+  '........1.......',
+  '.......111......',
+  '.....99999999...',
+  '.....9DD99DD9...',
+  '.....99999999...',
+  '.....91111119...',
+  '....1999999991..',
+  '...89988888899..',
+  '...89888888899..',
+  '....8888888891..',
+  '....8888888881..',
+  '....8881.1888...',
+  '....8881.1888...',
+  '....111...111...',
+];
+const ANDROID_S_1 = [
+  '................',
+  '........1.......',
+  '........1.......',
+  '.......111......',
+  '.....99999999...',
+  '.....9DD99DD9...',
+  '.....99999999...',
+  '.....91111119...',
+  '....1999999991..',
+  '...89988888899..',
+  '...89888888899..',
+  '....8888888891..',
+  '....8888888881..',
+  '....888.888.....',
+  '....111.111.....',
+  '................',
+];
+
+// Samurai — black/red horned kabuto, katana
+const SAMURAI_S_0 = [
+  '................',
+  '.....D.....D....',
+  '....DD.....DD...',
+  '....1DDD1DDD1...',
+  '....11DDDDD11...',
+  '.....DAAAAAD....',
+  '.....1A1A1D.....',
+  '.....DAAAAD.....',
+  '....11111111....',
+  '....1DDDDDD11...',
+  '...11DDDDDDD1...',
+  '....1DD111DD1...',
+  '....11DDDDD11...',
+  '....11DD1DD11...',
+  '....1AA.1AA1....',
+  '....111..111....',
+];
+const SAMURAI_S_1 = [
+  '................',
+  '.....D.....D....',
+  '....DD.....DD...',
+  '....1DDD1DDD1...',
+  '....11DDDDD11...',
+  '.....DAAAAAD....',
+  '.....1A1A1D.....',
+  '.....DAAAAD.....',
+  '....11111111....',
+  '....1DDDDDD11...',
+  '...11DDDDDDD1...',
+  '....1DD111DD1...',
+  '....11DDDDD11...',
+  '.....1DD1DD1....',
+  '.....1AA1AA1....',
+  '......11.11.....',
+];
+
+// Pirate — tricorn hat, eyepatch, cutlass
+const PIRATE_S_0 = [
+  '................',
+  '....111111111...',
+  '...16666666661..',
+  '....1111111111..',
+  '......AAAAA.....',
+  '......1A1A1.....',
+  '.....AAAAAA.....',
+  '......11111.....',
+  '....66666666....',
+  '...6611DD116B...',
+  '...661DDDDDB11..',
+  '....6DDDDDDB1...',
+  '....661DDD116...',
+  '....1DD1.1DD1...',
+  '....1AA1.1AA1...',
+  '....111...111...',
+];
+const PIRATE_S_1 = [
+  '................',
+  '....111111111...',
+  '...16666666661..',
+  '....1111111111..',
+  '......AAAAA.....',
+  '......1A1A1.....',
+  '.....AAAAAA.....',
+  '......11111.....',
+  '....66666666....',
+  '...6611DD116B...',
+  '...661DDDDDB11..',
+  '....6DDDDDDB1...',
+  '....661DDD116...',
+  '.....1DD1DD1....',
+  '.....1AA1AA1....',
+  '......11.11.....',
+];
+
+// Punk — magenta/chain/spiky mohawk
+const PUNK_S_0 = [
+  '................',
+  '.......D........',
+  '......DCD.......',
+  '......DFD.......',
+  '.....11AAA1.....',
+  '.....1AA1A1.....',
+  '......AAAA......',
+  '......11A1......',
+  '....11111111....',
+  '....1D1111D1....',
+  '...1D11FF11D1...',
+  '....1DFFFFD1....',
+  '....1DFF1FD1....',
+  '....1111111.....',
+  '.....D1.1D......',
+  '.....1...1......',
+];
+const PUNK_S_1 = [
+  '................',
+  '.......D........',
+  '......DCD.......',
+  '......DFD.......',
+  '.....11AAA1.....',
+  '.....1AA1A1.....',
+  '......AAAA......',
+  '......11A1......',
+  '....11111111....',
+  '....1D1111D1....',
+  '...1D11FF11D1...',
+  '....1DFFFFD1....',
+  '....1DFF1FD1....',
+  '.....11.11......',
+  '....D1...1D.....',
+  '....1.....1.....',
+];
+
+// ============================================================================
+// Monster sprites
+// ============================================================================
+
+// Scorpion — orange/yellow body, pincers forward (top), curled tail over back
+const SCORPION_0 = [
+  '................',
+  '......11..11....',
+  '.....1CC11CC1...',
+  '.....1CCCCCC1...',
+  '......1CDDC1....',
+  '....11DCDDCD11..',
+  '...1CCDDDDDDCC1.',
+  '...1CDDDDDDDDC1.',
+  '...1CDD1CC1DDC1.',
+  '....1CDCCCCDC1..',
+  '.....1CCCCCC1...',
+  '.......11CC.....',
+  '......1CCC11....',
+  '.....1CBBCC1....',
+  '......1CBB1.....',
+  '.......111......',
+];
+const SCORPION_1 = [
+  '................',
+  '.....11....11...',
+  '....1CC1..1CC1..',
+  '....1CCC11CCC1..',
+  '.....1CDDDC1....',
+  '...11DCDDDCD11..',
+  '..1CCDDDDDDDDCC1',
+  '..1CDDDDDDDDDDC1',
+  '..1CD1CCCCCC1DC1',
+  '...1CDCCCCCCDC1.',
+  '....1CCCCCCCC1..',
+  '......11C11.....',
+  '......1CCC1.....',
+  '.....1CBBCC1....',
+  '......1CBB1.....',
+  '.......111......',
+];
+
+// Skeleton — bone white (9), skull head, thin body
+const SKELETON_0 = [
+  '................',
+  '......9999......',
+  '.....911119.....',
+  '....91AAAA19....',
+  '....91A11A19....',
+  '....91AAAA19....',
+  '....91A11A19....',
+  '.....911119.....',
+  '....91119111....',
+  '...91199991119..',
+  '..9119999999119.',
+  '..91999999999...',
+  '....1999991.....',
+  '.....9191.......',
+  '....99.99.......',
+  '....99.99.......',
+];
+const SKELETON_1 = [
+  '................',
+  '......9999......',
+  '.....911119.....',
+  '....91AAAA19....',
+  '....91A11A19....',
+  '....91AAAA19....',
+  '....91A11A19....',
+  '.....911119.....',
+  '....911191111...',
+  '..1911999911199.',
+  '..9119999999119.',
+  '....1999991.....',
+  '....1999991.....',
+  '.....91.19......',
+  '....99...99.....',
+  '...99.....99....',
+];
+
+// Grunt — green-skinned humanoid with club
+const GRUNT_0 = [
+  '................',
+  '.......333......',
+  '......31113.....',
+  '......3AAA3.....',
+  '......3A1A3.....',
+  '......3AAA3.....',
+  '.......333......',
+  '....3331333.....',
+  '...333333333....',
+  '..33.333.333....',
+  '...6.333.3......',
+  '...6.333........',
+  '...6.313........',
+  '...6.3.3........',
+  '....33.33.......',
+  '...333.333......',
+];
+const GRUNT_1 = [
+  '................',
+  '.......333......',
+  '......31113.....',
+  '......3AAA3.....',
+  '......3A1A3.....',
+  '......3AAA3.....',
+  '.......333......',
+  '....3331333.....',
+  '....333333333...',
+  '....333.3333.6..',
+  '......333.33.6..',
+  '......333....6..',
+  '......313....6..',
+  '......3.3.......',
+  '.....33.33......',
+  '....333.333.....',
+];
+
+// Demon — dark red winged biped, horns, stays still to shoot fireballs
+const DEMON_0 = [
+  '................',
+  '......F...F.....',
+  '.....FF...FF....',
+  '......FFFFF.....',
+  '.....F1F1F1F....',
+  '.....FFFFFFF....',
+  '....FDFFDFFDF...',
+  '...FF1DFDFD1FF..',
+  '..FDD1DDDDD1DDF.',
+  '..FDDFDDDDDFDDF.',
+  '...FDDFFFFFDDF..',
+  '....FFDDDDDFF...',
+  '....FDDDDDDDF...',
+  '....FDD1.1DDF...',
+  '....FF1..F1FF...',
+  '....F1....1F....',
+];
+const DEMON_1 = [
+  '................',
+  '....F.F...F.F...',
+  '...FFFF...FFFF..',
+  '....FFFFFFFFF...',
+  '....F1F1F1F1F...',
+  '...FFFFFFFFFFF..',
+  '..FDFFDFFDFFDFF.',
+  '.FF1DFDFDFDFD1FF',
+  '.FDD1DDDDDDD1DDF',
+  '..FDDFDDDDDFDDF.',
+  '...FDDFFFFFDDF..',
+  '....FFDDDDDFF...',
+  '....FDDDDDDDF...',
+  '....FDD1.1DDF...',
+  '....FF1..F1FF...',
+  '....F1....1F....',
+];
+
+// Sorcerer — purple robe (E darkened via F tints), tall pointed hat, glowing orb
+const SORCERER_0 = [
+  '................',
+  '........1.......',
+  '.......111......',
+  '......11F11.....',
+  '.....11FFF11....',
+  '....1FFFFFFF1...',
+  '....1FFFFFFF1...',
+  '.....1A1A1A1....',
+  '.....1AAAAA1....',
+  '....EEEEEEEEE...',
+  '...E1FFFFFFF1E..',
+  '...EEFFFFFFFEE..',
+  '...E1EFFFFFE1E..',
+  '....11EEEEE11...',
+  '.....11...11....',
+  '......1...1.....',
+];
+const SORCERER_1 = [
+  '................',
+  '........1.......',
+  '.......111......',
+  '......11F11.....',
+  '.....11FFF11....',
+  '....1FFFFFFF1...',
+  '....1FFFFFFF1...',
+  '.....1A1A1A1....',
+  '.....1AAAAA1....',
+  '...EEEEEEEEEEE..',
+  '..E1FFFFFFFFF1E.',
+  '..EEFFFFEEFFFEE.',
+  '..E1EFFFFFFFE1E.',
+  '...11EEEEEEE11..',
+  '....11.....11...',
+  '.....1.....1....',
+];
+
+// Lobber — squat stone troll, throws rocks in arcs
+const LOBBER_0 = [
+  '................',
+  '......77777.....',
+  '.....7888887....',
+  '....7881881887..',
+  '....7811181187..',
+  '....7888888887..',
+  '....78A888A887..',
+  '....7888888887..',
+  '...7788888887...',
+  '..7788888888887.',
+  '.77888888888887.',
+  '.78888888888887.',
+  '..77788888877...',
+  '....7788887.....',
+  '....7577775.....',
+  '....55....55....',
+];
+const LOBBER_1 = [
+  '................',
+  '.....777777.....',
+  '....78888887....',
+  '....7881881887..',
+  '....7811181187..',
+  '....7888888887..',
+  '....78A888A887..',
+  '....7888888887..',
+  '...77888888887..',
+  '..7788888888877.',
+  '.77788888888887.',
+  '..7888888888887.',
+  '..778888888877..',
+  '.....778887.....',
+  '....7577775.....',
+  '...55......55...',
+];
+
+// Death — black robe, white skull face, scythe on right side
+const DEATH_0 = [
+  '................',
+  '....11111111....',
+  '...1C1111111C...',
+  '..11199999911...',
+  '.111991199991...',
+  '.111919119191...',
+  '.111999999991...',
+  '.111919119191...',
+  '.111999999991...',
+  '..1111111111....',
+  '.11111111111....',
+  '.11111111111....',
+  '.11111111111CCCC',
+  '.11111111111C111',
+  '.1111111111C1...',
+  '.111111111C.....',
+];
+const DEATH_1 = [
+  '................',
+  '....11111111....',
+  '...1C1111111C...',
+  '..11199999911...',
+  '.111991199991...',
+  '.111919119191...',
+  '.111999999991...',
+  '.111919119191...',
+  '.111999999991...',
+  '..1111111111....',
+  '.11111111111....',
+  '.11111111111....',
+  '.11111111111CCCC',
+  '.11111111111C111',
+  '.1111111111C1...',
+  '.111111111C.....',
+];
+
+// Ghost — floating white blob, wavy bottom, two eyes
+const GHOST_0 = [
+  '................',
+  '......91119.....',
+  '.....9999999....',
+  '....999999999...',
+  '...99999999999..',
+  '...99191991999..',
+  '...99191991999..',
+  '...99999999999..',
+  '...99999999999..',
+  '...99999999999..',
+  '...99999999999..',
+  '...99999999999..',
+  '...99.99.99.99..',
+  '...9...9...9....',
+  '................',
+  '................',
+];
+const GHOST_1 = [
+  '................',
+  '......91119.....',
+  '.....9999999....',
+  '....999999999...',
+  '...99999999999..',
+  '...99191991999..',
+  '...99191991999..',
+  '...99999999999..',
+  '...99999999999..',
+  '...99999999999..',
+  '...99999999999..',
+  '...99999999999..',
+  '...9.99.99.99...',
+  '....9...9...9...',
+  '................',
+  '................',
+];
+
+// IT — 32x32 final-boss: massive horned demon head, glowing red eyes, fanged grin
+const IT_0 = [
+  '................................',
+  '...11..........................1',
+  '..1F1..........................1',
+  '.1FF1.........................1.',
+  '.1FFF1.....1111111111.........11',
+  '.1FFFF1..111FFFFFFFF111.....11F1',
+  '.1FFFFF1.1FFFFFFFFFFFFF1..1FFFF1',
+  '..1FFFFF1FFFFFFFFFFFFFFF1FFFFFF1',
+  '...1FFFFFFFFFFFFFFFFFFFFFFFFFF1.',
+  '....1FFFFFFFFFFFFFFFFFFFFFFFF1..',
+  '....1FFFFDDDDDFFFFFFFDDDDDFFF1..',
+  '....1FFFFDDDDDDFFFFFFDDDDDDFFF1.',
+  '....1FFFFDDCCDDFFFFFFDDCCDDFFF1.',
+  '....1FFFFDDCCDDFFFFFFDDCCDDFFF1.',
+  '....1FFFFDDDDDDFFFFFFDDDDDDFFF1.',
+  '....1FFFFDDDDDFFFFFFFDDDDDFFFF1.',
+  '....1FFFFFFFFFFF1111FFFFFFFFFF1.',
+  '....1FFFFFFFFFF111111FFFFFFFFF1.',
+  '....1FFFFFFFFFF1AAAA1FFFFFFFFF1.',
+  '....1FFFFFFFFFFFAAFFFFFFFFFFFF1.',
+  '....1FFFF11111111111111111FFFF1.',
+  '....1FFF1999999999999999991FFF1.',
+  '....1FFF19991119991119991991FF1.',
+  '....1FFF19911919919199119991F1..',
+  '....1FFF19991119991119991991F1..',
+  '....1FFF1999999999999999991F1...',
+  '....1FFFF11111111111111111F1....',
+  '.....1FFFFFFFFFFFFFFFFFFFF1.....',
+  '......1FFFFFFFFFFFFFFFFFF1......',
+  '.......1FFFFFFFFFFFFFFFF1.......',
+  '........1111111111111111........',
+  '................................',
+];
+const IT_1 = [
+  '................................',
+  '...1F..........................F',
+  '..1FF1........................1F',
+  '.1FFFF1......................1F1',
+  '.1FFFFF1...1111111111.......1FF1',
+  '.1FFFFFF1.11FFFFFFFF11.....1FFF1',
+  '.1FFFFFFF1FFFFFFFFFFFF1..1FFFFF1',
+  '..1FFFFFFFFFFFFFFFFFFFF1FFFFFFF1',
+  '...1FFFFFFFFFFFFFFFFFFFFFFFFFF1.',
+  '....1FFFFFFFFFFFFFFFFFFFFFFFF1..',
+  '....1FFFFDDDDDFFFFFFFDDDDDFFF1..',
+  '....1FFFFDDDDDDFFFFFFDDDDDDFFF1.',
+  '....1FFFFDCCDDDFFFFFFDDCCCDFFF1.',
+  '....1FFFFDCCDDDFFFFFFDDCCCDFFF1.',
+  '....1FFFFDDDDDDFFFFFFDDDDDDFFF1.',
+  '....1FFFFDDDDDFFFFFFFDDDDDFFFF1.',
+  '....1FFFFFFFFFFF1111FFFFFFFFFF1.',
+  '....1FFFFFFFFFF111111FFFFFFFFF1.',
+  '....1FFFFFFFFFF1AAAA1FFFFFFFFF1.',
+  '....1FFFFFFFFFFFAAAFFFFFFFFFFF1.',
+  '....1FFFF11111111111111111FFFF1.',
+  '....1FFF199DD999999999999991FFF1',
+  '....1FFF199DD11199911199919991F1',
+  '....1FFF199119199199119911999F1.',
+  '....1FFF19991111999111999199F1..',
+  '....1FFF1999999999999999991F1...',
+  '....1FFFF11111111111111111F1....',
+  '.....1FFFFFFFFFFFFFFFFFFFF1.....',
+  '......1FFFFFFFFFFFFFFFFFF1......',
+  '.......1FFFFFFFFFFFFFFFF1.......',
+  '........1111111111111111........',
+  '................................',
+];
+
+// ============================================================================
+// Items
+// ============================================================================
+
+// Apple (food) — red round with green stem
+const APPLE = [
+  '................',
+  '................',
+  '........3.......',
+  '........3.......',
+  '.......3........',
+  '......DDDDD.....',
+  '.....DDDDDDD....',
+  '....DDFDDDFDD...',
+  '....DFFDDDFFD...',
+  '....DFFDDDDFD...',
+  '....DDFDDDFDD...',
+  '....DDDDDDDDD...',
+  '.....DDDDDDD....',
+  '......DDDDD.....',
+  '................',
+  '................',
+];
+
+// Key — gold T shape
+const KEY = [
+  '................',
+  '................',
+  '.....1BBB1......',
+  '....1BCCCB1.....',
+  '...1BCBBCB1.....',
+  '...1BCBBCB1.....',
+  '....1BCCCB1.....',
+  '.....1BBB1......',
+  '.....1BBB1......',
+  '.....1BBB1......',
+  '.....1BBB11.....',
+  '.....1BBBB1.....',
+  '.....1BBB11.....',
+  '.....1BBBB1.....',
+  '......11111.....',
+  '................',
+];
+
+// Potion — blue vial with glow
+const POTION = [
+  '................',
+  '................',
+  '......1BB1......',
+  '......1BB1......',
+  '......1EE1......',
+  '.....1EEEE1.....',
+  '....1EEEEEEE1...',
+  '....1EE1EEEEE...',
+  '....1EEEEEEE1...',
+  '....1EEEEEEE1...',
+  '....1EE1EEEEE...',
+  '....1EEEEEEE1...',
+  '....1EEEEEEE1...',
+  '.....1EEEEE1....',
+  '......11111.....',
+  '................',
+];
+
+// Treasure — gold coin pile
+const TREASURE = [
+  '................',
+  '................',
+  '................',
+  '.......BB.......',
+  '......BCCB......',
+  '......BCBB......',
+  '....BB.BB.BB....',
+  '...BCCBBBCCCB...',
+  '...BCBBBCBBCB...',
+  '..BCCBCBBBCCBB..',
+  '..BBBBCBBCBCBB..',
+  '..BCCCBBBBBBCB..',
+  '...BBBCCBBCBB...',
+  '....BBBBBBBB....',
+  '................',
+  '................',
+];
+
+// Missile ammo — arrow bundle
+const MISSILE_PICKUP = [
+  '................',
+  '................',
+  '.....1..1..1....',
+  '....1C.1C.1C....',
+  '....66C66C66C...',
+  '....66C66C66C...',
+  '....66C66C66C...',
+  '....66C66C66C...',
+  '....66C66C66C...',
+  '....66C66C66C...',
+  '....66C66C66C...',
+  '....66C66C66C...',
+  '....DDCDDCDDC...',
+  '....1D11D11D1...',
+  '................',
+  '................',
+];
+
+// Star Gem fragment — small glowing shard. Color tinted at bake.
+const GEM_SHAPE = [
+  '................',
+  '................',
+  '.......11.......',
+  '......1C91......',
+  '.....1CCC91.....',
+  '....1CCCCC91....',
+  '...1CCCCCCC91...',
+  '..1CCCCCCCCC91..',
+  '...1CCCCCCC91...',
+  '....1CCCCC91....',
+  '.....1CCC91.....',
+  '......1C91......',
+  '.......11.......',
+  '................',
+  '................',
+  '................',
+];
+
+// Build a gem sprite tinted to a specific palette index (the C core).
+function bakeGem(coreIdx) {
+  // Replace 'C' with the given hex index at draw time.
+  const rows = GEM_SHAPE.map(r => r.replace(/C/g, coreIdx));
+  return bakeSprite(rows);
+}
+
+// Projectile — arrow / missile
+const PROJ_ARROW = [
+  '........................................',
+];  // placeholder, redefined below
+
+const PROJ_SIMPLE = [
+  '................',
+  '................',
+  '................',
+  '................',
+  '................',
+  '.......C........',
+  '......CBC.......',
+  '.....CBBBC......',
+  '.....CBBBC......',
+  '......CBC.......',
+  '.......C........',
+  '................',
+  '................',
+  '................',
+  '................',
+  '................',
+];
+
+// Enemy projectile — red fireball
+const PROJ_FIRE = [
+  '................',
+  '................',
+  '................',
+  '................',
+  '................',
+  '.......D........',
+  '......DFD.......',
+  '.....DFCFD......',
+  '.....DFCFD......',
+  '......DFD.......',
+  '.......D........',
+  '................',
+  '................',
+  '................',
+  '................',
+  '................',
+];
+
+// Generator (spawn pad) — dark stone with pulsing red core
+const GENERATOR_0 = [
+  '5555555555555555',
+  '5FFFFFFFFFFFFFF5',
+  '5F7777777777777F',
+  '5F7888888888887F',
+  '5F7811111111887F',
+  '5F781DDDDDD1187F',
+  '5F781DFFFFD1187F',
+  '5F781DFDDFD1187F',
+  '5F781DFDDFD1187F',
+  '5F781DFFFFD1187F',
+  '5F781DDDDDD1187F',
+  '5F7811111111887F',
+  '5F7888888888887F',
+  '5F7777777777777F',
+  '5FFFFFFFFFFFFFF5',
+  '5555555555555555',
+];
+const GENERATOR_1 = [
+  '5555555555555555',
+  '5FFFFFFFFFFFFFF5',
+  '5F7777777777777F',
+  '5F7888888888887F',
+  '5F7811111111887F',
+  '5F781FFFFFF1187F',
+  '5F781FCCCCF1187F',
+  '5F781FCDDCF1187F',
+  '5F781FCDDCF1187F',
+  '5F781FCCCCF1187F',
+  '5F781FFFFFF1187F',
+  '5F7811111111887F',
+  '5F7888888888887F',
+  '5F7777777777777F',
+  '5FFFFFFFFFFFFFF5',
+  '5555555555555555',
+];
+
+// ----- bake everything -------------------------------------------------------
+const SPR = {};
+
+function bake() {
+  // grass variants
+  const grassBase = bakeNoiseTile(16, 16, GRASS_BASE_ENTRIES, 1);
+  SPR.grass0 = grassBase;
+  SPR.grass1 = overlayDetail(bakeNoiseTile(16,16,GRASS_BASE_ENTRIES,2), GRASS_PEBBLE);
+  SPR.grass2 = overlayDetail(bakeNoiseTile(16,16,GRASS_BASE_ENTRIES,3), GRASS_FLOWER);
+  SPR.grass3 = overlayDetail(bakeNoiseTile(16,16,GRASS_BASE_ENTRIES,4), GRASS_TUFT);
+
+  // dirt / stone-floor variants (for dungeon screenshot-3 feel)
+  SPR.dirt0 = bakeNoiseTile(16, 16, STONE_FLOOR_ENTRIES, 5);
+  SPR.dirt1 = overlayDetail(bakeNoiseTile(16,16,STONE_FLOOR_ENTRIES,6), DIRT_CRACK);
+  SPR.dirt2 = bakeNoiseTile(16, 16, STONE_FLOOR_ENTRIES, 7);
+  SPR.dirt3 = bakeNoiseTile(16, 16, STONE_FLOOR_ENTRIES, 8);
+
+  // walls
+  SPR.wall = bakeSprite(WALL_DATA);
+  SPR.wallOut = bakeSprite(WALL_OUTDOOR_DATA);
+
+  // doors & exit
+  SPR.doorClosed = bakeSprite(DOOR_CLOSED);
+  SPR.doorOpen   = bakeSprite(DOOR_OPEN);
+  SPR.exit0 = bakeSprite(EXIT_WARP_0);
+  SPR.exit1 = bakeSprite(EXIT_WARP_1);
+  SPR.torch0 = bakeSprite(TORCH_0);
+  SPR.torch1 = bakeSprite(TORCH_1);
+
+  // warrior (N/S/E + mirrored W)
+  SPR.warrior_s_0 = bakeSprite(WARRIOR_S_0);
+  SPR.warrior_s_1 = bakeSprite(WARRIOR_S_1);
+  SPR.warrior_n_0 = bakeSprite(WARRIOR_N_0);
+  SPR.warrior_n_1 = bakeSprite(WARRIOR_N_1);
+  SPR.warrior_e_0 = bakeSprite(WARRIOR_E_0);
+  SPR.warrior_e_1 = bakeSprite(WARRIOR_E_1);
+  SPR.warrior_w_0 = mirrorSprite(SPR.warrior_e_0);
+  SPR.warrior_w_1 = mirrorSprite(SPR.warrior_e_1);
+
+  // other classes — S-facing frames only; N/E/W fall back to S via drawPlayer.
+  SPR.valkyrie_s_0 = bakeSprite(VALKYRIE_S_0); SPR.valkyrie_s_1 = bakeSprite(VALKYRIE_S_1);
+  SPR.wizard_s_0   = bakeSprite(WIZARD_S_0);   SPR.wizard_s_1   = bakeSprite(WIZARD_S_1);
+  SPR.archer_s_0   = bakeSprite(ARCHER_S_0);   SPR.archer_s_1   = bakeSprite(ARCHER_S_1);
+  SPR.android_s_0  = bakeSprite(ANDROID_S_0);  SPR.android_s_1  = bakeSprite(ANDROID_S_1);
+  SPR.samurai_s_0  = bakeSprite(SAMURAI_S_0);  SPR.samurai_s_1  = bakeSprite(SAMURAI_S_1);
+  SPR.pirate_s_0   = bakeSprite(PIRATE_S_0);   SPR.pirate_s_1   = bakeSprite(PIRATE_S_1);
+  SPR.punk_s_0     = bakeSprite(PUNK_S_0);     SPR.punk_s_1     = bakeSprite(PUNK_S_1);
+
+  // monsters
+  SPR.scorpion_0 = bakeSprite(SCORPION_0);
+  SPR.scorpion_1 = bakeSprite(SCORPION_1);
+  SPR.skeleton_0 = bakeSprite(SKELETON_0);
+  SPR.skeleton_1 = bakeSprite(SKELETON_1);
+  SPR.ghost_0    = bakeSprite(GHOST_0);
+  SPR.ghost_1    = bakeSprite(GHOST_1);
+  SPR.grunt_0    = bakeSprite(GRUNT_0);
+  SPR.grunt_1    = bakeSprite(GRUNT_1);
+  SPR.demon_0    = bakeSprite(DEMON_0);
+  SPR.demon_1    = bakeSprite(DEMON_1);
+  SPR.sorcerer_0 = bakeSprite(SORCERER_0);
+  SPR.sorcerer_1 = bakeSprite(SORCERER_1);
+  SPR.lobber_0   = bakeSprite(LOBBER_0);
+  SPR.lobber_1   = bakeSprite(LOBBER_1);
+  SPR.death_0    = bakeSprite(DEATH_0);
+  SPR.death_1    = bakeSprite(DEATH_1);
+  SPR.it_0       = bakeSprite(IT_0);
+  SPR.it_1       = bakeSprite(IT_1);
+
+  // items
+  SPR.apple   = bakeSprite(APPLE);
+  SPR.key     = bakeSprite(KEY);
+  SPR.potion  = bakeSprite(POTION);
+  SPR.treasure= bakeSprite(TREASURE);
+  SPR.missilePickup = bakeSprite(MISSILE_PICKUP);
+  // 8 Star Gem fragments — each a distinct palette-index core
+  const gemCores = ['D','E','B','C','3','6','F','9']; // red, blue, gold, yellow, green, brown, dark-red, bone
+  for (let i = 0; i < 8; i++) SPR['gem_' + i] = bakeGem(gemCores[i]);
+
+  // projectiles
+  SPR.projPlayer = bakeSprite(PROJ_SIMPLE);
+  SPR.projFire   = bakeSprite(PROJ_FIRE);
+
+  // generators
+  SPR.gen0 = bakeSprite(GENERATOR_0);
+  SPR.gen1 = bakeSprite(GENERATOR_1);
+
+  // portraits
+  SPR.portrait_warrior  = makeWarriorPortrait();
+  SPR.portrait_valkyrie = makePortraitFromSprite(SPR.valkyrie_s_0, 0xE);
+  SPR.portrait_wizard   = makePortraitFromSprite(SPR.wizard_s_0,   0xB);
+  SPR.portrait_archer   = makePortraitFromSprite(SPR.archer_s_0,   0x3);
+  SPR.portrait_android  = makePortraitFromSprite(SPR.android_s_0,  0x8);
+  SPR.portrait_samurai  = makePortraitFromSprite(SPR.samurai_s_0,  0xD);
+  SPR.portrait_pirate   = makePortraitFromSprite(SPR.pirate_s_0,   0x6);
+  SPR.portrait_punk     = makePortraitFromSprite(SPR.punk_s_0,     0xF);
+}
+
+// Generic framed portrait built by scaling up a 16x16 sprite and stamping it
+// into a 32x32 frame with colored background. Good-enough v1 portraits for 7
+// of the 8 classes (Warrior keeps the bespoke portrait).
+function makePortraitFromSprite(spriteCanvas, bgIdx) {
+  const size = 32;
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  const cx = c.getContext('2d');
+  cx.imageSmoothingEnabled = false;
+  // outer frame
+  cx.fillStyle = PAL[1]; cx.fillRect(0, 0, size, size);
+  cx.fillStyle = PAL[9]; cx.fillRect(1, 1, size-2, size-2);
+  cx.fillStyle = PAL[1]; cx.fillRect(2, 2, size-4, size-4);
+  // background color
+  cx.fillStyle = PAL[bgIdx]; cx.fillRect(3, 3, size-6, size-6);
+  // stamp sprite scaled 1.5x, offset to roughly show head+torso
+  const s = 1.5;
+  const w = 16 * s, h = 16 * s;
+  cx.drawImage(spriteCanvas, (size - w) / 2, size - h - 3, w, h);
+  return c;
+}
+
+function makeWarriorPortrait() {
+  // 32x32 framed portrait of the warrior, Lynx-style
+  const rows = [];
+  rows.push('11111111111111111111111111111111');
+  rows.push('19999999999999999999999999999991');
+  rows.push('19111111111111111111111111111191');
+  rows.push('191111111DDDDDDDDDDDDDD111111191');
+  rows.push('191111DDDDDDDDDDDDDDDDDDDD111191');
+  rows.push('19111DDD11111111111111DDDDD11191');
+  rows.push('1911DDD11111111111111111DDD11191');
+  rows.push('1911DDD1AAAAAAAAAAAAAAAA1DD11191');
+  rows.push('1911DDD1AAAAAAAAAAAAAAAA1DD11191');
+  rows.push('1911DDD1AAAAAAAAAAAAAAAA1DD11191');
+  rows.push('1911DDD1AA11AAAAAAAAA11AA1D11191');
+  rows.push('1911DDD1A1AA1AAAAAAA1AA1AA1D1191');
+  rows.push('1911DDD1AA11AAAAAAAAA11AA1D11191');
+  rows.push('1911DDD1AAAAAAAAAAAAAAAA1DD11191');
+  rows.push('1911DDD1AAAA11111111AAAA1DDD1191');
+  rows.push('1911DDD1AAAAAAAAAAAAAAAA1DDD1191');
+  rows.push('1911DDD11AAAAAAAAAAAAAAA1DDD1191');
+  rows.push('1911DDD1111AAAAAAAAAA1111DDD1191');
+  rows.push('1911DDDDDD111111111111DDDDDDD191');
+  rows.push('1911DDDDDDDDDDDDDDDDDDDDDDDDD191');
+  rows.push('1911DDDDDDDBBBBBBBBBBBDDDDDDD191');
+  rows.push('1911DDDDDDDBCBCBCBCBCBDDDDDDD191');
+  rows.push('1911DDDDDDDBBBBBBBBBBBDDDDDDD191');
+  rows.push('1911DDDDDDDDDDDDDDDDDDDDDDDDD191');
+  rows.push('1911DDDDDDDDDDDDDDDDDDDDDDDDD191');
+  rows.push('1911DDDDDDDDDDDDDDDDDDDDDDDDD191');
+  rows.push('1911DDDDDDDDDDDDDDDDDDDDDDDDD191');
+  rows.push('1911DDDDDDDDDDDDDDDDDDDDDDDDD191');
+  rows.push('19111111111111111111111111111191');
+  rows.push('19111111111111111111111111111191');
+  rows.push('19999999999999999999999999999991');
+  rows.push('11111111111111111111111111111111');
+  return bakeSprite(rows);
+}
+
+// Tile helpers — given tile id, return sprite variant
+function tileSprite(id, x, y, t) {
+  // id codes: 0 = floor (grass/dirt depending on biome), 1 = wall,
+  // 2 = door closed, 3 = door open, 4 = exit, 5 = torch, 6 = generator
+  switch (id) {
+    case 0: { // floor — pick a grass variant based on (x,y)
+      const v = (x * 13 + y * 7) & 3;
+      return level.biome === 'grass' ? [SPR.grass0, SPR.grass1, SPR.grass2, SPR.grass3][v]
+                                     : [SPR.dirt0, SPR.dirt1, SPR.dirt2, SPR.dirt3][v];
+    }
+    case 1: return level.biome === 'grass' ? SPR.wallOut : SPR.wall;
+    case 2: return SPR.doorClosed;
+    case 3: return SPR.doorOpen;
+    case 4: return (t >> 3) & 1 ? SPR.exit1 : SPR.exit0;
+    case 5: return (t >> 3) & 1 ? SPR.torch1 : SPR.torch0;
+    case 6: return (t >> 3) & 1 ? SPR.gen1  : SPR.gen0;
+  }
+  return SPR.grass0;
+}
+
+// ============================================================================
+// Level — handcrafted first map. 20 x 20 tiles.
+// . = floor, # = wall, D = door, X = exit, S = start, E = enemy (scorpion),
+// k = skeleton, g = ghost, @ = apple, K = key, P = potion, $ = treasure, m = missile ammo, T = torch, G = generator
+// ============================================================================
+
+// Main path (S → X) has no locked doors — player can always reach exit.
+// Keys unlock two optional loot rooms (treasure/generator + potion/missile bonus).
+const LEVEL1_MAP = [
+  '####################',
+  '#S...@..K..........#',
+  '#..................#',
+  '#....######........#',
+  '#....#....#........#',
+  '#....D.E..#........#',
+  '#....#.$..#........#',
+  '#....##D###........#',
+  '#....#....#........#',
+  '#....#.G..#........#',
+  '#....######........#',
+  '#..................#',
+  '#.K......P.........#',
+  '#....T.............#',
+  '#.........E........#',
+  '#..................#',
+  '#...u....z.........#',
+  '#..................#',
+  '#.............@..Xm#',
+  '####################',
+];
+
+// Parse a map string grid into a level structure
+function parseMap(mapRows, biome) {
+  const h = mapRows.length, w = mapRows[0].length;
+  const tiles = new Array(w * h).fill(0);
+  const spawns = { player: {x:1,y:1}, enemies: [], items: [], torches: [], generators: [], doors: [], exit: {x:1,y:1} };
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const ch = mapRows[y][x];
+      let tile = 0;
+      switch (ch) {
+        case '#': tile = 1; break;
+        case 'D': tile = 2; spawns.doors.push({x,y,open:false}); break;
+        case 'X': tile = 4; spawns.exit = {x,y}; break;
+        case 'T': tile = 5; spawns.torches.push({x,y}); break;
+        case 'G': tile = 6; spawns.generators.push({x,y,type:'scorpion',hp:12}); break;
+        case 'S': spawns.player = {x,y}; break;
+        case 'E': spawns.enemies.push({x,y,type:'scorpion'}); break;
+        case 'k': spawns.enemies.push({x,y,type:'skeleton'}); break;
+        case 'g': spawns.enemies.push({x,y,type:'ghost'}); break;
+        case 'u': spawns.enemies.push({x,y,type:'grunt'}); break;
+        case 'd': spawns.enemies.push({x,y,type:'demon'}); break;
+        case 'z': spawns.enemies.push({x,y,type:'sorcerer'}); break;
+        case 'l': spawns.enemies.push({x,y,type:'lobber'}); break;
+        case 'r': spawns.enemies.push({x,y,type:'death'}); break;
+        case '@': spawns.items.push({x,y,type:'food'}); break;
+        case 'K': spawns.items.push({x,y,type:'key'}); break;
+        case 'P': spawns.items.push({x,y,type:'potion'}); break;
+        case '$': spawns.items.push({x,y,type:'treasure'}); break;
+        case 'm': spawns.items.push({x,y,type:'missile'}); break;
+        case '0': case '1': case '2': case '3': case '4': case '5': case '6': case '7': {
+          spawns.items.push({x,y,type:'gem_' + ch});
+          break;
+        }
+        case 'I': spawns.itBoss = {x,y}; break;
+      }
+      tiles[y * w + x] = tile;
+    }
+  }
+  return { w, h, tiles, spawns, biome };
+}
+
+// ============================================================================
+// Game state
+// ============================================================================
+
+const STATE = { TITLE:'TITLE', SELECT:'SELECT', PLAY:'PLAY', INV:'INV', DEAD:'DEAD', NEXT:'NEXT', VICTORY:'VICTORY', GAMEOVER:'GAMEOVER' };
+let gameState = STATE.TITLE;
+let helpOpen = false;
+let helpCd = 0;
+
+// Class definitions — ordered for 2x4 select grid. Stats loosely mirror the
+// original's high-level trade-offs (warriors strong / wizards magic, etc.).
+const CLASSES = [
+  { id:'warrior',  name:'WARRIOR',  life:2000, speed:80,  str:5, magic:1, shot:3, col:'#c33333' },
+  { id:'valkyrie', name:'VALKYRIE', life:1800, speed:85,  str:4, magic:3, shot:4, col:'#3399cc' },
+  { id:'wizard',   name:'WIZARD',   life:1400, speed:90,  str:2, magic:5, shot:6, col:'#d9a441' },
+  { id:'archer',   name:'ARCHER',   life:1500, speed:95,  str:3, magic:2, shot:8, col:'#4a7c1e' },
+  { id:'android',  name:'ANDROID',  life:1700, speed:75,  str:4, magic:4, shot:5, col:'#888888' },
+  { id:'samurai',  name:'SAMURAI',  life:1900, speed:90,  str:5, magic:2, shot:3, col:'#8b1a1a' },
+  { id:'pirate',   name:'PIRATE',   life:1700, speed:85,  str:4, magic:3, shot:4, col:'#8b5a2b' },
+  { id:'punk',     name:'PUNK',     life:1600, speed:95,  str:3, magic:4, shot:5, col:'#c33333' },
+];
+let selectIdx = 0;
+let selectCooldown = 0;
+
+let level = null;
+const player = {
+  cls: 'warrior',
+  x: 0, y: 0,           // pixel coords (center)
+  vx: 0, vy: 0,
+  facing: 's',          // n/s/e/w
+  frame: 0,
+  animTime: 0,
+  life: 2000,
+  speed: 80,            // pixels per second
+  strength: 4,
+  missiles: 3,
+  levelNum: 1,
+  score: 0,
+  keys: 0,
+  inventory: [],        // list of item types (potions etc)
+  meleeCd: 0,
+  shootCd: 0,
+  attacking: 0,         // frames remaining of melee anim
+  hitFlash: 0,          // seconds of damage-flash
+  hpTickAcc: 0,
+  alertMsg: '',
+  alertTime: 0,
+  hudMode: 'stats',    // 'stats' or 'inv'
+  invCd: 0,            // inv toggle debounce
+  useCd: 0,            // item use debounce
+  invSel: 0,           // selected slot in inv mode
+  gems: 0,             // bitmask of collected Star Gem fragments (8 bits)
+  cheat: false,        // C key: invincible-ish + unlimited ammo
+  cheatCd: 0,          // toggle debounce
+};
+let enemies = [];
+let projectiles = [];
+let items = [];
+let generators = [];
+let doors = [];
+let torches = [];
+let particles = [];
+let cameraX = 0, cameraY = 0;
+let gameTime = 0;
+
+// ============================================================================
+// Input
+// ============================================================================
+const keys = {};
+const touchState = { u:false,d:false,l:false,r:false,a:false,b:false,i:false,s:false };
+
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+function setBtn(id, k) {
+  const el = document.getElementById(id);
+  const on = e => { e.preventDefault(); touchState[k] = true; };
+  const off = e => { e.preventDefault(); touchState[k] = false; };
+  el.addEventListener('touchstart', on, {passive:false});
+  el.addEventListener('touchend', off, {passive:false});
+  el.addEventListener('touchcancel', off, {passive:false});
+  el.addEventListener('mousedown', on);
+  el.addEventListener('mouseup', off);
+  el.addEventListener('mouseleave', off);
+}
+setBtn('bu','u'); setBtn('bd','d'); setBtn('bl','l'); setBtn('br','r');
+setBtn('ba','a'); setBtn('bb','b'); setBtn('bi','i'); setBtn('bs','s');
+
+function inputDir() {
+  let dx = 0, dy = 0;
+  if (keys.ArrowUp    || keys.KeyW || touchState.u) dy -= 1;
+  if (keys.ArrowDown  || keys.KeyS || touchState.d) dy += 1;
+  if (keys.ArrowLeft  || keys.KeyA || touchState.l) dx -= 1;
+  if (keys.ArrowRight || keys.KeyD || touchState.r) dx += 1;
+  return { dx, dy };
+}
+function inputMelee() { return keys.KeyJ || touchState.a; }
+function inputShoot() { return keys.KeyK || touchState.b; }
+function inputInv()   { return keys.KeyI || touchState.i; }
+function inputStart() { return keys.Space || touchState.s; }
+
+// ============================================================================
+// Audio — procedural Web Audio
+// ============================================================================
+let audioCtx = null;
+function audio() {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {}
+  }
+  return audioCtx;
+}
+function playTone(freq, dur, type='square', vol=0.1, slide=0) {
+  const ac = audio(); if (!ac) return;
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.value = freq;
+  if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(50, freq + slide), ac.currentTime + dur);
+  g.gain.value = 0;
+  g.gain.linearRampToValueAtTime(vol, ac.currentTime + 0.005);
+  g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + dur);
+  o.connect(g); g.connect(ac.destination);
+  o.start(); o.stop(ac.currentTime + dur);
+}
+function playNoise(dur, vol=0.08, bandpass=null) {
+  const ac = audio(); if (!ac) return;
+  const buf = ac.createBuffer(1, ac.sampleRate * dur, ac.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
+  const src = ac.createBufferSource(); src.buffer = buf;
+  const g = ac.createGain(); g.gain.value = vol;
+  if (bandpass) { const bp = ac.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value = bandpass; src.connect(bp); bp.connect(g); }
+  else src.connect(g);
+  g.connect(ac.destination);
+  src.start();
+}
+function sfx(name) {
+  switch (name) {
+    case 'step':    playTone(180, 0.05, 'square', 0.04); break;
+    case 'melee':   playNoise(0.08, 0.1, 1200); break;
+    case 'shoot':   playTone(800, 0.12, 'sawtooth', 0.08, -500); break;
+    case 'hit':     playTone(120, 0.15, 'square', 0.12, -60); break;
+    case 'enemyHit':playNoise(0.12, 0.12, 400); break;
+    case 'pickup':  playTone(660, 0.08, 'square', 0.1); setTimeout(()=>playTone(880,0.1,'square',0.1),70); break;
+    case 'door':    playTone(220, 0.2, 'sawtooth', 0.12, -100); break;
+    case 'potion':  playTone(400, 0.3, 'sawtooth', 0.1, 600); break;
+    case 'death':   playTone(220, 0.4, 'sawtooth', 0.2, -180); break;
+    case 'levelup': playTone(523, 0.1, 'square', 0.12); setTimeout(()=>playTone(659,0.1,'square',0.12),100); setTimeout(()=>playTone(784,0.2,'square',0.12),200); break;
+    case 'alert':   playTone(440, 0.15, 'sawtooth', 0.15); break;
+  }
+}
+
+// ============================================================================
+// Game setup / reset
+// ============================================================================
+
+// ----- procedural level generation ------------------------------------------
+
+function mulberry32(a) { return function() { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+function generateLevel(n) {
+  const rng = mulberry32(0x5EED ^ (n * 1337));
+  const W = 22, H = 22;
+  const grid = [];
+  for (let y = 0; y < H; y++) { grid.push(new Array(W).fill('#')); }
+
+  // Carve random rectangular rooms
+  const rooms = [];
+  const wantRooms = 4 + Math.min(4, Math.floor(n / 2));
+  for (let i = 0; i < wantRooms * 4 && rooms.length < wantRooms; i++) {
+    const rw = 4 + Math.floor(rng() * 5);
+    const rh = 4 + Math.floor(rng() * 5);
+    const rx = 1 + Math.floor(rng() * (W - rw - 2));
+    const ry = 1 + Math.floor(rng() * (H - rh - 2));
+    let overlap = false;
+    for (const r of rooms) {
+      if (rx < r.x + r.w + 1 && rx + rw + 1 > r.x &&
+          ry < r.y + r.h + 1 && ry + rh + 1 > r.y) { overlap = true; break; }
+    }
+    if (overlap) continue;
+    rooms.push({ x: rx, y: ry, w: rw, h: rh });
+  }
+  // Carve rooms
+  for (const r of rooms) {
+    for (let yy = r.y; yy < r.y + r.h; yy++) {
+      for (let xx = r.x; xx < r.x + r.w; xx++) grid[yy][xx] = '.';
+    }
+  }
+  // Connect rooms with L-corridors
+  for (let i = 1; i < rooms.length; i++) {
+    const a = rooms[i - 1], b = rooms[i];
+    const ax = a.x + (a.w >> 1), ay = a.y + (a.h >> 1);
+    const bx = b.x + (b.w >> 1), by = b.y + (b.h >> 1);
+    const midX = rng() < 0.5 ? ax : bx;
+    const midY = midX === ax ? by : ay;
+    for (let x = Math.min(ax, midX); x <= Math.max(ax, midX); x++) if (grid[ay][x] === '#') grid[ay][x] = '.';
+    for (let y = Math.min(ay, midY); y <= Math.max(ay, midY); y++) if (grid[y][midX] === '#') grid[y][midX] = '.';
+    for (let x = Math.min(midX, bx); x <= Math.max(midX, bx); x++) if (grid[midY][x] === '#') grid[midY][x] = '.';
+    for (let y = Math.min(midY, by); y <= Math.max(midY, by); y++) if (grid[y][bx] === '#') grid[y][bx] = '.';
+  }
+
+  // Helper: pick a random floor tile within a room
+  const roomFloor = (r) => ({ x: r.x + 1 + Math.floor(rng() * (r.w - 2)), y: r.y + 1 + Math.floor(rng() * (r.h - 2)) });
+
+  // Start position: center of first room
+  const start = roomFloor(rooms[0]);
+  grid[start.y][start.x] = 'S';
+
+  // Exit: in the last room, far from start
+  const exit = roomFloor(rooms[rooms.length - 1]);
+  grid[exit.y][exit.x] = 'X';
+
+  // Enemy pool scales with level
+  const enemyPool = ['scorpion', 'skeleton', 'ghost', 'grunt'];
+  if (n >= 2) enemyPool.push('demon');
+  if (n >= 3) enemyPool.push('sorcerer', 'lobber');
+  if (n >= 4) enemyPool.push('death');
+  const enemyChar = { scorpion:'E', skeleton:'k', ghost:'g', grunt:'u', demon:'d', sorcerer:'z', lobber:'l', death:'r' };
+  const enemyCount = 6 + n * 2;
+  let placed = 0;
+  for (let t = 0; t < enemyCount * 3 && placed < enemyCount; t++) {
+    const r = rooms[1 + Math.floor(rng() * (rooms.length - 1))]; // not in start room
+    const p = roomFloor(r);
+    if (grid[p.y][p.x] === '.') { grid[p.y][p.x] = enemyChar[enemyPool[Math.floor(rng() * enemyPool.length)]]; placed++; }
+  }
+
+  // Generators: 1 + level/3
+  const genCount = 1 + Math.floor(n / 3);
+  for (let i = 0; i < genCount; i++) {
+    const r = rooms[1 + Math.floor(rng() * (rooms.length - 1))];
+    const p = roomFloor(r);
+    if (grid[p.y][p.x] === '.') grid[p.y][p.x] = 'G';
+  }
+
+  // Items
+  const food = 3 + Math.floor(rng() * 3);
+  for (let i = 0; i < food; i++) {
+    const r = rooms[Math.floor(rng() * rooms.length)];
+    const p = roomFloor(r);
+    if (grid[p.y][p.x] === '.') grid[p.y][p.x] = '@';
+  }
+  // Treasure / potion / missile (keys handled in the reachability pass below)
+  const drop = (ch) => { for (let t = 0; t < 20; t++) { const r = rooms[Math.floor(rng() * rooms.length)]; const p = roomFloor(r); if (grid[p.y][p.x] === '.') { grid[p.y][p.x] = ch; return; } } };
+  drop('P'); drop('$'); drop('m');
+
+  // A couple torches on walls inside rooms
+  for (let i = 0; i < 3; i++) {
+    const r = rooms[Math.floor(rng() * rooms.length)];
+    const p = roomFloor(r);
+    if (grid[p.y][p.x] === '.') grid[p.y][p.x] = 'T';
+  }
+
+  // Star Gem fragment: one per level 2..9 (8 gems). Placed in a random non-start room.
+  if (n >= 2 && n <= 9) {
+    const gemIdx = n - 2;
+    for (let t = 0; t < 30; t++) {
+      const r = rooms[1 + Math.floor(rng() * (rooms.length - 1))];
+      const p = roomFloor(r);
+      if (grid[p.y][p.x] === '.') { grid[p.y][p.x] = String(gemIdx); break; }
+    }
+  }
+
+  // Doors between corridors and rooms: scatter a few on corridor edges of rooms
+  for (const r of rooms) {
+    const edges = [
+      { x: r.x - 1, y: r.y + (r.h >> 1) },
+      { x: r.x + r.w, y: r.y + (r.h >> 1) },
+      { x: r.x + (r.w >> 1), y: r.y - 1 },
+      { x: r.x + (r.w >> 1), y: r.y + r.h },
+    ];
+    for (const e of edges) {
+      if (e.x <= 0 || e.y <= 0 || e.x >= W-1 || e.y >= H-1) continue;
+      if (grid[e.y][e.x] === '.' && rng() < 0.2) grid[e.y][e.x] = 'D';
+    }
+  }
+
+  // Guarantee the exit is reachable: simulate the player exploring with keys.
+  // Whenever they hit a door with no key, place a key in an already-reachable
+  // floor tile. Bail out by dissolving a blocking door if no floor is available.
+  ensureReachable(grid, W, H, start.x, start.y, exit.x, exit.y, rng);
+
+  const biomes = ['grass', 'dirt', 'grass', 'dirt'];
+  const biome = biomes[(n - 1) % biomes.length];
+  return parseMap(grid.map(row => row.join('')), biome);
+}
+
+// Iterative exploration simulation. Plants Ks in reachable open floor until
+// the player would naturally collect enough to unlock every door on the path.
+function ensureReachable(grid, W, H, sx, sy, ex, ey, rng) {
+  const opened = new Set();                // keys: y*W+x for doors treated as open
+  const collected = new Set();             // keys: y*W+x for keys already picked up in sim
+  const k = (x, y) => y * W + x;
+  const passable = (x, y) => {
+    const ch = grid[y][x];
+    if (ch === '#') return false;
+    if (ch === 'D' && !opened.has(k(x, y))) return false;
+    return true;
+  };
+  const bfs = () => {
+    const vis = new Uint8Array(W * H);
+    const q = [[sx, sy]];
+    vis[k(sx, sy)] = 1;
+    const out = [];
+    while (q.length) {
+      const [x, y] = q.shift();
+      out.push([x, y]);
+      for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        if (vis[k(nx, ny)]) continue;
+        if (!passable(nx, ny)) continue;
+        vis[k(nx, ny)] = 1;
+        q.push([nx, ny]);
+      }
+    }
+    return out;
+  };
+
+  let keyBank = 0;
+  for (let iter = 0; iter < 40; iter++) {
+    const reach = bfs();
+    const reachSet = new Set(reach.map(([x,y]) => k(x,y)));
+
+    // Collect keys we just reached
+    for (const [x, y] of reach) {
+      const id = k(x, y);
+      if (grid[y][x] === 'K' && !collected.has(id)) { collected.add(id); keyBank++; }
+    }
+    if (reachSet.has(k(ex, ey))) break;  // exit reachable — done
+
+    // Doors on the border of reachable area
+    const border = [];
+    const seen = new Set();
+    for (const [x, y] of reach) {
+      for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        const id = k(nx, ny);
+        if (grid[ny][nx] === 'D' && !opened.has(id) && !seen.has(id)) {
+          seen.add(id); border.push([nx, ny]);
+        }
+      }
+    }
+    if (border.length === 0) break;  // stranded — exit not reachable via doors
+
+    if (keyBank > 0) {
+      const [dx, dy] = border[Math.floor(rng() * border.length)];
+      opened.add(k(dx, dy));
+      keyBank--;
+    } else {
+      // Plant a key in a reachable floor tile; fall back to dissolving a door.
+      const floorTiles = reach.filter(([x,y]) => grid[y][x] === '.');
+      if (floorTiles.length > 0) {
+        const [x, y] = floorTiles[Math.floor(rng() * floorTiles.length)];
+        grid[y][x] = 'K';
+        collected.add(k(x, y));
+        keyBank++;
+      } else {
+        const [dx, dy] = border[0];
+        grid[dy][dx] = '.';
+      }
+    }
+  }
+
+  // A couple of spare keys so the player isn't key-starved exploring loot rooms.
+  const reach = bfs();
+  const spots = reach.filter(([x,y]) => grid[y][x] === '.');
+  for (let i = 0; i < 2 && spots.length > 0; i++) {
+    const idx = Math.floor(rng() * spots.length);
+    const [x, y] = spots.splice(idx, 1)[0];
+    grid[y][x] = 'K';
+  }
+}
+
+// Final level 10: dedicated IT boss arena.
+function generateBossLevel() {
+  const rows = [];
+  const W = 20, H = 20;
+  for (let y = 0; y < H; y++) {
+    let row = '';
+    for (let x = 0; x < W; x++) {
+      if (x === 0 || y === 0 || x === W-1 || y === H-1) row += '#';
+      else row += '.';
+    }
+    rows.push(row);
+  }
+  // Pillars in four corners
+  const set = (x, y, ch) => { rows[y] = rows[y].substring(0, x) + ch + rows[y].substring(x + 1); };
+  for (const [x, y] of [[4,4],[15,4],[4,15],[15,15]]) {
+    set(x, y, '#'); set(x+1, y, '#'); set(x, y+1, '#'); set(x+1, y+1, '#');
+  }
+  // Torches
+  set(2, 2, 'T'); set(17, 2, 'T'); set(2, 17, 'T'); set(17, 17, 'T');
+  // Start at bottom
+  set(10, 17, 'S');
+  // Boss in center
+  set(10, 8, 'I');
+  // Some supporting enemies
+  set(6, 10, 'd'); set(14, 10, 'd'); set(8, 6, 'z'); set(12, 6, 'z');
+  // Items
+  set(3, 10, '@'); set(16, 10, '@'); set(10, 15, 'P');
+  return parseMap(rows, 'dirt');
+}
+
+function startLevel(n) {
+  level = (n === 1) ? parseMap(LEVEL1_MAP, 'grass')
+        : (n >= 10) ? generateBossLevel()
+        : generateLevel(n);
+  level.num = n;
+  player.levelNum = n;
+  player.x = (level.spawns.player.x + 0.5) * TILE;
+  player.y = (level.spawns.player.y + 0.5) * TILE;
+  enemies = level.spawns.enemies.map(e => makeEnemy(e.type, (e.x+0.5)*TILE, (e.y+0.5)*TILE));
+  if (level.spawns.itBoss) {
+    const b = level.spawns.itBoss;
+    enemies.push(makeEnemy('it', (b.x + 1) * TILE, (b.y + 1) * TILE));
+  }
+  items = level.spawns.items.map(i => ({ type:i.type, x:(i.x+0.5)*TILE, y:(i.y+0.5)*TILE, bob:Math.random()*Math.PI*2 }));
+  generators = level.spawns.generators.map(g => ({ x:(g.x+0.5)*TILE, y:(g.y+0.5)*TILE, type:g.type, hp:g.hp, cd:2, tx:g.x, ty:g.y }));
+  doors = level.spawns.doors.map(d => ({ x:d.x, y:d.y, open:false }));
+  torches = level.spawns.torches.map(t => ({ x:t.x, y:t.y }));
+  projectiles = []; particles = [];
+  cameraX = cameraY = 0;
+  player.alertMsg = `Level ${n}`; player.alertTime = 2;
+}
+
+function makeEnemy(type, px, py) {
+  const stats = {
+    scorpion: { hp: 6,  speed: 60, dmg: 6,  score: 100, ai:'chase' },
+    skeleton: { hp: 10, speed: 40, dmg: 10, score: 150, ai:'chase' },
+    ghost:    { hp: 4,  speed: 50, dmg: 8,  score: 80,  ai:'drift', ethereal:true },
+    grunt:    { hp: 8,  speed: 55, dmg: 8,  score: 120, ai:'chase' },
+    demon:    { hp: 14, speed: 10, dmg: 0,  score: 300, ai:'shooter', cd:1.6, proj:'fire' },
+    sorcerer: { hp: 8,  speed: 25, dmg: 0,  score: 250, ai:'teleport', cd:2.0, proj:'fire' },
+    lobber:   { hp: 12, speed: 15, dmg: 0,  score: 220, ai:'lobber', cd:2.2 },
+    death:    { hp: 30, speed: 30, dmg: 40, score: 500, ai:'drain' },
+    it:       { hp: 200, speed: 35, dmg: 25, score: 10000, ai:'boss', cd: 1.2, size: 32 },
+  }[type] || { hp:5, speed:40, dmg:5, score:50, ai:'chase' };
+  return {
+    type, x:px, y:py, vx:0, vy:0,
+    hp: stats.hp, maxHp: stats.hp,
+    speed: stats.speed, dmg: stats.dmg, score: stats.score,
+    ethereal: !!stats.ethereal,
+    ai: stats.ai, cd: (stats.cd || 0) * (0.5 + Math.random()), proj: stats.proj,
+    size: stats.size || 16,
+    facing:'s', frame:0, animTime:0,
+    hitFlash: 0,
+    alive: true,
+  };
+}
+
+// ============================================================================
+// Collision / tile queries
+// ============================================================================
+
+function tileAt(tx, ty) {
+  if (!level || tx < 0 || ty < 0 || tx >= level.w || ty >= level.h) return 1;
+  return level.tiles[ty * level.w + tx];
+}
+
+function isBlocked(px, py, ethereal) {
+  const tx = Math.floor(px / TILE), ty = Math.floor(py / TILE);
+  const t = tileAt(tx, ty);
+  if (t === 1) return true;
+  if (t === 2) {
+    // door — check if any door at this tile is open
+    const d = doors.find(d => d.x === tx && d.y === ty);
+    if (d && d.open) return false;
+    return !ethereal;
+  }
+  return false;
+}
+
+// Move entity with AABB tile collision. Separate axes so walls slide.
+function moveEntity(e, dx, dy) {
+  const half = 6; // collision radius ~ 6px
+  if (dx !== 0) {
+    const nx = e.x + dx;
+    const check = dx > 0 ? nx + half : nx - half;
+    if (!isBlocked(check, e.y - half, e.ethereal) && !isBlocked(check, e.y + half, e.ethereal)) e.x = nx;
+  }
+  if (dy !== 0) {
+    const ny = e.y + dy;
+    const check = dy > 0 ? ny + half : ny - half;
+    if (!isBlocked(e.x - half, check, e.ethereal) && !isBlocked(e.x + half, check, e.ethereal)) e.y = ny;
+  }
+}
+
+// ============================================================================
+// Player update
+// ============================================================================
+
+function updatePlayer(dt) {
+  const { dx, dy } = inputDir();
+  const mag = Math.hypot(dx, dy);
+  if (mag > 0) {
+    const nx = dx / mag, ny = dy / mag;
+    moveEntity(player, nx * player.speed * dt, ny * player.speed * dt);
+    // facing — prefer last-pressed axis
+    if (Math.abs(dx) >= Math.abs(dy)) player.facing = dx > 0 ? 'e' : 'w';
+    else                              player.facing = dy > 0 ? 's' : 'n';
+    player.animTime += dt;
+    if (player.animTime > 0.12) { player.animTime = 0; player.frame ^= 1; }
+  } else {
+    player.frame = 0;
+  }
+
+  // Attack
+  if (inputMelee() && player.meleeCd <= 0) {
+    player.meleeCd = 0.3;
+    player.attacking = 0.15;
+    sfx('melee');
+    meleeAttack();
+  }
+  player.meleeCd = Math.max(0, player.meleeCd - dt);
+  player.attacking = Math.max(0, player.attacking - dt);
+
+  if (inputShoot() && player.shootCd <= 0 && player.missiles > 0) {
+    player.shootCd = 0.4;
+    if (!player.cheat) player.missiles--;
+    shootMissile();
+    sfx('shoot');
+  }
+  player.shootCd = Math.max(0, player.shootCd - dt);
+
+  // Door open with key (auto-open on adjacent)
+  const ptx = Math.floor(player.x / TILE), pty = Math.floor(player.y / TILE);
+  for (const d of doors) {
+    if (!d.open && Math.abs(d.x - ptx) + Math.abs(d.y - pty) <= 1) {
+      if (player.keys > 0) {
+        d.open = true; player.keys--;
+        level.tiles[d.y * level.w + d.x] = 3;
+        sfx('door');
+        alertMsg('Door opened');
+      }
+    }
+  }
+
+  // Item pickup
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (Math.hypot(it.x - player.x, it.y - player.y) < 10) {
+      pickupItem(it.type);
+      items.splice(i, 1);
+    }
+  }
+
+  // Exit
+  const ex = level.spawns.exit;
+  if (Math.floor(player.x / TILE) === ex.x && Math.floor(player.y / TILE) === ex.y) {
+    nextLevel();
+  }
+
+  // Cheat refill: keep the bars pinned at max while cheat is active.
+  if (player.cheat) {
+    player.life = Math.max(player.life, 9999);
+    player.missiles = Math.max(player.missiles, 99);
+  }
+
+  // HP decay (series hallmark) — disabled under cheat.
+  player.hpTickAcc += dt;
+  if (!player.cheat && player.hpTickAcc > 1) {
+    player.hpTickAcc = 0;
+    player.life -= 1;
+    if (player.life < 200 && Math.random() < 0.3) {
+      alertMsg((player.className || 'Warrior') + ' needs food, badly!');
+      sfx('alert');
+    }
+  }
+
+  // Damage / death
+  if (player.life <= 0) {
+    gameState = STATE.DEAD;
+    sfx('death');
+  }
+
+  player.hitFlash = Math.max(0, player.hitFlash - dt);
+}
+
+function pickupItem(type) {
+  sfx('pickup');
+  switch (type) {
+    case 'food':    player.life = Math.min(player.life + 400, 9999); player.score += 10; alertMsg('+400 life'); break;
+    case 'key':     player.keys += 1; player.score += 50; alertMsg('Got key'); break;
+    case 'potion':  player.inventory.push('potion'); alertMsg('Potion acquired'); break;
+    case 'treasure':player.score += 200; alertMsg('+200 score'); break;
+    case 'missile': player.missiles += 5; alertMsg('+5 missiles'); break;
+    default:
+      if (type && type.startsWith('gem_')) {
+        const idx = parseInt(type.slice(4), 10);
+        if (!(player.gems & (1 << idx))) {
+          player.gems |= (1 << idx);
+          player.score += 500;
+          sfx('levelup');
+          const count = bitCount(player.gems);
+          alertMsg('STAR GEM ' + count + '/8');
+        }
+      }
+      break;
+  }
+}
+
+function bitCount(x) { let c = 0; while (x) { c += x & 1; x >>= 1; } return c; }
+
+const HS_KEY = 'gauntlet3_hs';
+function getHighScore() { try { return parseInt(localStorage.getItem(HS_KEY) || '0', 10) || 0; } catch (e) { return 0; } }
+function saveHighScore(s) { try { if (s > getHighScore()) localStorage.setItem(HS_KEY, String(s)); } catch (e) {} }
+
+function meleeAttack() {
+  // rect in front of player
+  const reach = 18;
+  let ax = player.x, ay = player.y;
+  if (player.facing === 'n') ay -= reach;
+  if (player.facing === 's') ay += reach;
+  if (player.facing === 'e') ax += reach;
+  if (player.facing === 'w') ax -= reach;
+  for (const en of enemies) {
+    if (!en.alive) continue;
+    if (Math.hypot(en.x - ax, en.y - ay) < 14) damageEnemy(en, player.strength);
+  }
+  // also hit generators
+  for (let i = generators.length - 1; i >= 0; i--) {
+    const g = generators[i];
+    if (Math.hypot(g.x - ax, g.y - ay) < 16) {
+      g.hp -= player.strength;
+      if (g.hp <= 0) { generators.splice(i, 1); level.tiles[g.ty * level.w + g.tx] = 0; particleBurst(g.x, g.y, 14); sfx('enemyHit'); player.score += 200; }
+      else sfx('enemyHit');
+    }
+  }
+}
+
+function shootMissile() {
+  const sp = 260;
+  let vx = 0, vy = 0;
+  if (player.facing === 'n') vy = -sp;
+  if (player.facing === 's') vy = sp;
+  if (player.facing === 'e') vx = sp;
+  if (player.facing === 'w') vx = -sp;
+  projectiles.push({ x: player.x, y: player.y, vx, vy, from:'player', life: 1.5, dmg: player.strength * 2 });
+}
+
+function damageEnemy(en, dmg) {
+  en.hp -= dmg;
+  en.hitFlash = 0.15;
+  sfx('enemyHit');
+  if (en.hp <= 0) {
+    en.alive = false;
+    player.score += en.score;
+    particleBurst(en.x, en.y, en.type === 'it' ? 40 : 8);
+    if (en.type === 'it') {
+      gameState = STATE.VICTORY;
+      sfx('levelup');
+      saveHighScore(player.score);
+    }
+  }
+}
+
+// ============================================================================
+// Enemy AI
+// ============================================================================
+
+function updateEnemies(dt) {
+  for (const en of enemies) {
+    if (!en.alive) continue;
+    const dx = player.x - en.x, dy = player.y - en.y;
+    const d = Math.hypot(dx, dy) || 1;
+
+    if (en.ai === 'chase' || en.ai === 'drift') {
+      const mvx = (dx / d) * en.speed * dt, mvy = (dy / d) * en.speed * dt;
+      moveEntity(en, mvx, mvy);
+    } else if (en.ai === 'shooter') {
+      // holds position; fires at player every cd seconds if in range
+      en.cd -= dt;
+      if (en.cd <= 0 && d < 200) {
+        en.cd = 1.8;
+        spawnEnemyProj(en.x, en.y, dx/d, dy/d, 'fire', 12);
+      }
+    } else if (en.ai === 'teleport') {
+      // drifts slowly + periodic teleport closer to player + fireballs
+      en.cd -= dt;
+      if (en.cd <= 0) {
+        en.cd = 2.5 + Math.random();
+        const a = Math.atan2(dy, dx) + (Math.random() - 0.5);
+        const r = 80 + Math.random() * 40;
+        const tx = player.x - Math.cos(a) * r, ty = player.y - Math.sin(a) * r;
+        if (!isBlocked(tx, ty, false)) { en.x = tx; en.y = ty; particleBurst(en.x, en.y, 6); }
+        spawnEnemyProj(en.x, en.y, dx/d, dy/d, 'fire', 10);
+      }
+      moveEntity(en, (dx/d) * en.speed * dt, (dy/d) * en.speed * dt);
+    } else if (en.ai === 'lobber') {
+      en.cd -= dt;
+      if (en.cd <= 0 && d < 240) {
+        en.cd = 2.0 + Math.random();
+        // arcing projectile: travels to player location with gravity-arc effect (flat in 2D top-down, so just a fast traveling rock)
+        spawnEnemyProj(en.x, en.y, dx/d, dy/d, 'rock', 10);
+      }
+      // slowly sidestep to maintain distance
+      const mvx = -(dx / d) * en.speed * dt * (d < 60 ? 1 : -0.3);
+      const mvy = -(dy / d) * en.speed * dt * (d < 60 ? 1 : -0.3);
+      moveEntity(en, mvx, mvy);
+    } else if (en.ai === 'drain') {
+      // slow pursuit, heavy damage on contact
+      const mvx = (dx / d) * en.speed * dt, mvy = (dy / d) * en.speed * dt;
+      moveEntity(en, mvx, mvy);
+    } else if (en.ai === 'boss') {
+      // IT: slow pursuit + periodic fireball spreads
+      moveEntity(en, (dx/d) * en.speed * dt, (dy/d) * en.speed * dt);
+      en.cd -= dt;
+      if (en.cd <= 0 && d < 240) {
+        en.cd = 1.4;
+        for (let k = -2; k <= 2; k++) {
+          const a = Math.atan2(dy, dx) + k * 0.2;
+          spawnEnemyProj(en.x, en.y, Math.cos(a), Math.sin(a), 'fire', 15);
+        }
+      }
+    }
+
+    if (Math.abs(dx) >= Math.abs(dy)) en.facing = dx > 0 ? 'e' : 'w';
+    else                              en.facing = dy > 0 ? 's' : 'n';
+    en.animTime += dt;
+    const animRate = en.ai === 'shooter' ? 0.35 : 0.2;
+    if (en.animTime > animRate) { en.animTime = 0; en.frame ^= 1; }
+    en.hitFlash = Math.max(0, en.hitFlash - dt);
+
+    // contact damage
+    if (en.dmg > 0 && Math.hypot(dx, dy) < 12 && player.hitFlash <= 0) {
+      if (!player.cheat) player.life -= en.dmg;
+      player.hitFlash = 0.3;
+      sfx('hit');
+      player.x += (dx < 0 ? 1 : -1) * 8;
+      player.y += (dy < 0 ? 1 : -1) * 8;
+    }
+  }
+  enemies = enemies.filter(e => e.alive);
+
+  for (const g of generators) {
+    g.cd -= dt;
+    if (g.cd <= 0 && enemies.filter(e => e.type === g.type).length < 6) {
+      g.cd = 3 + Math.random() * 2;
+      enemies.push(makeEnemy(g.type, g.x, g.y + TILE));
+    }
+  }
+}
+
+function spawnEnemyProj(x, y, nx, ny, kind, dmg) {
+  const sp = kind === 'rock' ? 180 : 200;
+  projectiles.push({ x, y, vx: nx * sp, vy: ny * sp, from:'enemy', life: 1.4, dmg, kind });
+}
+
+function updateProjectiles(dt) {
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const p = projectiles[i];
+    p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+    if (p.life <= 0) { projectiles.splice(i, 1); continue; }
+    if (isBlocked(p.x, p.y, false)) { projectiles.splice(i, 1); continue; }
+    if (p.from === 'player') {
+      for (const en of enemies) {
+        if (!en.alive) continue;
+        if (Math.hypot(en.x - p.x, en.y - p.y) < 10) {
+          damageEnemy(en, p.dmg);
+          projectiles.splice(i, 1);
+          break;
+        }
+      }
+    } else {
+      if (Math.hypot(player.x - p.x, player.y - p.y) < 10 && player.hitFlash <= 0) {
+        if (!player.cheat) player.life -= p.dmg;
+        player.hitFlash = 0.3; sfx('hit');
+        projectiles.splice(i, 1);
+      }
+    }
+  }
+}
+
+// ============================================================================
+// Particles
+// ============================================================================
+function particleBurst(x, y, n) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = 20 + Math.random() * 60;
+    particles.push({ x, y, vx: Math.cos(a)*sp, vy: Math.sin(a)*sp, life: 0.4, c: PAL[Math.random()<0.5 ? 0xC : 0xD] });
+  }
+}
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+function alertMsg(msg) { player.alertMsg = msg; player.alertTime = 2.5; }
+
+function useInventorySlot(i) {
+  const item = player.inventory[i];
+  if (!item) return;
+  if (item === 'potion') {
+    // potion: nuke visible enemies, restore some life
+    for (const en of enemies) {
+      if (!en.alive) continue;
+      const dx = en.x - player.x, dy = en.y - player.y;
+      if (Math.hypot(dx, dy) < 120) damageEnemy(en, 999);
+    }
+    player.life = Math.min(player.life + 200, 9999);
+    sfx('potion');
+    alertMsg('POTION');
+  } else if (item === 'food') {
+    player.life = Math.min(player.life + 400, 9999);
+    sfx('pickup');
+    alertMsg('+400 LIFE');
+  }
+  player.inventory.splice(i, 1);
+  if (player.invSel >= player.inventory.length) player.invSel = Math.max(0, player.inventory.length - 1);
+}
+
+function dropInventorySlot(i) {
+  if (!player.inventory[i]) return;
+  player.inventory.splice(i, 1);
+  if (player.invSel >= player.inventory.length) player.invSel = Math.max(0, player.inventory.length - 1);
+  alertMsg('DROPPED');
+}
+
+function applyClass(cls) {
+  player.cls = cls.id;
+  player.className = cls.name;
+  player.life = cls.life;
+  player.speed = cls.speed;
+  player.strength = cls.str;
+  player.missiles = cls.shot;
+  player.levelNum = 1;
+  player.score = 0;
+  player.keys = 0;
+  player.inventory = [];
+  player.hitFlash = 0;
+  player.alertTime = 0;
+  player.gems = 0;
+  player.hudMode = 'stats';
+  player.cheat = false;
+  player.cheatCd = 0;
+}
+
+function nextLevel() {
+  player.score += 500;
+  player.life += 200;
+  sfx('levelup');
+  startLevel(player.levelNum + 1);
+}
+
+// ============================================================================
+// Rendering
+// ============================================================================
+
+function updateCamera() {
+  const targetX = player.x - CW / (2 * SCALE);
+  const targetY = player.y - VIEW_H / (2 * SCALE);
+  cameraX = Math.max(0, Math.min(level.w * TILE - CW / SCALE, targetX));
+  cameraY = Math.max(0, Math.min(level.h * TILE - VIEW_H / SCALE, targetY));
+}
+
+function worldToScreen(wx, wy) {
+  return { x: (wx - cameraX) * SCALE, y: (wy - cameraY) * SCALE };
+}
+
+function drawSpriteAt(spr, wx, wy, flip=false) {
+  if (!spr) return;
+  const s = worldToScreen(wx - 8, wy - 8);
+  if (s.x + TS < 0 || s.x > CW || s.y + TS < 0 || s.y > VIEW_H) return;
+  ctx.drawImage(spr, s.x, s.y, spr.width * SCALE, spr.height * SCALE);
+}
+
+function drawTiles() {
+  const tx0 = Math.floor(cameraX / TILE), ty0 = Math.floor(cameraY / TILE);
+  const tx1 = tx0 + VIEW_COLS + 1, ty1 = ty0 + VIEW_ROWS + 1;
+  for (let ty = ty0; ty <= ty1; ty++) {
+    for (let tx = tx0; tx <= tx1; tx++) {
+      const id = tileAt(tx, ty);
+      // draw a floor underneath walls/doors/exit/torch/gen for ambient look
+      if (id !== 0) {
+        const floor = tileSprite(0, tx, ty, gameTime * 60);
+        const sx = (tx * TILE - cameraX) * SCALE;
+        const sy = (ty * TILE - cameraY) * SCALE;
+        ctx.drawImage(floor, sx, sy, TS, TS);
+      }
+      const spr = tileSprite(id, tx, ty, gameTime * 60 | 0);
+      const sx = (tx * TILE - cameraX) * SCALE;
+      const sy = (ty * TILE - cameraY) * SCALE;
+      ctx.drawImage(spr, sx, sy, TS, TS);
+    }
+  }
+  // torches overlay (animated)
+  for (const t of torches) {
+    const spr = ((gameTime * 8) | 0) & 1 ? SPR.torch1 : SPR.torch0;
+    drawSpriteAt(spr, t.x * TILE + 8, t.y * TILE + 8);
+  }
+}
+
+function drawPlayer() {
+  const f = player.frame;
+  const cls = player.cls;
+  let spr;
+  // Warrior has full 4-dir sprites; other classes fall back to S-facing.
+  if (cls === 'warrior') {
+    if (player.facing === 's') spr = f ? SPR.warrior_s_1 : SPR.warrior_s_0;
+    else if (player.facing === 'n') spr = f ? SPR.warrior_n_1 : SPR.warrior_n_0;
+    else if (player.facing === 'e') spr = f ? SPR.warrior_e_1 : SPR.warrior_e_0;
+    else spr = f ? SPR.warrior_w_1 : SPR.warrior_w_0;
+  } else {
+    spr = SPR[cls + '_s_' + f] || SPR.warrior_s_0;
+  }
+  drawSpriteAt(spr, player.x, player.y);
+
+  // damage flash
+  if (player.hitFlash > 0 && ((gameTime * 30) | 0) & 1) {
+    const s = worldToScreen(player.x - 8, player.y - 8);
+    ctx.fillStyle = 'rgba(255,80,80,0.5)';
+    ctx.fillRect(s.x, s.y, TS, TS);
+  }
+  // melee slash indicator
+  if (player.attacking > 0) {
+    let ax = player.x, ay = player.y;
+    if (player.facing === 'n') ay -= 14;
+    if (player.facing === 's') ay += 14;
+    if (player.facing === 'e') ax += 14;
+    if (player.facing === 'w') ax -= 14;
+    const s = worldToScreen(ax - 6, ay - 6);
+    ctx.fillStyle = 'rgba(255,240,100,0.7)';
+    ctx.fillRect(s.x, s.y, 12 * SCALE, 12 * SCALE);
+  }
+}
+
+function drawEnemies() {
+  for (const en of enemies) {
+    const f = en.frame;
+    const spr = SPR[en.type + '_' + f] || SPR.scorpion_0;
+    if ((en.size || 16) >= 32) {
+      const s = worldToScreen(en.x - 16, en.y - 16);
+      ctx.drawImage(spr, s.x, s.y, 32, 32);
+      if (en.hitFlash > 0) {
+        ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.fillRect(s.x, s.y, 32, 32);
+      }
+      // HP bar above IT
+      if (en.type === 'it') {
+        const bw = 40, bh = 4;
+        ctx.fillStyle = '#222'; ctx.fillRect(s.x - 4, s.y - 8, bw, bh);
+        ctx.fillStyle = '#c33';
+        ctx.fillRect(s.x - 4, s.y - 8, bw * (en.hp / en.maxHp), bh);
+      }
+    } else {
+      drawSpriteAt(spr, en.x, en.y);
+      if (en.hitFlash > 0) {
+        const s = worldToScreen(en.x - 8, en.y - 8);
+        ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.fillRect(s.x, s.y, TS, TS);
+      }
+    }
+  }
+}
+
+function drawItems() {
+  for (const it of items) {
+    const bob = Math.sin(gameTime * 3 + it.bob) * 2;
+    let spr;
+    if (it.type === 'food') spr = SPR.apple;
+    else if (it.type === 'key') spr = SPR.key;
+    else if (it.type === 'potion') spr = SPR.potion;
+    else if (it.type === 'treasure') spr = SPR.treasure;
+    else if (it.type === 'missile') spr = SPR.missilePickup;
+    else if (it.type && it.type.startsWith('gem_')) spr = SPR['gem_' + it.type.slice(4)];
+    if (spr) drawSpriteAt(spr, it.x, it.y + bob);
+  }
+}
+
+function drawProjectiles() {
+  for (const p of projectiles) {
+    const spr = p.from === 'player' ? SPR.projPlayer : SPR.projFire;
+    drawSpriteAt(spr, p.x, p.y);
+  }
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    const s = worldToScreen(p.x, p.y);
+    ctx.fillStyle = p.c;
+    ctx.fillRect(s.x, s.y, 3, 3);
+  }
+}
+
+// ----- HUD -------------------------------------------------------------------
+
+function drawHUD() {
+  if (player.hudMode === 'inv') { drawHUDInv(); return; }
+  // panel background
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, HUD_Y, CW, HUD_H);
+  // thin green separator
+  ctx.fillStyle = '#2d5016';
+  ctx.fillRect(0, HUD_Y, CW, 2);
+
+  // portrait frame on left
+  const px = 8, py = HUD_Y + 8;
+  const pw = 80, ph = 80;
+  // frame (dark)
+  ctx.fillStyle = '#222'; ctx.fillRect(px-2, py-2, pw+4, ph+4);
+  ctx.fillStyle = '#000'; ctx.fillRect(px, py, pw, ph);
+  // portrait sprite — per current class
+  const portraitSpr = SPR['portrait_' + player.cls] || SPR.portrait_warrior;
+  if (portraitSpr) {
+    const scale = Math.floor(pw / portraitSpr.width);
+    const dx = px + (pw - portraitSpr.width * scale) / 2;
+    const dy = py + (ph - portraitSpr.height * scale) / 2;
+    ctx.drawImage(portraitSpr, dx, dy, portraitSpr.width * scale, portraitSpr.height * scale);
+    // damage flash on portrait
+    if (player.hitFlash > 0) {
+      ctx.fillStyle = 'rgba(255,40,40,0.5)';
+      ctx.fillRect(dx, dy, portraitSpr.width * scale, portraitSpr.height * scale);
+    }
+    // blink: every ~3s, overlay a thin dark stripe across the eye area for ~100ms
+    const phase = (gameTime % 3);
+    if (phase < 0.12) {
+      ctx.fillStyle = 'rgba(0,0,0,0.8)';
+      ctx.fillRect(dx + scale * 6, dy + scale * 12, scale * 20, scale * 3);
+    }
+    // low-HP portrait pulse
+    if (player.life < 200) {
+      const pulse = 0.25 + 0.25 * Math.sin(gameTime * 8);
+      ctx.fillStyle = 'rgba(200,40,40,' + pulse.toFixed(2) + ')';
+      ctx.fillRect(dx, dy, portraitSpr.width * scale, portraitSpr.height * scale);
+    }
+  }
+
+  // stat column on right
+  const sx = 100, sy0 = HUD_Y + 10;
+  ctx.textBaseline = 'top';
+  ctx.font = 'bold 14px Courier New, monospace';
+  const rows = [
+    ['LIFE',     player.life.toString()],
+    ['SPEED',    (player.speed|0).toString()],
+    ['STRENGTH', player.strength.toString()],
+    ['MISSILES', player.missiles.toString()],
+    ['LEVEL',    player.levelNum.toString()],
+    ['SCORE',    player.score.toString()],
+  ];
+  for (let i = 0; i < rows.length; i++) {
+    const y = sy0 + i * 15;
+    ctx.fillStyle = '#6db33a';
+    ctx.fillText(rows[i][0], sx, y);
+    const v = rows[i][1];
+    ctx.fillStyle = '#e8c547';
+    ctx.textAlign = 'right';
+    ctx.fillText(v, CW - 10, y);
+    ctx.textAlign = 'left';
+  }
+  // key indicator
+  if (player.keys > 0) {
+    ctx.drawImage(SPR.key, CW - 90, sy0 + 5, 16, 16);
+    ctx.fillStyle = '#d9a441'; ctx.fillText('x' + player.keys, CW - 70, sy0 + 8);
+  }
+  // cheat indicator
+  if (player.cheat) {
+    ctx.fillStyle = '#e8c547';
+    ctx.font = 'bold 10px Courier New, monospace';
+    ctx.fillText('CHEAT', sx - 18, HUD_Y + HUD_H - 32);
+    ctx.font = 'bold 14px Courier New, monospace';
+  }
+  // gem progress row (8 tiny cells)
+  const gx0 = 100, gy = HUD_Y + HUD_H - 18;
+  ctx.font = '9px Courier New, monospace';
+  ctx.fillStyle = '#888'; ctx.fillText('GEMS', gx0, gy);
+  for (let i = 0; i < 8; i++) {
+    const x = gx0 + 32 + i * 11, y = gy - 1;
+    ctx.fillStyle = '#222'; ctx.fillRect(x, y, 9, 9);
+    if (player.gems & (1 << i) && SPR['gem_' + i]) {
+      ctx.drawImage(SPR['gem_' + i], x - 3, y - 3, 16, 16);
+    }
+  }
+
+  // alert ticker at bottom of HUD
+  if (player.alertTime > 0) {
+    ctx.fillStyle = '#c33';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 12px Courier New, monospace';
+    ctx.fillText(player.alertMsg, CW / 2, HUD_Y + HUD_H - 14);
+    ctx.textAlign = 'left';
+  }
+}
+
+// inventory HUD mode: big selected-item icon on left, life + slot row + USE/DROP on right
+function drawHUDInv() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, HUD_Y, CW, HUD_H);
+  ctx.fillStyle = '#2d5016';
+  ctx.fillRect(0, HUD_Y, CW, 2);
+
+  const px = 8, py = HUD_Y + 8, pw = 80, ph = 80;
+  ctx.fillStyle = '#222'; ctx.fillRect(px-2, py-2, pw+4, ph+4);
+  ctx.fillStyle = '#000'; ctx.fillRect(px, py, pw, ph);
+
+  const selItem = player.inventory[player.invSel];
+  if (selItem) {
+    const icon = itemIcon(selItem);
+    if (icon) {
+      const s = Math.floor(pw / icon.width);
+      const dx = px + (pw - icon.width * s) / 2;
+      const dy = py + (ph - icon.height * s) / 2;
+      ctx.drawImage(icon, dx, dy, icon.width * s, icon.height * s);
+    }
+  } else {
+    ctx.fillStyle = '#444';
+    ctx.font = 'bold 10px Courier New, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('EMPTY', px + pw/2, py + ph/2 + 4);
+    ctx.textAlign = 'left';
+  }
+
+  // right column: LIFE + slot row + USE/DROP
+  const sx = 100, sy0 = HUD_Y + 10;
+  ctx.textBaseline = 'top';
+  ctx.font = 'bold 14px Courier New, monospace';
+  ctx.fillStyle = '#6db33a';
+  ctx.fillText('LIFE', sx, sy0);
+  ctx.fillStyle = '#e8c547';
+  ctx.textAlign = 'right';
+  ctx.fillText(player.life.toString(), CW - 10, sy0);
+  ctx.textAlign = 'left';
+
+  // 4 slots (16x16 icons, scaled 2x)
+  const slotY = sy0 + 22, slotSize = 32, slotPad = 6;
+  ctx.font = 'bold 10px Courier New, monospace';
+  for (let i = 0; i < 4; i++) {
+    const bx = sx + i * (slotSize + slotPad);
+    ctx.fillStyle = '#222'; ctx.fillRect(bx, slotY, slotSize, slotSize);
+    ctx.strokeStyle = (i === player.invSel) ? '#e8c547' : '#555';
+    ctx.lineWidth = (i === player.invSel) ? 2 : 1;
+    ctx.strokeRect(bx + 0.5, slotY + 0.5, slotSize - 1, slotSize - 1);
+    const it = player.inventory[i];
+    if (it) {
+      const icon = itemIcon(it);
+      if (icon) ctx.drawImage(icon, bx + 4, slotY + 4, 24, 24);
+    }
+    ctx.fillStyle = '#888';
+    ctx.fillText((i+1).toString(), bx + 2, slotY + slotSize + 2);
+  }
+
+  // USE / DROP
+  ctx.font = 'bold 11px Courier New, monospace';
+  ctx.fillStyle = '#6db33a';
+  ctx.fillText('USE (U/1-4)',  sx, slotY + slotSize + 16);
+  ctx.fillStyle = '#c33';
+  ctx.fillText('DROP (X)',     sx + 130, slotY + slotSize + 16);
+
+  if (player.alertTime > 0) {
+    ctx.fillStyle = '#c33';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 12px Courier New, monospace';
+    ctx.fillText(player.alertMsg, CW / 2, HUD_Y + HUD_H - 14);
+    ctx.textAlign = 'left';
+  }
+}
+
+function itemIcon(type) {
+  if (type === 'potion')   return SPR.potion;
+  if (type === 'food')     return SPR.apple;
+  if (type === 'key')      return SPR.key;
+  if (type === 'treasure') return SPR.treasure;
+  if (type === 'missile')  return SPR.missilePickup;
+  return null;
+}
+
+// ----- State overlays --------------------------------------------------------
+
+function drawTitle() {
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, CW, CH);
+  ctx.fillStyle = '#d9a441';
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 22px Courier New, monospace';
+  ctx.fillText('GAUNTLET', CW/2, 80);
+  ctx.fillStyle = '#6db33a';
+  ctx.font = 'bold 14px Courier New, monospace';
+  ctx.fillText('THE THIRD ENCOUNTER', CW/2, 110);
+  ctx.fillStyle = '#888';
+  ctx.font = '12px Courier New, monospace';
+  ctx.fillText('(HTML/JS recreation)', CW/2, 135);
+  // animated portrait carousel
+  const carouselIdx = ((gameTime * 0.6) | 0) % CLASSES.length;
+  const cls = CLASSES[carouselIdx];
+  const spr = SPR['portrait_' + cls.id];
+  if (spr) {
+    const s = 4;
+    const w = spr.width * s, h = spr.height * s;
+    ctx.drawImage(spr, (CW-w)/2, 170, w, h);
+    ctx.fillStyle = cls.col;
+    ctx.font = 'bold 14px Courier New, monospace';
+    ctx.fillText(cls.name, CW/2, 320);
+  }
+  ctx.fillStyle = '#e8c547';
+  ctx.font = 'bold 14px Courier New, monospace';
+  const blink = ((gameTime * 2) | 0) & 1;
+  if (blink) ctx.fillText('PRESS SPACE / START', CW/2, 360);
+  const hs = getHighScore();
+  if (hs > 0) {
+    ctx.fillStyle = '#6db33a';
+    ctx.font = 'bold 11px Courier New, monospace';
+    ctx.fillText('HI-SCORE ' + hs, CW/2, 388);
+  }
+  ctx.fillStyle = '#555';
+  ctx.font = '10px Courier New, monospace';
+  ctx.fillText('Arrows · J melee · K shoot · I inv · H help', CW/2, 410);
+  ctx.fillText('C = cheat mode (full life & missiles)', CW/2, 426);
+  ctx.textAlign = 'left';
+}
+
+function drawSelect() {
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, CW, CH);
+  ctx.fillStyle = '#d9a441'; ctx.textAlign = 'center';
+  ctx.font = 'bold 14px Courier New, monospace';
+  ctx.fillText('CHOOSE YOUR HERO', CW/2, 20);
+  // 2 cols x 4 rows grid of portraits. Each cell: 64x64 portrait (32 sprite x 2) + label.
+  const psize = 64;      // rendered portrait size
+  const cellW = 140, cellH = 76, pad = 8;
+  const gridX = (CW - (cellW * 2 + pad)) / 2;
+  const gridY = 32;
+  for (let i = 0; i < CLASSES.length; i++) {
+    const col = i % 2, row = (i / 2) | 0;
+    const x = gridX + col * (cellW + pad);
+    const y = gridY + row * (cellH + 2);
+    const cls = CLASSES[i];
+    const spr = SPR['portrait_' + cls.id];
+    // portrait anchored left side of cell
+    const px = x + 4, py = y + 4;
+    if (spr) ctx.drawImage(spr, px, py, psize, psize);
+    // label to the right of the portrait
+    ctx.fillStyle = (i === selectIdx) ? '#e8c547' : '#888';
+    ctx.font = 'bold 11px Courier New, monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(cls.name, x + psize + 12, y + 22);
+    if (i === selectIdx) {
+      ctx.strokeStyle = '#e8c547';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x - 1, y - 1, cellW + 2, cellH + 2);
+      // mini stat bars under name
+      ctx.font = 'bold 8px Courier New, monospace';
+      const mini = [['STR', cls.str, 8], ['MAG', cls.magic, 8], ['SHOT', cls.shot, 10], ['LIFE', Math.floor(cls.life/250), 10]];
+      for (let j = 0; j < mini.length; j++) {
+        const mx = x + psize + 12, my = y + 32 + j * 9;
+        ctx.fillStyle = '#6db33a'; ctx.textAlign = 'left';
+        ctx.fillText(mini[j][0], mx, my + 6);
+        ctx.fillStyle = '#222'; ctx.fillRect(mx + 26, my + 2, 34, 5);
+        ctx.fillStyle = cls.col;
+        ctx.fillRect(mx + 26, my + 2, Math.min(34, (mini[j][1] / mini[j][2]) * 34), 5);
+      }
+    }
+  }
+  const sy = gridY + 4 * (cellH + 2) + 10;
+  ctx.fillStyle = '#e8c547';
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 12px Courier New, monospace';
+  const blink = ((gameTime * 2) | 0) & 1;
+  if (blink) ctx.fillText('PRESS SPACE TO BEGIN', CW/2, sy + 4);
+  ctx.fillStyle = '#666';
+  ctx.font = '9px Courier New, monospace';
+  ctx.fillText('ARROWS to choose, SPACE to start', CW/2, sy + 20);
+  ctx.textAlign = 'left';
+}
+
+function drawVictory() {
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, CW, CH);
+  ctx.fillStyle = '#e8c547';
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 22px Courier New, monospace';
+  ctx.fillText('IT IS DEFEATED', CW/2, 60);
+  ctx.fillStyle = '#d9a441';
+  ctx.font = 'bold 14px Courier New, monospace';
+  ctx.fillText('VICTORY', CW/2, 90);
+
+  // Ending flavor based on gem count
+  const gemCount = bitCount(player.gems);
+  ctx.fillStyle = '#6db33a';
+  ctx.font = '11px Courier New, monospace';
+  if (gemCount >= 8) {
+    ctx.fillText('All 8 Star Gems recovered.', CW/2, 130);
+    ctx.fillText('The realm is made whole.', CW/2, 148);
+  } else {
+    ctx.fillText('Gems recovered: ' + gemCount + '/8', CW/2, 130);
+    ctx.fillText('But the work is not yet done.', CW/2, 148);
+  }
+
+  // Show 8 gem slots, collected ones lit
+  const gy = 180;
+  for (let i = 0; i < 8; i++) {
+    const gx = CW/2 - 96 + i * 24;
+    const got = player.gems & (1 << i);
+    if (got && SPR['gem_' + i]) ctx.drawImage(SPR['gem_' + i], gx, gy, 20, 20);
+    else {
+      ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
+      ctx.strokeRect(gx + 2, gy + 2, 16, 16);
+    }
+  }
+
+  ctx.fillStyle = '#d9a441';
+  ctx.font = 'bold 14px Courier New, monospace';
+  ctx.fillText('FINAL SCORE ' + player.score, CW/2, 240);
+  ctx.fillStyle = '#6db33a';
+  ctx.font = '11px Courier New, monospace';
+  ctx.fillText('HI-SCORE ' + getHighScore(), CW/2, 262);
+  ctx.fillStyle = '#e8c547';
+  const blink = ((gameTime * 2) | 0) & 1;
+  if (blink) ctx.fillText('PRESS SPACE', CW/2, 290);
+  ctx.textAlign = 'left';
+}
+
+function drawDead() {
+  drawPlayField();
+  ctx.fillStyle = 'rgba(0,0,0,0.75)';
+  ctx.fillRect(0, 0, CW, CH);
+  ctx.fillStyle = '#c33';
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 20px Courier New, monospace';
+  ctx.fillText((player.className || 'HERO') + ' HAS DIED', CW/2, 180);
+  ctx.fillStyle = '#d9a441';
+  ctx.font = '14px Courier New, monospace';
+  ctx.fillText('FINAL SCORE ' + player.score, CW/2, 220);
+  ctx.fillStyle = '#888';
+  ctx.font = '11px Courier New, monospace';
+  ctx.fillText('HI-SCORE ' + getHighScore(), CW/2, 244);
+  ctx.fillStyle = '#6db33a';
+  ctx.font = '14px Courier New, monospace';
+  ctx.fillText('PRESS SPACE TO TRY AGAIN', CW/2, 280);
+  ctx.textAlign = 'left';
+}
+
+function drawPlayField() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, CW, CH);
+  drawTiles();
+  drawExitMarker();
+  drawItems();
+  drawProjectiles();
+  drawEnemies();
+  drawPlayer();
+  drawParticles();
+  drawHUD();
+  if (helpOpen) drawHelpOverlay();
+}
+
+// Bobbing "EXIT" label above the warp so the user never mistakes a
+// generator or a locked door for the level exit.
+function drawExitMarker() {
+  const ex = level && level.spawns && level.spawns.exit;
+  if (!ex) return;
+  // Boss arena uses (1,1) as a placeholder exit — don't label it there.
+  if (level.tiles[ex.y * level.w + ex.x] !== 4) return;
+  const world = worldToScreen(ex.x * TILE + TILE / 2, ex.y * TILE - 2 + Math.sin(gameTime * 4) * 2);
+  if (world.y < 0 || world.y > VIEW_H) return;
+  ctx.font = 'bold 10px Courier New, monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = '#000';
+  ctx.fillText('EXIT', world.x + 1, world.y + 1);
+  ctx.fillStyle = ((gameTime * 3) | 0) & 1 ? '#e8c547' : '#3399cc';
+  ctx.fillText('EXIT', world.x, world.y);
+  ctx.textAlign = 'left';
+}
+
+function drawHelpOverlay() {
+  ctx.fillStyle = 'rgba(0,0,0,0.92)';
+  ctx.fillRect(0, 0, CW, VIEW_H);
+  ctx.strokeStyle = '#6db33a';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(6, 6, CW - 12, VIEW_H - 12);
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = '#e8c547';
+  ctx.font = 'bold 14px Courier New, monospace';
+  ctx.fillText('HELP', CW / 2, 12);
+
+  ctx.textAlign = 'left';
+  ctx.font = 'bold 10px Courier New, monospace';
+  ctx.fillStyle = '#6db33a';
+  ctx.fillText('CONTROLS', 14, 32);
+  ctx.font = '9px Courier New, monospace';
+  ctx.fillStyle = '#c8c8c8';
+  const controls = [
+    'Arrows/WASD  move',
+    'J            melee',
+    'K            shoot missile',
+    'I            stats / inventory',
+    '1-4 / U      use slot',
+    'X            drop slot',
+    'C            cheat (full life/missiles)',
+    'H            this help',
+    'Space        confirm',
+  ];
+  for (let i = 0; i < controls.length; i++) ctx.fillText(controls[i], 14, 45 + i * 11);
+
+  const ly = 45 + controls.length * 11 + 6;
+  ctx.fillStyle = '#6db33a';
+  ctx.font = 'bold 10px Courier New, monospace';
+  ctx.fillText('TILE LEGEND  (only EXIT PORTAL transports you)', 14, ly);
+
+  const rows = [
+    { spr: () => (gameTime * 4 | 0) & 1 ? SPR.exit1 : SPR.exit0, name: 'EXIT PORTAL', desc: 'Walk onto it — advances level.' },
+    { spr: () => (gameTime * 4 | 0) & 1 ? SPR.gen1  : SPR.gen0,  name: 'GENERATOR',   desc: 'Spawns enemies. Attack to destroy.' },
+    { spr: () => SPR.doorClosed,                                 name: 'LOCKED DOOR', desc: 'Needs 1 key. Walk up to it to open.' },
+    { spr: () => SPR.key,                                        name: 'KEY',         desc: 'Opens one door.' },
+    { spr: () => SPR.food,                                       name: 'FOOD',        desc: '+400 life instantly.' },
+    { spr: () => SPR.potion,                                     name: 'POTION',      desc: 'USE: bomb nearby + heal.' },
+    { spr: () => SPR.treasure,                                   name: 'TREASURE',    desc: '+200 score.' },
+    { spr: () => SPR.missilePickup,                              name: 'MISSILES',    desc: '+5 ammo.' },
+    { spr: () => SPR.gem_0,                                      name: 'STAR GEM',    desc: 'Collect all 8 (one per level 2-9).' },
+  ];
+  const ry0 = ly + 14;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const y = ry0 + i * 16;
+    const s = r.spr();
+    if (s) ctx.drawImage(s, 16, y, 14, 14);
+    ctx.fillStyle = '#e8c547';
+    ctx.font = 'bold 9px Courier New, monospace';
+    ctx.fillText(r.name, 36, y + 2);
+    ctx.fillStyle = '#9a9';
+    ctx.font = '9px Courier New, monospace';
+    ctx.fillText(r.desc, 120, y + 2);
+  }
+
+  ctx.fillStyle = '#888';
+  ctx.font = 'bold 10px Courier New, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('Press H to dismiss', CW / 2, VIEW_H - 18);
+  ctx.textAlign = 'left';
+}
+
+// ============================================================================
+// Main loop
+// ============================================================================
+
+let lastT = 0;
+function loop(t) {
+  const now = t / 1000;
+  let dt = Math.min(1/30, now - lastT);
+  lastT = now;
+  gameTime += dt;
+
+  if (gameState === STATE.TITLE) {
+    drawTitle();
+    if (inputStart()) { gameState = STATE.SELECT; selectCooldown = 0.3; }
+  } else if (gameState === STATE.SELECT) {
+    drawSelect();
+    selectCooldown = Math.max(0, selectCooldown - dt);
+    if (selectCooldown <= 0) {
+      const { dx, dy } = inputDir();
+      if (dx || dy) {
+        if (dx > 0) selectIdx += 1;
+        if (dx < 0) selectIdx -= 1;
+        if (dy > 0) selectIdx += 2;
+        if (dy < 0) selectIdx -= 2;
+        selectIdx = (selectIdx + CLASSES.length) % CLASSES.length;
+        selectCooldown = 0.18;
+      }
+      if (inputStart()) {
+        applyClass(CLASSES[selectIdx]);
+        startLevel(1);
+        gameState = STATE.PLAY;
+        selectCooldown = 0.3;
+      }
+    }
+  } else if (gameState === STATE.PLAY) {
+    helpCd = Math.max(0, helpCd - dt);
+    if (keys.KeyH && helpCd <= 0) {
+      helpOpen = !helpOpen;
+      helpCd = 0.3;
+    }
+    // Freeze gameplay while help is open.
+    if (!helpOpen) {
+      updatePlayer(dt);
+      updateEnemies(dt);
+      updateProjectiles(dt);
+      updateParticles(dt);
+      updateCamera();
+      player.alertTime = Math.max(0, player.alertTime - dt);
+      player.invCd = Math.max(0, player.invCd - dt);
+      player.useCd = Math.max(0, player.useCd - dt);
+      player.cheatCd = Math.max(0, player.cheatCd - dt);
+    }
+    if (!helpOpen) {
+      if (inputInv() && player.invCd <= 0) {
+        player.hudMode = (player.hudMode === 'stats') ? 'inv' : 'stats';
+        player.invCd = 0.25;
+      }
+      if (keys.KeyC && player.cheatCd <= 0) {
+        player.cheat = !player.cheat;
+        player.cheatCd = 0.4;
+        if (player.cheat) {
+          player.life = 9999;
+          player.missiles = 99;
+          player.strength = Math.max(player.strength, 10);
+          alertMsg('CHEAT: ON');
+        } else {
+          alertMsg('CHEAT: OFF');
+        }
+        sfx('pickup');
+      }
+      if (player.hudMode === 'inv' && player.useCd <= 0) {
+        for (let n = 1; n <= 4; n++) {
+          if (keys['Digit' + n]) { useInventorySlot(n - 1); player.useCd = 0.3; break; }
+        }
+        if (keys.KeyU) { useInventorySlot(player.invSel); player.useCd = 0.3; }
+        if (keys.KeyX) { dropInventorySlot(player.invSel); player.useCd = 0.3; }
+      }
+    }
+    drawPlayField();
+    if (!helpOpen && player.life <= 0) { gameState = STATE.DEAD; saveHighScore(player.score); }
+  } else if (gameState === STATE.DEAD) {
+    drawDead();
+    if (inputStart()) {
+      gameState = STATE.SELECT;
+      selectCooldown = 0.3;
+    }
+  } else if (gameState === STATE.VICTORY) {
+    drawVictory();
+    if (inputStart()) {
+      gameState = STATE.TITLE;
+    }
+  }
+
+  requestAnimationFrame(loop);
+}
+
+// ----- init ------------------------------------------------------------------
+bake();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

@@ -139,6 +139,44 @@ Classic dig-and-collect arcade action! Based on the 1982 Universal classic.
 
 ---
 
+### JMR's Gauntlet: The Third Encounter
+**File:** `gauntlet_third_encounter.html`
+
+Single-file HTML/JS recreation of the 1990 Atari Lynx classic — top-down action
+RPG in portrait orientation (320×480), no external assets, all sprites baked
+from 2D pixel-index arrays at load.
+
+- **Controls (keyboard):**
+  - Arrows / WASD — move
+  - J — melee attack
+  - K — shoot missile
+  - I — toggle stats ↔ inventory HUD
+  - 1–4 / U — use inventory slot
+  - X — drop inventory slot
+  - C — toggle **cheat mode** (pins life = 9999, missiles = 99, blocks damage and HP decay)
+  - H — help overlay (controls + tile legend, pauses the game)
+  - Space — confirm / start / continue
+- **Controls (touch):** on-screen D-pad + MELEE / SHOOT / INV / START
+- **Features:**
+  - All 8 Lynx character classes — Warrior, Valkyrie, Wizard, Archer, Android, Samurai, Pirate, Punk — with per-class stats and unique 16×16 + portrait sprites
+  - All core monsters: Scorpion, Skeleton, Ghost (phases through walls), Grunt, Demon (fireballs), Sorcerer (teleports + magic bolts), Lobber (arcing rocks), Death (HP drain), plus **IT** — the 32×32 final boss
+  - Enemy generators — pulsing framed tiles that spawn their monster type until destroyed
+  - Star Gem quest — one fragment hidden per level 2–9; collecting all 8 changes the ending text
+  - Procedurally-generated dungeons with a solvability guarantee — the generator simulates the player collecting keys and opening doors, planting additional keys in already-reachable rooms until the exit is provably reachable
+  - Biome rotation (grass / dirt) per level
+  - HP decay tick (the series's "Warrior needs food, badly" hallmark) + low-HP red pulse
+  - Inventory: potions bomb nearby enemies + heal; food heals instantly
+  - Portrait HUD: class portrait blinks, flashes red on damage, dedicated GEMS row
+  - localStorage high score on title
+  - Procedural Web Audio sound effects (no sound files)
+  - Two-frame walk + attack pose per class × 4 facings
+  - Letterboxed integer-multiple scaling — renders crisp at any size
+- **About the "portals":** there is **one** transport tile — the pulsing blue/yellow exit swirl, now labelled **EXIT** in-game. The red/bronze framed pulsing tile is a **generator** (spawns enemies, attack it to destroy). Wooden panels are **locked doors** (need a key — walk up to one while holding a key to open). Press H in-game for the full tile legend.
+
+**Play:** [https://raw.githack.com/jmrothberg/Games/main/gauntlet_third_encounter.html](https://raw.githack.com/jmrothberg/Games/main/gauntlet_third_encounter.html)
+
+---
+
 ### JMR's Chess (Human / Search / LLM)
 **File:** `Generated_games/chess.html` + `Generated_games/chess_server.py`
 
@@ -188,6 +226,7 @@ The bridge is stdlib-only (`http.server`) — no pip installs beyond PyTorch its
 | Space Invaders | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/invaders.html) |
 | Mr. Do! | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/mrdo.html) |
 | 3D Tank Battle | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/3D_Tank_Battle.html) |
+| Gauntlet: The Third Encounter | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/gauntlet_third_encounter.html) |
 | Vector Tanks | Desktop | [Play](https://jmrothberg.github.io/Games/Generated_games/vector_tanks.html) |
 | Chess (Human + Search only — LLM needs local bridge) | Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/Generated_games/chess.html) |
 
@@ -195,7 +234,7 @@ The bridge is stdlib-only (`http.server`) — no pip installs beyond PyTorch its
 
 ## Author
 
-Created by JMR, 2024-2025
+Created by JMR, 2024–2026
 
 ## License
 
