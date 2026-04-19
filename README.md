@@ -186,6 +186,17 @@ Full-rules chess with independent per-side player choice — any of:
 - **Search** — built-in minimax + alpha-beta with iterative deepening, MVV-LVA move ordering, and quiescence. Depth 1–7. Works anywhere the page loads.
 - **LLM** — a PyTorch chess transformer loaded from `chess/Chess_LLM_models copy/*.pth`. **Requires running `chess_server.py` locally** — the LLM dropdown is disabled when the bridge isn't reachable.
 
+**LLM checkpoint formats** (see `chess/Chess_Inference copy.py` → `load_model_file`; the bridge picks classic vs four-token decoding from the loaded weights and `hyperparameters`):
+
+- **Four-token (role heads)** — `ChessModel` with separate heads for color / from-square / to-square / promotion (~140-token vocab). Loaded when the state dict contains `head_color` **or** `format_version >= 2`, unless the classic rules below win. `chess_server.py` uses the same factorized head path as training (multi-step scoring over legal move candidates).
+- **One-token (classic)** — **One** next-token prediction per move from a large move vocabulary (plus specials like `<STARTGAME>`), via a shared `lm_head`. Used when `token_mode == 'classic'` in the checkpoint, **or** `format_version >= 3` with an `lm_head` in the weights, **or** for the fallback basic **`TransformerModel`** (GPT-style; loader forces classic routing so the bridge does not expect role heads).
+- **MobileLLM-style** — Checkpoints with `rms_1` / `swiglu` layers load `MobileLLMModel` (single `lm_head` per step). Decoding follows the checkpoint’s `token_mode`; in practice these behave like classic LMs unless you trained a non-classic vocab.
+- **Not supported** — Old **factorized v1** checkpoints (`from_head` in keys) are rejected by the loader (re-train / export with a supported format).
+
+Game history passed to the model is the usual string: `<STARTGAME>` plus space-separated **UCI** moves (`e2e4`, …), same for both formats.
+
+**Training / checkpoint specs** (parquet format, move-token math, full `.pth` layout): see the trainer repo [Chess_with_GPThelp_to_write](https://github.com/jmrothberg/Chess_with_GPThelp_to_write) — [README.md](https://github.com/jmrothberg/Chess_with_GPThelp_to_write/blob/main/README.md) and [README_CHESS_PER_GAME.md](https://github.com/jmrothberg/Chess_with_GPThelp_to_write/blob/main/README_CHESS_PER_GAME.md). More detail lives there than in this Games repo.
+
 > **Note on the web link:** opening `chess.html` via the Quick Links table (GitHub / raw.githack) gives you **Human + Search only**. To use an LLM you must clone the repo, place `.pth` checkpoints in `chess/Chess_LLM_models copy/`, and run `chess_server.py` on your own machine — model files are 1.7–4.7 GB and can't be hosted or loaded in a browser.
 
 Pick any combination on the two dropdowns (White Player / Black Player). Human-vs-LLM, Search-vs-LLM, and full self-play (LLM-vs-LLM, Search-vs-Search) all work from a single **New Game** click.
