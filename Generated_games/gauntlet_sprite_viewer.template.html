@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Gauntlet III (Lynx) — sprite viewer</title>
+<style>
+  :root {
+    --bg: #0c0c12;
+    --panel: #17172080;
+    --panel-solid: #1a1a26;
+    --text: #e8e8f0;
+    --muted: #8b8ba0;
+    --accent: #e8c547;
+    --line: #2a2a3c;
+    --hi: #3a3a5c;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font: 13px/1.4 ui-monospace, 'SF Mono', Menlo, Consolas, monospace; }
+  header { padding: 10px 14px; border-bottom: 1px solid var(--line);
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+    position: sticky; top: 0; background: var(--bg); z-index: 10; }
+  header h1 { margin: 0; font-size: 14px; color: var(--accent); font-weight: 700;
+    letter-spacing: 0.05em; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  .ctl { display: flex; align-items: center; gap: 6px; padding: 4px 8px;
+    background: var(--panel-solid); border: 1px solid var(--line); border-radius: 4px; }
+  .ctl label { color: var(--muted); }
+  select, input, button { background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 3px; padding: 2px 6px;
+    font: inherit; }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  main { display: grid; grid-template-columns: 1fr 340px; height: calc(100vh - 46px); }
+  #grid { overflow: auto; padding: 12px; display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px;
+    align-content: start; }
+  .sprite {
+    background: var(--panel-solid); border: 1px solid var(--line); border-radius: 4px;
+    padding: 6px; cursor: pointer; display: flex; flex-direction: column; gap: 4px;
+    min-height: 110px; transition: border-color 0.08s;
+  }
+  .sprite:hover { border-color: var(--accent); }
+  .sprite.selected { border-color: var(--accent); background: #2a2618; }
+  .sprite canvas { image-rendering: pixelated; background: #000;
+    display: block; margin: 0 auto; max-width: 100%; }
+  .sprite .meta { font-size: 10px; color: var(--muted); display: flex;
+    justify-content: space-between; gap: 6px; }
+  .sprite .meta .off { color: var(--accent); }
+  .sprite .meta .dim { color: #a0a0b0; }
+  aside { border-left: 1px solid var(--line); padding: 14px;
+    overflow-y: auto; background: #101018; }
+  aside h2 { margin: 0 0 8px; font-size: 13px; color: var(--accent); }
+  aside .bigsprite canvas { image-rendering: pixelated; background: #000;
+    border: 1px solid var(--line); max-width: 100%; height: auto; }
+  aside .kv { display: grid; grid-template-columns: 80px 1fr; gap: 4px 10px;
+    font-size: 12px; margin: 8px 0; }
+  aside .kv .k { color: var(--muted); }
+  aside .kv .v { color: var(--text); word-break: break-all; }
+  pre.hex { background: #000; border: 1px solid var(--line); padding: 6px;
+    max-height: 260px; overflow: auto; font-size: 11px; line-height: 1.3;
+    white-space: pre; color: #9ab; }
+  #status { color: var(--muted); }
+  .palcells { display: flex; flex-wrap: wrap; gap: 2px; margin: 6px 0; }
+  .palcells span { width: 16px; height: 16px; border: 1px solid #333;
+    cursor: pointer; }
+  .group-hdr { grid-column: 1 / -1; padding: 6px 2px; color: var(--accent);
+    font-weight: 700; border-bottom: 1px dashed var(--line); }
+</style>
+</head>
+<body>
+<header>
+  <h1>GAUNTLET III — sprite viewer</h1>
+  <span class="sub" id="status">loading ROM…</span>
+  <span class="ctl"><label>palette</label>
+    <select id="pal">
+      <option value="gray">gray</option>
+      <option value="vivid" selected>vivid</option>
+      <option value="hot">hot</option>
+      <option value="flesh">flesh tones</option>
+    </select>
+  </span>
+  <span class="ctl"><label>mode</label>
+    <select id="modefilter">
+      <option value="all" selected>all</option>
+      <option value="rle">RLE only</option>
+      <option value="lit">literal only</option>
+    </select>
+  </span>
+  <span class="ctl"><label>bpp</label>
+    <select id="bppfilter">
+      <option value="all" selected>1/2/3/4</option>
+      <option value="4">4 (monsters)</option>
+      <option value="3">3 (monsters)</option>
+      <option value="2">2</option>
+      <option value="1">1 (fonts)</option>
+    </select>
+  </span>
+  <!-- NEW: filter to only multi-quadrant sprites (Suzy 2/3/4-quad composites
+       — usually the bigger centred pieces like bosses/icons) -->
+  <span class="ctl" title="show only multi-quadrant (stitched) sprites">
+    <label for="qonly">Q only</label>
+    <input id="qonly" type="checkbox"/>
+  </span>
+  <!-- NEW: jump-to-offset field (hex). Helpful for poking at specific ROM
+       addresses we already know contain interesting data. -->
+  <span class="ctl" title="jump to first sprite at or after this hex offset">
+    <label for="jump">jump</label>
+    <input id="jump" type="text" placeholder="hex" style="width:60px"/>
+    <button id="jumpgo">go</button>
+  </span>
+  <span class="ctl"><label>sort</label>
+    <select id="sort">
+      <option value="offset" selected>by offset</option>
+      <option value="size">by size (px)</option>
+      <option value="bpp">by bpp</option>
+    </select>
+  </span>
+  <span class="ctl"><label>scale</label>
+    <input id="scale" type="range" min="1" max="8" value="4" style="width:80px"/>
+    <span id="scaleval">4×</span>
+  </span>
+  <span class="ctl"><label>min H</label>
+    <input id="minh" type="number" value="4" min="1" max="64" style="width:44px"/>
+  </span>
+  <span class="ctl"><label>min W</label>
+    <input id="minw" type="number" value="4" min="1" max="64" style="width:44px"/>
+  </span>
+  <span class="ctl"><label>W tol</label>
+    <input id="wtol" type="number" value="2" min="0" max="6" style="width:40px"/>
+  </span>
+  <!-- toggle 4-quadrant stitching. When ON, multi-quad sprites render as full composed image. -->
+  <span class="ctl" title="compose 4 Lynx quadrants (DR/UR/UL/DL) around a center">
+    <label for="stitch">stitch quads</label>
+    <input id="stitch" type="checkbox" checked/>
+  </span>
+  <!-- NEW: loose mode — bypass the strict cohesion filter to surface every
+       decodable candidate. Useful for hunting small/faint sprites
+       (apples, keys, projectiles) that strict scoring may discard. -->
+  <span class="ctl" title="show every candidate including weak/structureless decodes">
+    <label for="loose">loose</label>
+    <input id="loose" type="checkbox"/>
+  </span>
+  <button id="rescan">rescan</button>
+</header>
+<main>
+  <div id="grid"><div class="group-hdr">decoding…</div></div>
+  <aside>
+    <h2>select a sprite</h2>
+    <div class="bigsprite"><canvas id="big"></canvas></div>
+    <!-- NEW: render the selected sprite in every palette at 4× side-by-side,
+         so the shape/colours are obvious without flipping the dropdown. -->
+    <h2 style="margin-top:14px">palette compare (click to use)</h2>
+    <div id="palcompare" style="display:flex;flex-wrap:wrap;gap:8px;margin:6px 0"></div>
+    <!-- NEW: shows sprites at the closest ROM offsets to the current selection.
+         Sprites stored close together in ROM are often animation frames of
+         the same character (e.g. scorpion walking N/S/E/W) — clicking a tile
+         here jumps to that sprite. -->
+    <h2 style="margin-top:14px">nearby in ROM (likely anim frames)</h2>
+    <div id="neighbours" style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0"></div>
+    <div class="kv" id="meta"></div>
+    <h2 style="margin-top:16px">palette (editable)</h2>
+    <div class="palcells" id="palcells"></div>
+    <h2 style="margin-top:16px">line-offsets bytes</h2>
+    <pre class="hex" id="lineoffs"></pre>
+    <h2>hex dump (sprite bytes)</h2>
+    <pre class="hex" id="hex"></pre>
+  </aside>
+</main>
+<script>
+/*=============================================================================
+  Lynx Suzy sprite decoder — JavaScript port of lynx_sprite_extract.py
+  Handles LITERAL and RLE (packed) formats at 1/2/3/4 bpp, MSB-first bitstream,
+  line-offset terminators (0 = end sprite, 1 = end quadrant).
+=============================================================================*/
+
+const BPPS = [1, 2, 3, 4];
+const MIN_H_DEFAULT = 4, MAX_H = 96;
+const MIN_W_DEFAULT = 4, MAX_W = 80;  // lowered from 8 so apples/keys qualify
+const WTOL_DEFAULT = 2;
+const CHAIN_MAX = 64;
+
+function decodePackedLine(lineBytes, bpp) {
+  // expand bytes to MSB-first bit array
+  const nBits = lineBytes.length * 8;
+  const bits = new Uint8Array(nBits);
+  for (let i = 0; i < lineBytes.length; i++) {
+    const b = lineBytes[i];
+    for (let k = 0; k < 8; k++) bits[i * 8 + k] = (b >> (7 - k)) & 1;
+  }
+  let pos = 0;
+  const pixels = [];
+  const maxPx = MAX_W * 2;
+  const mask = (1 << bpp) - 1;
+  // Need at least 5 bits for a packet header (type + 4-bit count).
+  while (pos + 5 <= nBits) {
+    const typ = bits[pos++];
+    let n = 0;
+    for (let k = 0; k < 4; k++) n = (n << 1) | bits[pos++];
+    if (typ === 0) {
+      // PACKED: per Handy LineGetPixel, a 4-bit count of 0 is an explicit
+      // END-OF-LINE marker (the bug fix — previously treated as count=1,
+      // which let the decoder accept huge amounts of garbage).
+      if (n === 0) break;
+      const count = n + 1;
+      if (pos + bpp > nBits) return null;
+      let v = 0;
+      for (let k = 0; k < bpp; k++) v = (v << 1) | bits[pos++];
+      v &= mask;
+      for (let c = 0; c < count; c++) pixels.push(v);
+    } else {
+      // LITERAL packet: count = n+1 pixels, bpp bits each.
+      const count = n + 1;
+      if (pos + count * bpp > nBits) return null;
+      for (let c = 0; c < count; c++) {
+        let v = 0;
+        for (let k = 0; k < bpp; k++) v = (v << 1) | bits[pos++];
+        pixels.push(v & mask);
+      }
+    }
+    if (pixels.length > maxPx) return null;
+  }
+  return pixels;
+}
+
+function decodeSpritePacked(data, offset, bpp, opts) {
+  const minH = opts.minH, minW = opts.minW, wtol = opts.wtol;
+  let pos = offset;
+  const lines = [];
+  let firstW = null;
+  // NEW: track which terminator ended the quadrant — 'sprite' (0x00) or 'quad' (0x01).
+  let terminator = null;
+  while (pos < data.length) {
+    const lo = data[pos];
+    if (lo === 0) { pos++; terminator = 'sprite'; break; }  // NEW: 0x00 = end-of-sprite
+    if (lo === 1) { pos++; terminator = 'quad'; break; }    // NEW: 0x01 = end-of-quadrant
+    if (lo < 2 || pos + lo > data.length) return null;
+    const lineBytes = data.subarray(pos + 1, pos + lo);
+    pos += lo;
+    const px = decodePackedLine(lineBytes, bpp);
+    if (!px || px.length === 0) return null;
+    const w = px.length;
+    if (w < minW || w > MAX_W) return null;
+    if (firstW === null) firstW = w;
+    else if (Math.abs(w - firstW) > wtol) return null;
+    lines.push(px);
+    if (lines.length > MAX_H) return null;
+  }
+  if (lines.length < minH) return null;
+  // normalize widths to the median (pad with 0, crop)
+  const widths = lines.map(l => l.length).sort((a, b) => a - b);
+  const target = widths[Math.floor(widths.length / 2)];
+  const norm = lines.map(l => {
+    if (l.length < target) return l.concat(new Array(target - l.length).fill(0));
+    if (l.length > target) return l.slice(0, target);
+    return l;
+  });
+  return { lines: norm, end: pos, terminator };  // NEW: expose terminator to caller
+}
+
+function decodeSpriteLiteral(data, offset, bpp, opts) {
+  // NEW: support 3bpp via bitstream (Handy reads pixels MSB-first from the
+  // line bytes; 3bpp doesn't byte-align but is still valid per the Lynx spec).
+  const minH = opts.minH, minW = opts.minW;
+  const mask = (1 << bpp) - 1;
+  let pos = offset;
+  const lines = [];
+  let firstLen = null;
+  let terminator = null;                                  // NEW: 'sprite' or 'quad'
+  while (pos < data.length) {
+    const lo = data[pos];
+    if (lo === 0) { pos++; terminator = 'sprite'; break; }
+    if (lo === 1) { pos++; terminator = 'quad'; break; }
+    if (lo < 2 || pos + lo > data.length) return null;
+    const lineBytes = data.subarray(pos + 1, pos + lo);
+    pos += lo;
+    if (firstLen === null) firstLen = lineBytes.length;
+    else if (lineBytes.length !== firstLen) return null;
+    // bitstream extract: pxCount = floor(linebytes*8 / bpp). MSB-first.
+    const totalBits = lineBytes.length * 8;
+    const pxCount = Math.floor(totalBits / bpp);
+    const px = new Array(pxCount);
+    let bitPos = 0;
+    for (let p = 0; p < pxCount; p++) {
+      let v = 0;
+      for (let k = 0; k < bpp; k++) {
+        const bp = bitPos++;
+        const byte = lineBytes[bp >> 3];
+        v = (v << 1) | ((byte >> (7 - (bp & 7))) & 1);
+      }
+      px[p] = v & mask;
+    }
+    if (px.length < minW || px.length > MAX_W) return null;
+    lines.push(px);
+    if (lines.length > MAX_H) return null;
+  }
+  if (lines.length < minH) return null;
+  return { lines, end: pos, terminator };
+}
+
+/*=============================================================================
+  NEW: multi-quadrant decoding + stitching.
+  Lynx sprites can be 1, 2, or 4 quadrants. Each quadrant is a normal sprite
+  stream ended by 0x01 (end-of-quad). The final quadrant ends with 0x00.
+  Suzy rotates the draw direction per quadrant: Q0=DR, Q1=UR, Q2=UL, Q3=DL.
+=============================================================================*/
+function decodeMultiQuad(data, offset, bpp, mode, opts) {
+  const fn = (mode === 'rle') ? decodeSpritePacked : decodeSpriteLiteral;
+  const quadrants = [];
+  let pos = offset;
+  let lastTerm = null;
+  for (let i = 0; i < 4; i++) {
+    const r = fn(data, pos, bpp, opts);
+    if (!r) break;
+    quadrants.push(r.lines);
+    pos = r.end;
+    lastTerm = r.terminator;
+    if (lastTerm !== 'quad') break;  // 'sprite' (0x00) or null → stop
+  }
+  if (!quadrants.length) return null;
+  return { quadrants, end: pos, lastTerm };
+}
+
+function stitchQuads(quads) {
+  // Q0=DR, Q1=UR, Q2=UL, Q3=DL. Each quadrant's [0,0] is the center pixel.
+  // For Q1..3 the quadrant is mirrored around the center seam.
+  const n = quads.length;
+  const W = [0, 0, 0, 0], H = [0, 0, 0, 0];
+  for (let i = 0; i < n; i++) { H[i] = quads[i].length; W[i] = quads[i][0].length; }
+  const right = Math.max(W[0] || 0, W[1] || 0);
+  const left  = Math.max(W[2] || 0, W[3] || 0);
+  const down  = Math.max(H[0] || 0, H[3] || 0);
+  const up    = Math.max(H[1] || 0, H[2] || 0);
+  const Wo = left + right, Ho = up + down;
+  if (Wo <= 0 || Ho <= 0) return quads[0];
+  const out = Array.from({ length: Ho }, () => new Array(Wo).fill(0));
+  const cx = left, cy = up;
+  // Q0 DR: normal
+  if (n >= 1) for (let y = 0; y < H[0]; y++) for (let x = 0; x < W[0]; x++)
+    out[cy + y][cx + x] = quads[0][y][x];
+  // Q1 UR: flipped vertically (line 0 just above center, going up)
+  if (n >= 2) for (let y = 0; y < H[1]; y++) for (let x = 0; x < W[1]; x++)
+    out[cy - 1 - y][cx + x] = quads[1][y][x];
+  // Q2 UL: flipped both
+  if (n >= 3) for (let y = 0; y < H[2]; y++) for (let x = 0; x < W[2]; x++)
+    out[cy - 1 - y][cx - 1 - x] = quads[2][y][x];
+  // Q3 DL: flipped horizontally
+  if (n >= 4) for (let y = 0; y < H[3]; y++) for (let x = 0; x < W[3]; x++)
+    out[cy + y][cx - 1 - x] = quads[3][y][x];
+  return out;
+}
+
+function scoreSprite(lines, bpp, loose) {
+  // NEW `loose` flag (default false): when true, lowers the cohesion floor
+  // and the uniq-color floor so the user can browse weaker candidates that
+  // the strict scorer rejects. Useful for hunting sprites we may have lost
+  // to over-aggressive filtering (e.g. small items like apples / keys).
+  const h = lines.length;
+  const w = lines[0].length;
+  let zeros = 0, total = 0;
+  const uniq = new Set();
+  for (const r of lines) for (const p of r) {
+    total++;
+    if (p === 0) zeros++;
+    uniq.add(p);
+  }
+  // strict requires >=2 colors; loose admits 1-color blocks too (rare items)
+  if (!loose && uniq.size < 2) return -1;
+  if (loose && uniq.size < 1) return -1;
+  const trans = zeros / total;
+  if (trans > 0.97) return -1;
+  // structure check: random ROM bytes can decode as "valid sprites" too,
+  // especially in literal mode at higher bpp. Real sprites have spatial
+  // structure — most pixels match at least one neighbour. Noise scrambles.
+  let neigh = 0;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const v = lines[y][x];
+    if ((x > 0 && lines[y][x - 1] === v) ||
+        (x < w - 1 && lines[y][x + 1] === v) ||
+        (y > 0 && lines[y - 1][x] === v) ||
+        (y < h - 1 && lines[y + 1][x] === v)) neigh++;
+  }
+  const cohesion = neigh / total;
+  // strict cutoff = 0.35; loose cutoff = 0.18 (catches faint structure)
+  const cutoff = loose ? 0.18 : 0.35;
+  if (cohesion < cutoff) return -1;
+  const shape = Math.min(h, 32) + Math.min(w, 32);
+  return shape + uniq.size * 2 - Math.abs(trans - 0.35) * 20 + cohesion * 10;
+}
+
+/*=============================================================================
+  Palettes
+=============================================================================*/
+const PAL_GRAY = (bpp) => {
+  const n = 1 << bpp; const out = new Array(n);
+  for (let i = 0; i < n; i++) {
+    if (i === 0) out[i] = [20, 20, 30];
+    else { const g = Math.floor(32 + (i / (n - 1 || 1)) * 220); out[i] = [g, g, g]; }
+  }
+  return out;
+};
+const PAL_VIVID_BASE = [
+  [20, 20, 30], [255, 255, 255], [200, 40, 40], [40, 200, 40],
+  [40, 90, 220], [230, 200, 60], [200, 120, 40], [180, 60, 200],
+  [80, 80, 80], [150, 150, 150], [255, 150, 150], [150, 255, 150],
+  [150, 190, 255], [255, 230, 120], [220, 160, 100], [235, 180, 235],
+];
+const PAL_HOT_BASE = [
+  [15, 0, 15], [255, 240, 200], [255, 160, 40], [240, 80, 0],
+  [180, 0, 0], [100, 0, 0], [40, 20, 60], [30, 60, 100],
+  [60, 120, 160], [160, 200, 220], [230, 230, 180], [200, 140, 40],
+  [140, 60, 0], [80, 20, 0], [40, 0, 20], [10, 0, 10],
+];
+const PAL_FLESH_BASE = [
+  [20, 20, 30], [255, 230, 210], [240, 190, 160], [210, 140, 110],
+  [160, 90, 60], [110, 50, 30], [70, 30, 20], [40, 20, 10],
+  [250, 250, 250], [200, 200, 210], [180, 60, 60], [120, 40, 30],
+  [60, 40, 100], [40, 80, 40], [100, 180, 80], [220, 200, 120],
+];
+
+function makePal(name, bpp) {
+  const n = 1 << bpp;
+  let base;
+  switch (name) {
+    case 'gray': return PAL_GRAY(bpp);
+    case 'hot': base = PAL_HOT_BASE; break;
+    case 'flesh': base = PAL_FLESH_BASE; break;
+    default: base = PAL_VIVID_BASE;
+  }
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(base[i] || [128, 128, 128]);
+  return out;
+}
+
+/*=============================================================================
+  Scanning pipeline (matches lynx_sprite_extract.py)
+=============================================================================*/
+// NEW: helper that wraps a decodeMultiQuad result into a sprite record.
+//  lines = quadrants[0] (so existing scoring/rendering keep working),
+//  quadrants = full list, stitched = composed image or null for single-quad.
+function mkSprite(mode, bpp, off, r) {
+  const qs = r.quadrants;
+  const stitched = qs.length > 1 ? stitchQuads(qs) : null;
+  return {
+    mode, bpp, off,
+    lines: qs[0],
+    quadrants: qs,
+    stitched,
+    end: r.end,
+    lastTerm: r.lastTerm,
+  };
+}
+
+// NEW: forward-tiling scan per (mode, bpp). When we decode a valid sprite at
+// `pos`, the next sprite starts at `pos = end`. If decode fails at `pos`, we
+// slide 1 byte. This catches every sprite in a contiguous region without
+// greedy dedup eating small neighbours (the "apple problem").
+// Only accept blocks that end cleanly on a sprite terminator (0x00).
+function tileForward(data, mode, bpp, opts) {
+  const out = [];
+  let pos = 0;
+  const end = data.length - 2;
+  // NEW: thread opts.loose through to the scorer
+  const loose = !!opts.loose;
+  while (pos < end) {
+    const r = decodeMultiQuad(data, pos, bpp, mode, opts);
+    let accepted = false;
+    if (r && r.lastTerm === 'sprite') {
+      const score = scoreSprite(r.quadrants[0], bpp, loose);
+      if (score > 0) {
+        const sp = mkSprite(mode, bpp, pos, r);
+        sp.score = score;
+        out.push(sp);
+        pos = r.end;
+        accepted = true;
+      }
+    }
+    if (!accepted) pos += 1;
+  }
+  return out;
+}
+
+function scanRom(data, opts) {
+  // forward-tile each (mode, bpp) across the whole cart.
+  // This replaces the old brute-force + greedy-longest dedup, which was
+  // swallowing valid small sprites that happened to overlap a bigger decode.
+  const all = [];
+  for (const mode of ['rle', 'lit']) {
+    for (const bpp of BPPS) {
+      const f = tileForward(data, mode, bpp, opts);
+      for (const s of f) all.push(s);
+    }
+  }
+  all.sort((a, b) => a.off - b.off || a.bpp - b.bpp);
+  return all;
+}
+
+/*=============================================================================
+  Rendering
+=============================================================================*/
+function renderSprite(canvas, lines, pal, scale) {
+  const h = lines.length, w = lines[0].length;
+  canvas.width = w * scale;
+  canvas.height = h * scale;
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  const img = ctx.createImageData(w, h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const v = lines[y][x];
+    const [r, g, b] = pal[v] || [255, 0, 255];
+    const o = (y * w + x) * 4;
+    img.data[o] = r; img.data[o + 1] = g; img.data[o + 2] = b; img.data[o + 3] = 255;
+  }
+  // draw at 1x to temp canvas, then scale
+  const tmp = document.createElement('canvas');
+  tmp.width = w; tmp.height = h;
+  tmp.getContext('2d').putImageData(img, 0, 0);
+  ctx.drawImage(tmp, 0, 0, w * scale, h * scale);
+}
+
+/*=============================================================================
+  UI
+=============================================================================*/
+const ui = {
+  pal: document.getElementById('pal'),
+  modefilter: document.getElementById('modefilter'),
+  bppfilter: document.getElementById('bppfilter'),
+  sort: document.getElementById('sort'),
+  scale: document.getElementById('scale'),
+  scaleval: document.getElementById('scaleval'),
+  minh: document.getElementById('minh'),
+  minw: document.getElementById('minw'),
+  wtol: document.getElementById('wtol'),
+  stitch: document.getElementById('stitch'),  // 4-quadrant stitch toggle
+  qonly: document.getElementById('qonly'),    // filter to multi-quad sprites
+  jump: document.getElementById('jump'),      // hex offset jump field
+  jumpgo: document.getElementById('jumpgo'),  // jump button
+  loose: document.getElementById('loose'),    // NEW: loose-mode toggle (no cohesion filter)
+  palcompare: document.getElementById('palcompare'), // side-by-side palette panel
+  neighbours: document.getElementById('neighbours'), // NEW: nearby-offset strip (anim frames)
+  rescan: document.getElementById('rescan'),
+  grid: document.getElementById('grid'),
+  status: document.getElementById('status'),
+  big: document.getElementById('big'),
+  meta: document.getElementById('meta'),
+  hex: document.getElementById('hex'),
+  lineoffs: document.getElementById('lineoffs'),
+  palcells: document.getElementById('palcells'),
+};
+
+let ROM = null;      // Uint8Array of cart body (header stripped)
+let SPRITES = [];    // decoded sprite list
+let SELECTED = null; // currently shown sprite
+
+function hex(n, w = 4) { return n.toString(16).padStart(w, '0'); }
+
+// NEW: pick the pixel grid to render based on the stitch toggle.
+// If stitching is on and the sprite has >1 quadrant, use the stitched composite;
+// otherwise fall back to quadrant 0 (the historical behaviour).
+function viewLines(s) {
+  return (ui.stitch && ui.stitch.checked && s.stitched) ? s.stitched : s.lines;
+}
+
+function renderGrid() {
+  const palName = ui.pal.value;
+  const modeF = ui.modefilter.value;
+  const bppF = ui.bppfilter.value;
+  const sortBy = ui.sort.value;
+  const scale = parseInt(ui.scale.value, 10);
+  ui.scaleval.textContent = scale + '×';
+
+  let list = SPRITES.slice();
+  if (modeF !== 'all') list = list.filter(s => s.mode === modeF);
+  if (bppF !== 'all') list = list.filter(s => s.bpp === +bppF);
+  // NEW: multi-quadrant only filter
+  if (ui.qonly && ui.qonly.checked) list = list.filter(s => s.quadrants && s.quadrants.length > 1);
+  // NEW: sort-by-size uses the currently-displayed (possibly stitched) pixel grid.
+  if (sortBy === 'size') list.sort((a, b) => {
+    const la = viewLines(a), lb = viewLines(b);
+    return (lb.length * lb[0].length) - (la.length * la[0].length);
+  });
+  else if (sortBy === 'bpp') list.sort((a, b) => a.bpp - b.bpp || a.off - b.off);
+  else list.sort((a, b) => a.off - b.off);
+
+  ui.grid.innerHTML = '';
+
+  // group header per bpp/mode for clarity
+  let lastKey = null;
+  for (const s of list) {
+    const key = s.mode + s.bpp;
+    if (key !== lastKey) {
+      const h = document.createElement('div');
+      h.className = 'group-hdr';
+      h.textContent = `${s.mode.toUpperCase()} · ${s.bpp}bpp  (${list.filter(x => (x.mode + x.bpp) === key).length} sprites)`;
+      ui.grid.appendChild(h);
+      lastKey = key;
+    }
+    const el = document.createElement('div');
+    el.className = 'sprite';
+    const c = document.createElement('canvas');
+    // NEW: render the stitched composite when the toggle is on and sprite is multi-quad.
+    const vl = viewLines(s);
+    renderSprite(c, vl, makePal(palName, s.bpp), scale);
+    el.appendChild(c);
+    const m = document.createElement('div');
+    m.className = 'meta';
+    const nq = s.quadrants ? s.quadrants.length : 1;   // NEW: quadrant badge
+    const qBadge = nq > 1 ? ` <span class="off">·Q${nq}</span>` : '';
+    m.innerHTML = `<span class="off">0x${hex(s.off, 5)}${qBadge}</span>` +
+                  `<span class="dim">${vl[0].length}×${vl.length}</span>`;
+    el.appendChild(m);
+    el.onclick = () => selectSprite(s, el);
+    ui.grid.appendChild(el);
+  }
+  ui.status.textContent =
+    `${SPRITES.length} sprites decoded · ${list.length} shown · ROM 128KB + 64B LNX header`;
+}
+
+function selectSprite(s, elOrNull) {
+  SELECTED = s;
+  // highlight
+  document.querySelectorAll('.sprite.selected').forEach(e => e.classList.remove('selected'));
+  if (elOrNull) elOrNull.classList.add('selected');
+
+  const palName = ui.pal.value;
+  const pal = makePal(palName, s.bpp);
+  const vl = viewLines(s);                   // NEW: respect stitch toggle
+  renderSprite(ui.big, vl, pal, 8);
+
+  // NEW: side-by-side palette comparison. Render the same sprite with each
+  // palette at 4× so the user can pick the one that makes the sprite obvious
+  // (the ROM doesn't ship with PENPAL data wired up, so per-sprite "true"
+  // colours aren't available — picking a palette is the fastest path to
+  // recognising what the sprite actually is).
+  if (ui.palcompare) {
+    ui.palcompare.innerHTML = '';
+    const paletteNames = ['gray', 'vivid', 'hot', 'flesh'];
+    for (const name of paletteNames) {
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;cursor:pointer;font-size:11px;color:#a0a0b0';
+      const c2 = document.createElement('canvas');
+      renderSprite(c2, vl, makePal(name, s.bpp), 4);
+      c2.style.cssText = 'image-rendering:pixelated;background:#000;border:1px solid #2a2a3a';
+      const lbl = document.createElement('span');
+      lbl.textContent = name + (name === palName ? ' ✓' : '');
+      if (name === palName) lbl.style.color = '#ffd255';
+      wrap.appendChild(c2); wrap.appendChild(lbl);
+      wrap.onclick = () => { ui.pal.value = name; renderGrid(); selectSprite(s, null); };
+      ui.palcompare.appendChild(wrap);
+    }
+  }
+
+  // NEW: neighbours strip — show the 8 closest sprites (by ROM offset) so the
+  // user can flip through likely animation frames of the same character.
+  // Uses the SAME palette as the main view for direct visual comparison.
+  if (ui.neighbours) {
+    ui.neighbours.innerHTML = '';
+    const idx = SPRITES.indexOf(s);
+    const lo = Math.max(0, idx - 4);
+    const hi = Math.min(SPRITES.length, idx + 5);
+    for (let i = lo; i < hi; i++) {
+      const ns = SPRITES[i];
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;cursor:pointer;font-size:10px;color:#a0a0b0';
+      const c3 = document.createElement('canvas');
+      const nvl = (ui.stitch && ui.stitch.checked && ns.stitched) ? ns.stitched : ns.lines;
+      renderSprite(c3, nvl, makePal(palName, ns.bpp), 3);
+      c3.style.cssText = 'image-rendering:pixelated;background:#000;border:1px solid ' + (i === idx ? '#e8c547' : '#2a2a3a');
+      const lbl = document.createElement('span');
+      lbl.textContent = '0x' + hex(ns.off, 5);
+      if (i === idx) lbl.style.color = '#ffd255';
+      wrap.appendChild(c3); wrap.appendChild(lbl);
+      wrap.onclick = () => selectSprite(ns, null);
+      ui.neighbours.appendChild(wrap);
+    }
+  }
+
+  // meta panel
+  const nq = s.quadrants ? s.quadrants.length : 1;
+  // NEW: per-quadrant size string (e.g. "12x14 | 12x14 | 12x14 | 12x14")
+  const qSizes = s.quadrants
+    ? s.quadrants.map(q => `${q[0].length}×${q.length}`).join(' | ')
+    : `${s.lines[0].length}×${s.lines.length}`;
+  ui.meta.innerHTML = `
+    <div class="k">offset</div><div class="v">0x${hex(s.off, 5)} (${s.off})</div>
+    <div class="k">end</div><div class="v">0x${hex(s.end, 5)} (${s.end - s.off} bytes)</div>
+    <div class="k">mode</div><div class="v">${s.mode === 'rle' ? 'RLE (packed)' : 'LITERAL (raw)'}</div>
+    <div class="k">bpp</div><div class="v">${s.bpp} (${1 << s.bpp} colors)</div>
+    <div class="k">quads</div><div class="v">${nq} (${qSizes})</div>
+    <div class="k">size</div><div class="v">${vl[0].length} × ${vl.length} px${s.stitched && ui.stitch.checked ? ' (stitched)' : ''}</div>
+    <div class="k">score</div><div class="v">${s.score.toFixed(1)}</div>
+  `;
+
+  // palette cells (clickable to edit one color)
+  ui.palcells.innerHTML = '';
+  const palCurrent = pal.map(c => c.slice());
+  for (let i = 0; i < palCurrent.length; i++) {
+    const sp = document.createElement('span');
+    sp.style.background = `rgb(${palCurrent[i].join(',')})`;
+    sp.title = `color ${i}`;
+    sp.onclick = () => {
+      const hexIn = prompt(`color ${i} — hex (e.g. #ff8800):`,
+        '#' + palCurrent[i].map(v => v.toString(16).padStart(2, '0')).join(''));
+      if (!hexIn) return;
+      const m = hexIn.trim().match(/^#?([0-9a-f]{6})$/i);
+      if (!m) return;
+      const v = parseInt(m[1], 16);
+      palCurrent[i] = [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+      sp.style.background = `rgb(${palCurrent[i].join(',')})`;
+      renderSprite(ui.big, viewLines(s), palCurrent, 8);  // NEW: use stitched view
+    };
+    ui.palcells.appendChild(sp);
+  }
+
+  // line-offsets dump (shows the raw line structure)
+  let p = s.off; const loLines = [];
+  for (let i = 0; i < 64; i++) {
+    if (p >= s.end) break;
+    const lo = ROM[p];
+    loLines.push(`L${String(i).padStart(2)} @0x${hex(p, 5)}: off=${lo}  (${lo - 1} data bytes)`);
+    if (lo < 2) { loLines.push('   (end marker)'); break; }
+    p += lo;
+  }
+  ui.lineoffs.textContent = loLines.join('\n');
+
+  // hex dump
+  const bytes = ROM.subarray(s.off, s.end);
+  const out = [];
+  for (let r = 0; r < bytes.length; r += 16) {
+    const chunk = bytes.subarray(r, Math.min(r + 16, bytes.length));
+    const hh = Array.from(chunk).map(b => hex(b, 2)).join(' ');
+    const aa = Array.from(chunk).map(b =>
+      (b >= 32 && b < 127) ? String.fromCharCode(b) : '.').join('');
+    out.push(`${hex(s.off + r, 5)}  ${hh.padEnd(48)}  ${aa}`);
+  }
+  ui.hex.textContent = out.join('\n');
+}
+
+/*=============================================================================
+  Boot
+=============================================================================*/
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function boot() {
+  ui.status.textContent = 'decoding ROM…';
+  await new Promise(r => setTimeout(r, 20));  // let UI paint
+  const full = base64ToBytes(ROM_B64);
+  ROM = full.subarray(64);  // strip LNX header
+  const opts = {
+    minH: parseInt(ui.minh.value, 10) || MIN_H_DEFAULT,
+    minW: parseInt(ui.minw.value, 10) || MIN_W_DEFAULT,
+    wtol: parseInt(ui.wtol.value, 10),
+    loose: !!(ui.loose && ui.loose.checked),  // NEW: thread loose flag into scanner
+  };
+  const t0 = performance.now();
+  SPRITES = scanRom(ROM, opts);
+  const dt = Math.round(performance.now() - t0);
+  ui.status.textContent = `${SPRITES.length} sprites · scan ${dt}ms · click any tile`;
+  renderGrid();
+  if (SPRITES.length) selectSprite(
+    // prefer a 4-quadrant RLE sprite (centered monster) as the default selection
+    SPRITES.find(s => s.mode === 'rle' && s.quadrants && s.quadrants.length === 4 && s.bpp >= 3) ||
+    SPRITES.find(s => s.mode === 'rle' && s.bpp === 3 &&
+                      s.lines.length >= 12 && s.lines[0].length >= 12) || SPRITES[0],
+    null);
+}
+
+for (const id of ['pal', 'modefilter', 'bppfilter', 'sort', 'scale']) {
+  document.getElementById(id).addEventListener('input', renderGrid);
+}
+// NEW: the stitch toggle affects both the grid and the selected-sprite panel.
+ui.stitch.addEventListener('change', () => {
+  renderGrid();
+  if (SELECTED) selectSprite(SELECTED, null);
+});
+// NEW: Q-only filter
+if (ui.qonly) ui.qonly.addEventListener('change', renderGrid);
+// NEW: jump-to-offset — find the first sprite at or after the typed hex offset.
+function doJump() {
+  const v = (ui.jump.value || '').trim().replace(/^0x/i, '');
+  if (!v) return;
+  const target = parseInt(v, 16);
+  if (isNaN(target)) return;
+  const hit = SPRITES.find(s => s.off >= target);
+  if (hit) {
+    selectSprite(hit, null);
+    // also scroll the grid to the matching tile
+    const tiles = ui.grid.querySelectorAll('.sprite');
+    for (const t of tiles) if (t.textContent.includes(hex(hit.off, 5))) {
+      t.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      t.classList.add('selected');
+      break;
+    }
+  }
+}
+if (ui.jumpgo) ui.jumpgo.onclick = doJump;
+if (ui.jump) ui.jump.addEventListener('keydown', e => { if (e.key === 'Enter') doJump(); });
+// NEW: toggling loose mode triggers a rescan since it changes the sprite set
+if (ui.loose) ui.loose.addEventListener('change', boot);
+ui.rescan.onclick = boot;
+
+// ROM payload: base64 of the entire .lnx file (64B header + 128KB cart).
+const ROM_B64 = "__ROM_B64_PLACEHOLDER__";
+
+boot();
+</script>
+</body>
+</html>
