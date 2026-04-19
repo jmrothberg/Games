@@ -9,7 +9,7 @@ Minimal stdlib HTTP server that bridges chess.html (browser) to Chess_Inference
                                 returns {"moves": ["g1f3", "b1c3", ...]}
 
 Run:
-    python3 "Generated_games/chess_server.py"
+    python3 "chess/chess_server.py"
 Then open http://localhost:5858/chess.html
 """
 
