@@ -178,26 +178,37 @@ from 2D pixel-index arrays at load.
 ---
 
 ### JMR's Chess (Human / Search / LLM)
-**File:** `Generated_games/chess.html` + `Generated_games/chess_server.py`
+**File:** `chess/chess.html` + `chess/chess_server.py`
 
 Full-rules chess with independent per-side player choice — any of:
 
 - **Human** — click-to-move, with a promotion overlay. Works anywhere the page loads.
 - **Search** — built-in minimax + alpha-beta with iterative deepening, MVV-LVA move ordering, and quiescence. Depth 1–7. Works anywhere the page loads.
-- **LLM** — a PyTorch chess transformer loaded from `Generated_games/Chess_LLM_models copy/*.pth`. **Requires running `chess_server.py` locally** — the LLM dropdown is disabled when the bridge isn't reachable.
+- **LLM** — a PyTorch chess transformer loaded from `chess/Chess_LLM_models copy/*.pth`. **Requires running `chess_server.py` locally** — the LLM dropdown is disabled when the bridge isn't reachable.
 
-> **Note on the web link:** opening `chess.html` via the Quick Links table (GitHub / raw.githack) gives you **Human + Search only**. To use an LLM you must clone the repo, place `.pth` checkpoints in `Chess_LLM_models copy/`, and run `chess_server.py` on your own machine — model files are 1.7–4.7 GB and can't be hosted or loaded in a browser.
+**LLM checkpoint formats** (see `chess/Chess_Inference copy.py` → `load_model_file`; the bridge picks classic vs four-token decoding from the loaded weights and `hyperparameters`):
+
+- **Four-token (role heads)** — `ChessModel` with separate heads for color / from-square / to-square / promotion (~140-token vocab). Loaded when the state dict contains `head_color` **or** `format_version >= 2`, unless the classic rules below win. `chess_server.py` uses the same factorized head path as training (multi-step scoring over legal move candidates).
+- **One-token (classic)** — **One** next-token prediction per move from a large move vocabulary (plus specials like `<STARTGAME>`), via a shared `lm_head`. Used when `token_mode == 'classic'` in the checkpoint, **or** `format_version >= 3` with an `lm_head` in the weights, **or** for the fallback basic **`TransformerModel`** (GPT-style; loader forces classic routing so the bridge does not expect role heads).
+- **MobileLLM-style** — Checkpoints with `rms_1` / `swiglu` layers load `MobileLLMModel` (single `lm_head` per step). Decoding follows the checkpoint’s `token_mode`; in practice these behave like classic LMs unless you trained a non-classic vocab.
+- **Not supported** — Old **factorized v1** checkpoints (`from_head` in keys) are rejected by the loader (re-train / export with a supported format).
+
+Game history passed to the model is the usual string: `<STARTGAME>` plus space-separated **UCI** moves (`e2e4`, …), same for both formats.
+
+**Training / checkpoint specs** (parquet format, move-token math, full `.pth` layout): see the trainer repo [Chess_with_GPThelp_to_write](https://github.com/jmrothberg/Chess_with_GPThelp_to_write) — [README.md](https://github.com/jmrothberg/Chess_with_GPThelp_to_write/blob/main/README.md) and [README_CHESS_PER_GAME.md](https://github.com/jmrothberg/Chess_with_GPThelp_to_write/blob/main/README_CHESS_PER_GAME.md). More detail lives there than in this Games repo.
+
+> **Note on the web link:** opening `chess.html` via the Quick Links table (GitHub / raw.githack) gives you **Human + Search only**. To use an LLM you must clone the repo, place `.pth` checkpoints in `chess/Chess_LLM_models copy/`, and run `chess_server.py` on your own machine — model files are 1.7–4.7 GB and can't be hosted or loaded in a browser.
 
 Pick any combination on the two dropdowns (White Player / Black Player). Human-vs-LLM, Search-vs-LLM, and full self-play (LLM-vs-LLM, Search-vs-Search) all work from a single **New Game** click.
 
 **Running the LLM bridge** (required only if you want the LLM option; Human and Search work as a plain HTML page):
 
 ```
-python3 "Generated_games/chess_server.py"
+python3 "chess/chess_server.py"
 # then open http://localhost:5858/chess.html
 ```
 
-The bridge is stdlib-only (`http.server`) — no pip installs beyond PyTorch itself. It serves `chess.html`, lists the `.pth` files in `Generated_games/Chess_LLM_models copy/`, and on each LLM turn returns the top-20 UCI candidate moves from the selected model. Models are lazy-loaded and cached.
+The bridge is stdlib-only (`http.server`) — no pip installs beyond PyTorch itself. It serves `chess.html`, lists the `.pth` files in `chess/Chess_LLM_models copy/`, and on each LLM turn returns the top-20 UCI candidate moves from the selected model. Models are lazy-loaded and cached.
 
 **LLM stats row** — under the status line, the page shows per-side:
 
@@ -228,7 +239,7 @@ The bridge is stdlib-only (`http.server`) — no pip installs beyond PyTorch its
 | 3D Tank Battle | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/3D_Tank_Battle.html) |
 | Gauntlet: The Third Encounter | Mobile/Desktop | [Play](https://jmrothberg.github.io/Games/gauntlet_third_encounter.html) |
 | Vector Tanks | Desktop | [Play](https://jmrothberg.github.io/Games/Generated_games/vector_tanks.html) |
-| Chess (Human + Search only — LLM needs local bridge) | Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/Generated_games/chess.html) |
+| Chess (Human + Search only — LLM needs local bridge) | Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/chess/chess.html) |
 
 ---
 

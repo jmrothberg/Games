@@ -38,3 +38,6 @@ temp_script.py
 
 # Generated files that shouldn't be tracked
 *.log
+
+# Large local chess checkpoints (not in repo; place .pth files here after clone)
+chess/Chess_LLM_models copy/
