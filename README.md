@@ -139,6 +139,28 @@ Classic dig-and-collect arcade action! Based on the 1982 Universal classic.
 
 ---
 
+### JMR's Morse Code Tapper
+**File:** `morse.html`
+
+Learn Morse code by tapping it out. Inspired by the classic brass Morse-code keychain — a binary tree where each tap navigates left (dash) or right (dot) until you land on a letter.
+
+- **Controls:**
+  - Short tap = dot (·)
+  - Hold = dash (−)
+  - Pause ~1s after a letter to register it
+  - Keyboard: Spacebar to tap, Backspace to clear
+- **Features:**
+  - Full ITU/English Morse tree (26 letters)
+  - Path lights up on the tree as you tap
+  - Letter flashes when decoded
+  - Continuous tone while pressed (real key feel)
+  - Free mode + Quiz mode (random target letter)
+  - Touch-optimized for iPhone/iPad with safe-area support
+
+**Play:** [https://jmrothberg.github.io/Games/morse.html](https://jmrothberg.github.io/Games/morse.html)
+
+---
+
 ### JMR's Gauntlet: The Third Encounter
 **File:** `gauntlet_third_encounter.html`
 
@@ -238,6 +260,7 @@ The bridge is stdlib-only (`http.server`) — no pip installs beyond PyTorch its
 | Mr. Do! | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/mrdo.html) |
 | 3D Tank Battle | Mobile/Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/3D_Tank_Battle.html) |
 | Gauntlet: The Third Encounter | Mobile/Desktop | [Play](https://jmrothberg.github.io/Games/gauntlet_third_encounter.html) |
+| Morse Code Tapper | Mobile/Desktop | [Play](https://jmrothberg.github.io/Games/morse.html) |
 | Vector Tanks | Desktop | [Play](https://jmrothberg.github.io/Games/Generated_games/vector_tanks.html) |
 | Chess (Human + Search only — LLM needs local bridge) | Desktop | [Play](https://raw.githack.com/jmrothberg/Games/main/chess/chess.html) |
 

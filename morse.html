@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0a0a08">
+<title>JMR's Morse Code Tapper</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body {
+  margin: 0; padding: 0; height: 100%;
+  background: #0a0a08;
+  color: #d4af37;
+  font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+  overscroll-behavior: none;
+}
+body {
+  display: flex; flex-direction: column;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  height: 100vh; height: 100dvh;
+}
+header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 14px;
+  border-bottom: 1px solid #3a2e10;
+  flex-shrink: 0;
+  background: linear-gradient(180deg, #1a1306 0%, #0a0a08 100%);
+}
+header h1 {
+  margin: 0; font-size: 14px; letter-spacing: 5px; font-weight: 700;
+  color: #d4af37;
+  text-shadow: 0 0 8px rgba(212,175,55,0.4);
+}
+.btns { display: flex; gap: 6px; }
+.btns button {
+  background: #2a200a; color: #d4af37; border: 1px solid #6a5418;
+  border-radius: 5px; padding: 5px 10px; font-size: 11px;
+  font-weight: 700; cursor: pointer; letter-spacing: 1.5px;
+  font-family: inherit;
+}
+.btns button.active { background: #d4af37; color: #1a1206; border-color: #fff0a8; }
+.btns button:active { transform: translateY(1px); }
+
+#tree {
+  flex: 1; min-height: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 6px 4px 2px;
+}
+#tree svg { width: 100%; height: 100%; max-width: 800px; display: block; }
+
+.display {
+  padding: 8px 14px 6px;
+  border-top: 1px solid #3a2e10;
+  text-align: center;
+  flex-shrink: 0;
+  background: #0a0a08;
+}
+.target {
+  font-size: 11px; color: #8a7028; letter-spacing: 2px;
+  margin-bottom: 2px; min-height: 16px;
+  text-transform: uppercase;
+}
+.target b {
+  color: #fff0a8; font-size: 26px; letter-spacing: 0; margin-left: 8px;
+  text-shadow: 0 0 10px #ffd700;
+}
+.seq {
+  font-family: 'Menlo', 'Courier New', monospace;
+  font-size: 32px; line-height: 1.1;
+  min-height: 38px; letter-spacing: 8px;
+  color: #f4d764;
+  text-shadow: 0 0 8px rgba(212,175,55,0.6);
+}
+.letter {
+  font-size: 18px; color: #fffbe1; min-height: 22px;
+  letter-spacing: 4px; word-break: break-all;
+  font-family: 'Menlo', 'Courier New', monospace;
+}
+
+#tap {
+  height: 24vh; min-height: 130px;
+  background: radial-gradient(circle at center, #1a1308 0%, #0a0a08 70%);
+  border-top: 2px solid #6a5418;
+  display: flex; align-items: center; justify-content: center;
+  position: relative;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+#tap.active {
+  background: radial-gradient(circle at center, #6a5418 0%, #1a1308 50%, #0a0a08 90%);
+}
+.key {
+  width: 110px; height: 110px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #fff0a8 0%, #d4af37 35%, #6a5418 100%);
+  border: 4px solid #3a2e10;
+  box-shadow: 0 6px 22px rgba(0,0,0,0.7), inset 0 -6px 12px rgba(0,0,0,0.4);
+  display: flex; align-items: center; justify-content: center;
+  pointer-events: none;
+  transition: transform 80ms, box-shadow 80ms;
+}
+#tap.active .key {
+  transform: translateY(4px) scale(0.96);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.6), inset 0 -3px 8px rgba(0,0,0,0.3), 0 0 50px #ffd700;
+}
+.key svg { width: 64px; height: 64px; }
+.hint {
+  position: absolute; bottom: 8px; left: 0; right: 0;
+  text-align: center; font-size: 10px; color: #6a5418;
+  letter-spacing: 1.5px; pointer-events: none;
+}
+
+/* SVG node styles */
+.branch { stroke: #4a3810; stroke-width: 1.5; fill: none; stroke-linecap: round; }
+.branch.lit { stroke: #ffd700; stroke-width: 3.5; filter: drop-shadow(0 0 4px #ffd700); }
+.node-bg { fill: #1a1308; stroke: #8a7028; stroke-width: 1.5; transition: fill 120ms, stroke 120ms; }
+.node-bg.lit { fill: #d4af37; stroke: #fff0a8; }
+.node-bg.found { fill: #fff0a8; stroke: #fff; filter: drop-shadow(0 0 8px #ffd700); }
+.node-label {
+  fill: #d4af37; font-size: 13px; font-weight: 700; font-family: inherit;
+  text-anchor: middle; dominant-baseline: central;
+  pointer-events: none;
+  transition: fill 120ms;
+}
+.node-label.lit { fill: #1a1306; }
+.node-label.found { fill: #1a1306; }
+.root-icon { fill: none; stroke: #d4af37; stroke-width: 1.5; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>MORSE&nbsp;•&nbsp;CODE</h1>
+  <div class="btns">
+    <button id="modeFree" class="active">FREE</button>
+    <button id="modeQuiz">QUIZ</button>
+    <button id="clearBtn">CLR</button>
+  </div>
+</header>
+
+<div id="tree">
+  <svg id="svg" viewBox="0 0 800 420" preserveAspectRatio="xMidYMid meet"></svg>
+</div>
+
+<div class="display">
+  <div class="target" id="target">&nbsp;</div>
+  <div class="seq" id="seq">&nbsp;</div>
+  <div class="letter" id="decoded">&nbsp;</div>
+</div>
+
+<div id="tap">
+  <div class="key">
+    <svg viewBox="0 0 64 64" aria-hidden="true">
+      <path d="M32 6 L32 44" stroke="#1a1306" stroke-width="3" stroke-linecap="round" fill="none"/>
+      <circle cx="32" cy="6" r="3" fill="#1a1306"/>
+      <path d="M20 18 Q32 28 44 18" stroke="#1a1306" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+      <path d="M14 12 Q32 30 50 12" stroke="#1a1306" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.6"/>
+      <circle cx="32" cy="50" r="7" fill="#1a1306"/>
+    </svg>
+  </div>
+  <div class="hint">SHORT TAP = DOT&nbsp; • &nbsp;HOLD = DASH</div>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+const LETTERS = [
+  { ch:'E', code:'.' },     { ch:'T', code:'-' },
+  { ch:'I', code:'..' },    { ch:'A', code:'.-' },
+  { ch:'N', code:'-.' },    { ch:'M', code:'--' },
+  { ch:'S', code:'...' },   { ch:'U', code:'..-' },
+  { ch:'R', code:'.-.' },   { ch:'W', code:'.--' },
+  { ch:'D', code:'-..' },   { ch:'K', code:'-.-' },
+  { ch:'G', code:'--.' },   { ch:'O', code:'---' },
+  { ch:'H', code:'....' },  { ch:'V', code:'...-' },
+  { ch:'F', code:'..-.' },  { ch:'L', code:'.-..' },
+  { ch:'P', code:'.--.' },  { ch:'J', code:'.---' },
+  { ch:'B', code:'-...' },  { ch:'X', code:'-..-' },
+  { ch:'C', code:'-.-.' },  { ch:'Y', code:'-.--' },
+  { ch:'Z', code:'--..' },  { ch:'Q', code:'--.-' },
+];
+const CODE_TO_LETTER = {};
+for (const L of LETTERS) CODE_TO_LETTER[L.code] = L.ch;
+
+// 32-column grid, root at col 16. Left = dash, right = dot.
+const ROOT_COL = 16;
+function colForCode(code) {
+  let col = ROOT_COL;
+  let off = 8;
+  for (const c of code) {
+    col += (c === '-' ? -off : off);
+    off /= 2;
+  }
+  return col;
+}
+
+const VBW = 800, VBH = 420;
+const Y_LEVEL = [40, 120, 205, 290, 380];
+const colToX = col => col * (VBW / 32) + (VBW / 64);
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const svg = document.getElementById('svg');
+
+function svgEl(name, attrs) {
+  const e = document.createElementNS(SVG_NS, name);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+
+// Build the full set of nodes we want to draw.
+// Levels 1-3 always have letters. Level 4: only English letters (skip CH, Ö, Ä, Ü).
+const nodeByCode = {};
+const branchByCode = {};
+
+const drawList = [];
+(function generate(code) {
+  if (code.length > 0 && (code.length < 4 || CODE_TO_LETTER[code])) drawList.push(code);
+  if (code.length < 4) {
+    generate(code + '-');
+    generate(code + '.');
+  }
+})('');
+
+// All branches first (so they sit behind nodes), then all nodes.
+for (const code of drawList) {
+  const x = colToX(colForCode(code));
+  const y = Y_LEVEL[code.length];
+  const parentCode = code.slice(0, -1);
+  const px = parentCode === '' ? colToX(ROOT_COL) : colToX(colForCode(parentCode));
+  const py = parentCode === '' ? Y_LEVEL[0] : Y_LEVEL[parentCode.length];
+  const line = svgEl('path', { d: `M${px} ${py} L${x} ${y}`, class: 'branch' });
+  svg.appendChild(line);
+  branchByCode[code] = line;
+}
+for (const code of drawList) {
+  const x = colToX(colForCode(code));
+  const y = Y_LEVEL[code.length];
+  const isDot = code[code.length - 1] === '.';
+  const g = svgEl('g', { class: 'node', transform: `translate(${x},${y})` });
+  const bg = isDot
+    ? svgEl('circle', { r: 13, class: 'node-bg' })
+    : svgEl('rect', { x: -18, y: -10, width: 36, height: 20, rx: 4, class: 'node-bg' });
+  g.appendChild(bg);
+  const label = svgEl('text', { class: 'node-label' });
+  label.textContent = CODE_TO_LETTER[code] || '';
+  g.appendChild(label);
+  svg.appendChild(g);
+  nodeByCode[code] = { group: g, bg, label };
+}
+
+// Root marker (the antenna)
+const rootG = svgEl('g', { transform: `translate(${colToX(ROOT_COL)},${Y_LEVEL[0]})` });
+rootG.appendChild(svgEl('circle', { r: 9, fill: '#1a1306', stroke: '#d4af37', 'stroke-width': 1.5 }));
+rootG.appendChild(svgEl('line', { x1: 0, y1: -28, x2: 0, y2: -10, stroke: '#d4af37', 'stroke-width': 1.5 }));
+rootG.appendChild(svgEl('circle', { cx: 0, cy: -28, r: 3, fill: '#d4af37' }));
+rootG.appendChild(svgEl('path', { d: 'M-7 -22 L0 -10 L7 -22', stroke: '#d4af37', 'stroke-width': 1, fill: 'none' }));
+svg.appendChild(rootG);
+
+// State
+let currentCode = '';
+let isPressed = false;
+let pressStartTime = 0;
+let decodeTimer = null;
+let decodedText = '';
+let mode = 'free';
+let quizTarget = null;
+
+const elSeq = document.getElementById('seq');
+const elDecoded = document.getElementById('decoded');
+const elTarget = document.getElementById('target');
+const elTap = document.getElementById('tap');
+
+// Audio
+let audioCtx = null;
+let activeOsc = null;
+function ensureAudio() {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch(e) { return; }
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+function startTone() {
+  if (!audioCtx) return;
+  if (activeOsc) return;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.frequency.value = 600;
+  o.type = 'sine';
+  o.connect(g); g.connect(audioCtx.destination);
+  const now = audioCtx.currentTime;
+  g.gain.setValueAtTime(0, now);
+  g.gain.linearRampToValueAtTime(0.22, now + 0.005);
+  o.start(now);
+  activeOsc = { o, g };
+}
+function stopTone() {
+  if (!audioCtx || !activeOsc) return;
+  const { o, g } = activeOsc;
+  const now = audioCtx.currentTime;
+  g.gain.cancelScheduledValues(now);
+  g.gain.setValueAtTime(g.gain.value, now);
+  g.gain.linearRampToValueAtTime(0, now + 0.02);
+  o.stop(now + 0.04);
+  activeOsc = null;
+}
+
+function clearTreeHighlights() {
+  for (const c in nodeByCode) {
+    nodeByCode[c].bg.classList.remove('lit', 'found');
+    nodeByCode[c].label.classList.remove('lit', 'found');
+  }
+  for (const c in branchByCode) {
+    branchByCode[c].classList.remove('lit');
+  }
+}
+function lightPath(code) {
+  let p = '';
+  for (const c of code) {
+    p += c;
+    if (branchByCode[p]) branchByCode[p].classList.add('lit');
+    if (nodeByCode[p]) {
+      nodeByCode[p].bg.classList.add('lit');
+      nodeByCode[p].label.classList.add('lit');
+    }
+  }
+}
+function updateTree() {
+  clearTreeHighlights();
+  lightPath(currentCode);
+}
+function updateSeq() {
+  let s = '';
+  for (const c of currentCode) s += (c === '.' ? '·' : '−');
+  elSeq.textContent = s || ' ';
+}
+
+function tap(isDash) {
+  if (decodeTimer) { clearTimeout(decodeTimer); decodeTimer = null; }
+  if (currentCode.length >= 4) currentCode = ''; // overflow → restart
+  currentCode += isDash ? '-' : '.';
+  updateSeq();
+  updateTree();
+  decodeTimer = setTimeout(decodeNow, 900);
+}
+
+function decodeNow() {
+  decodeTimer = null;
+  const ch = CODE_TO_LETTER[currentCode];
+  if (ch) {
+    decodedText += ch;
+    if (decodedText.length > 40) decodedText = decodedText.slice(-40);
+    elDecoded.textContent = decodedText;
+    const node = nodeByCode[currentCode];
+    if (node) {
+      node.bg.classList.remove('lit');
+      node.label.classList.remove('lit');
+      node.bg.classList.add('found');
+      node.label.classList.add('found');
+      const c = currentCode;
+      setTimeout(() => {
+        const n = nodeByCode[c];
+        if (n) { n.bg.classList.remove('found'); n.label.classList.remove('found'); }
+      }, 1100);
+    }
+    if (mode === 'quiz' && quizTarget === ch) {
+      setTimeout(newQuizTarget, 1000);
+    }
+  } else {
+    decodedText += '?';
+    elDecoded.textContent = decodedText;
+  }
+  currentCode = '';
+  updateSeq();
+  setTimeout(() => { if (currentCode === '') clearTreeHighlights(); }, 1100);
+}
+
+// Tap handling
+function onPressStart(e) {
+  if (e) e.preventDefault();
+  if (isPressed) return;
+  isPressed = true;
+  pressStartTime = Date.now();
+  elTap.classList.add('active');
+  ensureAudio();
+  startTone();
+}
+function onPressEnd(e) {
+  if (e) e.preventDefault();
+  if (!isPressed) return;
+  isPressed = false;
+  elTap.classList.remove('active');
+  stopTone();
+  const dur = Date.now() - pressStartTime;
+  const isDash = dur >= 200;
+  tap(isDash);
+}
+
+elTap.addEventListener('touchstart', onPressStart, { passive: false });
+elTap.addEventListener('touchend', onPressEnd, { passive: false });
+elTap.addEventListener('touchcancel', onPressEnd, { passive: false });
+elTap.addEventListener('mousedown', onPressStart);
+elTap.addEventListener('mouseup', onPressEnd);
+elTap.addEventListener('mouseleave', () => { if (isPressed) onPressEnd(); });
+
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space' && !e.repeat) { onPressStart(e); }
+  if (e.code === 'Backspace' || e.code === 'Delete') {
+    decodedText = ''; currentCode = '';
+    elDecoded.textContent = ' ';
+    updateSeq(); clearTreeHighlights();
+    e.preventDefault();
+  }
+});
+window.addEventListener('keyup', e => {
+  if (e.code === 'Space') onPressEnd(e);
+});
+
+// Mode buttons
+const modeFreeBtn = document.getElementById('modeFree');
+const modeQuizBtn = document.getElementById('modeQuiz');
+const clearBtn = document.getElementById('clearBtn');
+modeFreeBtn.addEventListener('click', () => setMode('free'));
+modeQuizBtn.addEventListener('click', () => setMode('quiz'));
+clearBtn.addEventListener('click', () => {
+  decodedText = ''; currentCode = '';
+  elDecoded.textContent = ' ';
+  updateSeq(); clearTreeHighlights();
+});
+
+function setMode(m) {
+  mode = m;
+  modeFreeBtn.classList.toggle('active', m === 'free');
+  modeQuizBtn.classList.toggle('active', m === 'quiz');
+  if (m === 'quiz') newQuizTarget();
+  else { quizTarget = null; elTarget.innerHTML = '&nbsp;'; }
+}
+function newQuizTarget() {
+  const i = Math.floor(Math.random() * LETTERS.length);
+  quizTarget = LETTERS[i].ch;
+  elTarget.innerHTML = `TAP THE LETTER<b>${quizTarget}</b>`;
+}
+
+// Initial render
+elDecoded.textContent = ' ';
+updateSeq();
+
+})();
+</script>
+</body>
+</html>
