@@ -7,7 +7,18 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0a0a08">
-<title>JMR's Morse Code Tapper</title>
+<title>JMR's Morse Code</title>
+<meta name="description" content="Learn Morse code by tapping it out — the binary tree lights up the path and the letter you tapped. Plays on iPhone, iPad, and desktop.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://jmrothberg.github.io/Games/morse.html">
+<meta property="og:title" content="JMR's Morse Code">
+<meta property="og:description" content="Learn Morse code by tapping it out — the binary tree lights up the path and the letter you tapped. Plays on iPhone, iPad, and desktop.">
+<meta property="og:image" content="https://jmrothberg.github.io/Games/morse_preview.png">
+<meta property="og:image:alt" content="JMR's Morse Code — Morse binary tree with a brass tap key, inspired by the classic keychain">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="JMR's Morse Code">
+<meta name="twitter:description" content="Learn Morse code by tapping it out — the binary tree lights up the path and the letter you tapped.">
+<meta name="twitter:image" content="https://jmrothberg.github.io/Games/morse_preview.png">
 <style>
 *, *::before, *::after { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body {
@@ -35,10 +46,12 @@ header {
   background: linear-gradient(180deg, #1a1306 0%, #0a0a08 100%);
 }
 header h1 {
-  margin: 0; font-size: 14px; letter-spacing: 5px; font-weight: 700;
+  margin: 0; font-size: 13px; letter-spacing: 2.5px; font-weight: 700;
   color: #d4af37;
   text-shadow: 0 0 8px rgba(212,175,55,0.4);
+  white-space: nowrap;
 }
+header h1 .amp { color: #8a7028; margin: 0 4px; }
 .btns { display: flex; gap: 6px; }
 .btns button {
   background: #2a200a; color: #d4af37; border: 1px solid #6a5418;
@@ -138,7 +151,7 @@ header h1 {
 <body>
 
 <header>
-  <h1>MORSE&nbsp;•&nbsp;CODE</h1>
+  <h1>JMR&rsquo;S<span class="amp">•</span>MORSE<span class="amp">•</span>CODE</h1>
   <div class="btns">
     <button id="modeFree" class="active">FREE</button>
     <button id="modeQuiz">QUIZ</button>
