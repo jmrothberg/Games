@@ -41,3 +41,4 @@ temp_script.py
 
 # Large local chess checkpoints (not in repo; place .pth files here after clone)
 chess/Chess_LLM_models copy/
+.claude/
