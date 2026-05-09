@@ -1,0 +1,1137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Centipede</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+canvas { border: 2px solid #333; }
+</style>
+</head>
+<body>
+<canvas id="game" width="800" height="600"></canvas>
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// --- CONSTANTS ---
+const CELL = 20;
+const COLS = 40;
+const ROWS = 30;
+const PLAYER_ROWS = 6; // bottom 6 rows
+const PLAYFIELD_ROWS = ROWS - PLAYER_ROWS; // 0-23
+const MUSHROOM_HITS = 4;
+const CENTIPEDE_LENGTH = 12;
+
+// --- AUDIO SYSTEM ---
+let audioCtx = null;
+function initAudio() {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+}
+
+function playSound(type) {
+    if (!audioCtx) return;
+    try {
+        const now = audioCtx.currentTime;
+        switch(type) {
+            case 'shoot': {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(880, now);
+                osc.frequency.exponentialRampToValueAtTime(220, now + 0.1);
+                gain.gain.setValueAtTime(0.15, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+                osc.start(now);
+                osc.stop(now + 0.1);
+                break;
+            }
+            case 'centipede_move': {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(120, now);
+                gain.gain.setValueAtTime(0.03, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+                osc.start(now);
+                osc.stop(now + 0.05);
+                break;
+            }
+            case 'spider': {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(200, now);
+                osc.frequency.linearRampToValueAtTime(400, now + 0.08);
+                gain.gain.setValueAtTime(0.06, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+                osc.start(now);
+                osc.stop(now + 0.08);
+                break;
+            }
+            case 'mushroom_hit': {
+                const bufferSize = audioCtx.sampleRate * 0.1;
+                const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) {
+                    data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
+                }
+                const source = audioCtx.createBufferSource();
+                const gain = audioCtx.createGain();
+                source.buffer = buffer;
+                source.connect(gain);
+                gain.connect(audioCtx.destination);
+                gain.gain.setValueAtTime(0.12, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+                source.start(now);
+                break;
+            }
+            case 'mushroom_destroy': {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(600, now);
+                osc.frequency.exponentialRampToValueAtTime(100, now + 0.2);
+                gain.gain.setValueAtTime(0.15, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+                osc.start(now);
+                osc.stop(now + 0.2);
+                break;
+            }
+            case 'death': {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(400, now);
+                osc.frequency.exponentialRampToValueAtTime(50, now + 0.8);
+                gain.gain.setValueAtTime(0.2, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
+                osc.start(now);
+                osc.stop(now + 0.8);
+                // Add noise
+                const bufferSize = audioCtx.sampleRate * 0.5;
+                const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) {
+                    data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 2);
+                }
+                const source = audioCtx.createBufferSource();
+                const g2 = audioCtx.createGain();
+                source.buffer = buffer;
+                source.connect(g2);
+                g2.connect(audioCtx.destination);
+                g2.gain.setValueAtTime(0.1, now);
+                g2.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+                source.start(now);
+                break;
+            }
+            case 'flea': {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(1000, now);
+                osc.frequency.exponentialRampToValueAtTime(300, now + 0.15);
+                gain.gain.setValueAtTime(0.1, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+                osc.start(now);
+                osc.stop(now + 0.15);
+                break;
+            }
+            case 'levelup': {
+                [523, 659, 784, 1047].forEach((freq, i) => {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(freq, now + i * 0.12);
+                    gain.gain.setValueAtTime(0.12, now + i * 0.12);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.12 + 0.15);
+                    osc.start(now + i * 0.12);
+                    osc.stop(now + i * 0.12 + 0.15);
+                });
+                break;
+            }
+        }
+    } catch(e) {
+        console.log('Audio error:', e);
+    }
+}
+
+// --- GAME STATE ---
+let keys = {};
+let gameState = 'title'; // title, playing, gameover
+let score = 0;
+let lives = 3;
+let wave = 1;
+let mushrooms = []; // 2D grid: mushrooms[row][col] = { hits: 0-4 } or null
+let centipedes = []; // array of centipede objects
+let bullets = [];
+let spider = null;
+let flea = null;
+let player = { x: 400, y: 560, speed: 4, cooldown: 0, alive: true, respawnTimer: 0 };
+let frameCount = 0;
+let centipedeMoveTimer = 0;
+let centipedeMoveInterval = 8; // frames between moves
+let spiderTimer = 0;
+let fleaTimer = 0;
+let particles = [];
+let screenShake = 0;
+
+// --- INITIALIZATION ---
+function initMushroomGrid() {
+    mushrooms = [];
+    for (let r = 0; r < PLAYFIELD_ROWS; r++) {
+        mushrooms[r] = [];
+        for (let c = 0; c < COLS; c++) {
+            mushrooms[r][c] = null;
+        }
+    }
+}
+
+function scatterMushrooms(count) {
+    let placed = 0;
+    let attempts = 0;
+    while (placed < count && attempts < 2000) {
+        let r = Math.floor(Math.random() * PLAYFIELD_ROWS);
+        let c = Math.floor(Math.random() * COLS);
+        if (!mushrooms[r][c]) {
+            mushrooms[r][c] = { hits: MUSHROOM_HITS };
+            placed++;
+        }
+        attempts++;
+    }
+    console.log('Placed', placed, 'mushrooms');
+}
+
+function createCentipede() {
+    let row = 0;
+    let dir = 1;
+    let segments = [];
+    for (let i = 0; i < CENTIPEDE_LENGTH; i++) {
+        segments.push({ row: row, col: i, dir: dir });
+    }
+    centipedes.push({
+        segments: segments,
+        dir: dir,
+        moveTimer: 0,
+        moveInterval: Math.max(2, centipedeMoveInterval - wave),
+        headColor: `hsl(${Math.random() * 360}, 80%, 60%)`
+    });
+    console.log('Created centipede for wave', wave);
+}
+
+function createSpider() {
+    let side = Math.random() < 0.5 ? 0 : COLS - 1;
+    spider = {
+        x: side * CELL + CELL / 2,
+        y: (PLAYFIELD_ROWS + 2) * CELL,
+        dx: (Math.random() < 0.5 ? 1 : -1) * 2,
+        dy: (Math.random() < 0.5 ? 1 : -1) * 2,
+        alive: true,
+        color: `hsl(${Math.random() * 360}, 90%, 50%)`,
+        spawnTime: frameCount
+    };
+    console.log('Spider spawned');
+}
+
+function createFlea() {
+    let col = Math.floor(Math.random() * COLS);
+    flea = {
+        x: col * CELL + CELL / 2,
+        y: -CELL,
+        dy: 1.5,
+        alive: true,
+        color: '#ff6600',
+        dropMushrooms: true
+    };
+    console.log('Flea spawned');
+}
+
+function resetGame() {
+    score = 0;
+    lives = 3;
+    wave = 1;
+    player = { x: 400, y: 560, speed: 4, cooldown: 0, alive: true, respawnTimer: 0 };
+    bullets = [];
+    centipedes = [];
+    spider = null;
+    flea = null;
+    particles = [];
+    screenShake = 0;
+    initMushroomGrid();
+    scatterMushrooms(30);
+    createCentipede();
+    console.log('Game reset');
+}
+
+function startNewWave() {
+    wave++;
+    initMushroomGrid();
+    scatterMushrooms(30);
+    createCentipede();
+    spider = null;
+    flea = null;
+    bullets = [];
+    playSound('levelup');
+    console.log('Wave', wave, 'started');
+}
+
+// --- PARTICLE SYSTEM ---
+function addParticles(x, y, color, count) {
+    for (let i = 0; i < count; i++) {
+        particles.push({
+            x: x,
+            y: y,
+            dx: (Math.random() - 0.5) * 6,
+            dy: (Math.random() - 0.5) * 6,
+            life: 30 + Math.random() * 20,
+            maxLife: 50,
+            color: color,
+            size: 2 + Math.random() * 3
+        });
+    }
+}
+
+// --- UPDATE ---
+function update() {
+    if (gameState !== 'playing') return;
+    frameCount++;
+
+    // Player movement
+    if (player.alive) {
+        if (keys['ArrowLeft'] || keys['a']) player.x -= player.speed;
+        if (keys['ArrowRight'] || keys['d']) player.x += player.speed;
+        // Clamp to playfield
+        player.x = Math.max(CELL / 2, Math.min(COLS * CELL - CELL / 2, player.x));
+        // Clamp to bottom rows
+        player.y = Math.max((PLAYFIELD_ROWS) * CELL + CELL / 2, Math.min(ROWS * CELL - CELL / 2, player.y));
+        if (keys['ArrowUp'] || keys['w']) player.y -= player.speed * 0.7;
+        if (keys['ArrowDown'] || keys['s']) player.y += player.speed * 0.7;
+        player.y = Math.max(PLAYFIELD_ROWS * CELL + CELL / 2, Math.min((ROWS - 0.5) * CELL, player.y));
+    } else {
+        player.respawnTimer--;
+        if (player.respawnTimer <= 0) {
+            if (lives > 0) {
+                player.alive = true;
+                player.x = 400;
+                player.y = 560;
+                player.cooldown = 0;
+            }
+        }
+    }
+
+    // Shooting
+    if (player.cooldown > 0) player.cooldown--;
+    if (keys[' '] && player.cooldown <= 0 && player.alive) {
+        bullets.push({ x: player.x, y: player.y - CELL / 2, dy: -8 });
+        player.cooldown = 12;
+        playSound('shoot');
+    }
+
+    // Update bullets
+    for (let i = bullets.length - 1; i >= 0; i--) {
+        let b = bullets[i];
+        b.y += b.dy;
+        if (b.y < 0) {
+            bullets.splice(i, 1);
+            continue;
+        }
+
+        // Check bullet vs mushrooms
+        let col = Math.floor(b.x / CELL);
+        let row = Math.floor(b.y / CELL);
+        if (row >= 0 && row < PLAYFIELD_ROWS && col >= 0 && col < COLS) {
+            if (mushrooms[row][col]) {
+                mushrooms[row][col].hits--;
+                playSound('mushroom_hit');
+                addParticles(b.x, b.y, '#44ff44', 5);
+                if (mushrooms[row][col].hits <= 0) {
+                    addParticles(b.x, b.y, '#ff4444', 10);
+                    playSound('mushroom_destroy');
+                    mushrooms[row][col] = null;
+                    score += 10;
+                }
+                bullets.splice(i, 1);
+                continue;
+            }
+        }
+
+        // Check bullet vs centipede segments
+        let hitCentipede = false;
+        for (let c = 0; c < centipedes.length; c++) {
+            let cp = centipedes[c];
+            for (let s = 0; s < cp.segments.length; s++) {
+                let seg = cp.segments[s];
+                let segX = seg.col * CELL + CELL / 2;
+                let segY = seg.row * CELL + CELL / 2;
+                if (Math.abs(b.x - segX) < CELL * 0.6 && Math.abs(b.y - segY) < CELL * 0.6) {
+                    // Hit!
+                    let isHead = (s === 0);
+                    let pts = isHead ? 100 : 25;
+                    score += pts;
+                    addParticles(segX, segY, '#ff00ff', 12);
+                    playSound('mushroom_hit');
+                    console.log('Centipede segment hit:', isHead ? 'HEAD' : 'body', 'score +', pts);
+
+                    // Remove segment and split centipede
+                    let segments = cp.segments;
+                    segments.splice(s, 1);
+
+                    // If hit a middle segment, create a new centipede from the tail portion
+                    if (s > 0 && s < segments.length + 1) {
+                        let tailSegments = segments.splice(s);
+                        if (tailSegments.length > 0) {
+                            centipedes.push({
+                                segments: tailSegments,
+                                dir: -cp.dir,
+                                moveTimer: 0,
+                                moveInterval: cp.moveInterval,
+                                headColor: cp.headColor
+                            });
+                        }
+                    }
+
+                    if (segments.length === 0) {
+                        centipedes.splice(c, 1);
+                        // Check if all centipedes are gone
+                        if (centipedes.length === 0) {
+                            setTimeout(() => {
+                                if (gameState === 'playing') startNewWave();
+                            }, 1500);
+                        }
+                    }
+
+                    bullets.splice(i, 1);
+                    hitCentipede = true;
+                    break;
+                }
+            }
+            if (hitCentipede) break;
+        }
+        if (hitCentipede) continue;
+
+        // Check bullet vs spider
+        if (spider && spider.alive) {
+            if (Math.abs(b.x - spider.x) < CELL * 0.7 && Math.abs(b.y - spider.y) < CELL * 0.7) {
+                let dist = Math.abs(spider.y - player.y);
+                let pts = Math.min(900, 300 + Math.floor(dist / 2));
+                score += pts;
+                addParticles(spider.x, spider.y, spider.color, 15);
+                playSound('mushroom_destroy');
+                console.log('Spider killed! +', pts);
+                spider = null;
+                bullets.splice(i, 1);
+                continue;
+            }
+        }
+
+        // Check bullet vs flea
+        if (flea && flea.alive) {
+            if (Math.abs(b.x - flea.x) < CELL * 0.7 && Math.abs(b.y - flea.y) < CELL * 0.7) {
+                score += 200;
+                addParticles(flea.x, flea.y, flea.color, 15);
+                playSound('mushroom_destroy');
+                console.log('Flea killed! +200');
+                flea = null;
+                bullets.splice(i, 1);
+                continue;
+            }
+        }
+    }
+
+    // Update centipedes
+    centipedeMoveTimer++;
+    for (let c = 0; c < centipedes.length; c++) {
+        let cp = centipedes[c];
+        cp.moveTimer++;
+        if (cp.moveTimer >= cp.moveInterval) {
+            cp.moveTimer = 0;
+            playSound('centipede_move');
+
+            for (let s = 0; s < cp.segments.length; s++) {
+                let seg = cp.segments[s];
+                let nextCol = seg.col + cp.dir;
+                let nextRow = seg.row;
+
+                // Check wall collision
+                if (nextCol < 0 || nextCol >= COLS) {
+                    nextCol = seg.col;
+                    nextRow = seg.row + 1;
+                    cp.dir = -cp.dir;
+                    if (nextRow >= PLAYFIELD_ROWS) {
+                        // Centipede reached bottom - player takes damage
+                        nextRow = PLAYFIELD_ROWS - 1;
+                        cp.dir = -cp.dir;
+                        playerHit();
+                    }
+                }
+
+                // Check mushroom collision
+                if (nextRow >= 0 && nextRow < PLAYFIELD_ROWS && nextCol >= 0 && nextCol < COLS) {
+                    if (mushrooms[nextRow][nextCol]) {
+                        nextCol = seg.col;
+                        nextRow = seg.row + 1;
+                        cp.dir = -cp.dir;
+                        if (nextRow >= PLAYFIELD_ROWS) {
+                            nextRow = PLAYFIELD_ROWS - 1;
+                            cp.dir = -cp.dir;
+                            playerHit();
+                        }
+                    }
+                }
+
+                // Check if below playfield
+                if (nextRow >= PLAYFIELD_ROWS) {
+                    nextRow = PLAYFIELD_ROWS - 1;
+                    cp.dir = -cp.dir;
+                    playerHit();
+                }
+
+                seg.col = nextCol;
+                seg.row = nextRow;
+            }
+        }
+    }
+
+    // Update spider
+    if (spider && spider.alive) {
+        spider.x += spider.dx;
+        spider.y += spider.dy;
+
+        // Bounce off walls
+        if (spider.x < CELL || spider.x > COLS * CELL - CELL) {
+            spider.dx = -spider.dx;
+            spider.x = Math.max(CELL, Math.min(COLS * CELL - CELL, spider.x));
+        }
+        // Spider stays in bottom area (rows PLAYFIELD_ROWS to ROWS)
+        if (spider.y < PLAYFIELD_ROWS * CELL) {
+            spider.dy = Math.abs(spider.dy);
+            spider.y = PLAYFIELD_ROWS * CELL;
+        }
+        if (spider.y > (ROWS - 1) * CELL) {
+            spider.dy = -Math.abs(spider.dy);
+            spider.y = (ROWS - 1) * CELL;
+        }
+
+        // Spider destroys mushrooms it passes through
+        let sc = Math.floor(spider.x / CELL);
+        let sr = Math.floor(spider.y / CELL);
+        if (sr >= 0 && sr < PLAYFIELD_ROWS && sc >= 0 && sc < COLS) {
+            if (mushrooms[sr][sc]) {
+                addParticles(spider.x, spider.y, '#44ff44', 8);
+                mushrooms[sr][sc] = null;
+                score += 10;
+            }
+        }
+
+        // Spider vs player collision
+        if (player.alive) {
+            if (Math.abs(spider.x - player.x) < CELL && Math.abs(spider.y - player.y) < CELL) {
+                playerHit();
+            }
+        }
+
+        if (frameCount % 3 === 0) playSound('spider');
+    }
+
+    // Spawn spider periodically
+    spiderTimer++;
+    if (spiderTimer > 600 && !spider && gameState === 'playing') {
+        createSpider();
+        spiderTimer = 0;
+    }
+
+    // Update flea
+    if (flea && flea.alive) {
+        flea.y += flea.dy;
+        if (flea.dropMushrooms && frameCount % 15 === 0) {
+            let fc = Math.floor(flea.x / CELL);
+            let fr = Math.floor(flea.y / CELL);
+            if (fr >= 0 && fr < PLAYFIELD_ROWS && fc >= 0 && fc < COLS) {
+                if (!mushrooms[fr][fc]) {
+                    mushrooms[fr][fc] = { hits: MUSHROOM_HITS };
+                }
+            }
+        }
+        if (flea.y > ROWS * CELL) {
+            flea = null;
+        }
+        // Flea vs player
+        if (player.alive) {
+            if (Math.abs(flea.x - player.x) < CELL && Math.abs(flea.y - player.y) < CELL) {
+                playerHit();
+            }
+        }
+    }
+
+    // Spawn flea when few mushrooms remain in bottom area
+    fleaTimer++;
+    if (fleaTimer > 400 && !flea) {
+        let bottomMushrooms = 0;
+        for (let r = PLAYFIELD_ROWS - 6; r < PLAYFIELD_ROWS; r++) {
+            for (let c = 0; c < COLS; c++) {
+                if (mushrooms[r] && mushrooms[r][c]) bottomMushrooms++;
+            }
+        }
+        if (bottomMushrooms < 5) {
+            createFlea();
+            fleaTimer = 0;
+        }
+    }
+
+    // Update particles
+    for (let i = particles.length - 1; i >= 0; i--) {
+        let p = particles[i];
+        p.x += p.dx;
+        p.y += p.dy;
+        p.dx *= 0.96;
+        p.dy *= 0.96;
+        p.life--;
+        if (p.life <= 0) particles.splice(i, 1);
+    }
+
+    // Screen shake decay
+    if (screenShake > 0) screenShake *= 0.9;
+    if (screenShake < 0.5) screenShake = 0;
+}
+
+function playerHit() {
+    if (!player.alive) return;
+    lives--;
+    player.alive = false;
+    player.respawnTimer = 90;
+    screenShake = 10;
+    addParticles(player.x, player.y, '#ff0000', 20);
+    playSound('death');
+    console.log('Player hit! Lives:', lives);
+    if (lives <= 0) {
+        gameState = 'gameover';
+        console.log('GAME OVER - Final score:', score);
+    }
+}
+
+// --- DRAW ---
+function draw() {
+    ctx.save();
+
+    // Screen shake
+    if (screenShake > 0) {
+        ctx.translate(
+            (Math.random() - 0.5) * screenShake,
+            (Math.random() - 0.5) * screenShake
+        );
+    }
+
+    // Background
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Draw grid lines (subtle)
+    ctx.strokeStyle = '#111111';
+    ctx.lineWidth = 0.5;
+    for (let r = 0; r <= ROWS; r++) {
+        ctx.beginPath();
+        ctx.moveTo(0, r * CELL);
+        ctx.lineTo(COLS * CELL, r * CELL);
+        ctx.stroke();
+    }
+    for (let c = 0; c <= COLS; c++) {
+        ctx.beginPath();
+        ctx.moveTo(c * CELL, 0);
+        ctx.lineTo(c * CELL, ROWS * CELL);
+        ctx.stroke();
+    }
+
+    // Player boundary line
+    ctx.strokeStyle = '#333300';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, PLAYFIELD_ROWS * CELL);
+    ctx.lineTo(COLS * CELL, PLAYFIELD_ROWS * CELL);
+    ctx.stroke();
+
+    // Draw mushrooms
+    for (let r = 0; r < PLAYFIELD_ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+            let m = mushrooms[r][c];
+            if (m) {
+                drawMushroom(c * CELL + CELL / 2, r * CELL + CELL / 2, m.hits);
+            }
+        }
+    }
+
+    // Draw centipedes
+    for (let cp of centipedes) {
+        drawCentipede(cp);
+    }
+
+    // Draw spider
+    if (spider && spider.alive) {
+        drawSpider(spider);
+    }
+
+    // Draw flea
+    if (flea && flea.alive) {
+        drawFlea(flea);
+    }
+
+    // Draw bullets
+    ctx.fillStyle = '#ffff00';
+    for (let b of bullets) {
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, 3, 0, Math.PI * 2);
+        ctx.fill();
+        // Glow
+        ctx.fillStyle = 'rgba(255, 255, 0, 0.3)';
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#ffff00';
+    }
+
+    // Draw player
+    if (player.alive) {
+        drawPlayer(player.x, player.y);
+    }
+
+    // Draw particles
+    for (let p of particles) {
+        let alpha = p.life / p.maxLife;
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * alpha, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // HUD
+    drawHUD();
+
+    // Title screen
+    if (gameState === 'title') {
+        drawTitleScreen();
+    }
+
+    // Game over screen
+    if (gameState === 'gameover') {
+        drawGameOverScreen();
+    }
+
+    ctx.restore();
+}
+
+function drawMushroom(x, y, hits) {
+    let size = CELL * 0.4;
+    let colors = ['#ff4444', '#ff8844', '#ffcc44', '#44ff44'];
+    let color = colors[Math.max(0, hits - 1)] || '#44ff44';
+
+    // Mushroom cap
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.ellipse(x, y - size * 0.3, size * 0.9, size * 0.7, 0, Math.PI, 0);
+    ctx.fill();
+
+    // Spots on cap
+    ctx.fillStyle = '#ffffff';
+    ctx.globalAlpha = 0.5;
+    ctx.beginPath();
+    ctx.arc(x - size * 0.3, y - size * 0.6, size * 0.15, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x + size * 0.2, y - size * 0.7, size * 0.12, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // Stem
+    ctx.fillStyle = '#ddddaa';
+    ctx.fillRect(x - size * 0.2, y - size * 0.1, size * 0.4, size * 0.8);
+
+    // Gills under cap
+    ctx.strokeStyle = '#aaaa88';
+    ctx.lineWidth = 0.5;
+    for (let i = -2; i <= 2; i++) {
+        ctx.beginPath();
+        ctx.moveTo(x + i * size * 0.15, y - size * 0.3);
+        ctx.lineTo(x + i * size * 0.15, y - size * 0.05);
+        ctx.stroke();
+    }
+}
+
+function drawCentipede(cp) {
+    let segments = cp.segments;
+    if (segments.length === 0) return;
+
+    for (let i = 0; i < segments.length; i++) {
+        let seg = segments[i];
+        let x = seg.col * CELL + CELL / 2;
+        let y = seg.row * CELL + CELL / 2;
+        let isHead = (i === 0);
+        let isTail = (i === segments.length - 1);
+
+        // Body segment
+        let hue = (cp.headColor.replace('hsl(', '').split(',')[0]) + i * 15;
+        ctx.fillStyle = `hsl(${hue % 360}, 80%, 55%)`;
+        ctx.beginPath();
+        ctx.arc(x, y, CELL * 0.38, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Pattern on body
+        ctx.fillStyle = `hsl(${hue % 360}, 80%, 70%)`;
+        ctx.beginPath();
+        ctx.arc(x, y, CELL * 0.2, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Legs
+        let legOffset = Math.sin(frameCount * 0.3 + i * 0.5) * 3;
+        ctx.strokeStyle = `hsl(${hue % 360}, 80%, 40%)`;
+        ctx.lineWidth = 1.5;
+        for (let l = -1; l <= 1; l += 2) {
+            ctx.beginPath();
+            ctx.moveTo(x + l * CELL * 0.15, y);
+            ctx.lineTo(x + l * CELL * 0.35, y + CELL * 0.3 + legOffset * l);
+            ctx.stroke();
+        }
+
+        // Head details
+        if (isHead) {
+            // Eyes
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(x - 3, y - 3, 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(x + 3, y - 3, 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#000000';
+            let eyeDir = cp.dir;
+            ctx.beginPath();
+            ctx.arc(x - 3 + eyeDir * 1, y - 3, 1.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(x + 3 + eyeDir * 1, y - 3, 1.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Antennae
+            ctx.strokeStyle = '#ff6666';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(x, y - CELL * 0.3);
+            ctx.quadraticCurveTo(x + cp.dir * 5, y - CELL * 0.6, x + cp.dir * 8, y - CELL * 0.7);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(x, y - CELL * 0.3);
+            ctx.quadraticCurveTo(x - cp.dir * 5, y - CELL * 0.6, x - cp.dir * 8, y - CELL * 0.7);
+            ctx.stroke();
+        }
+
+        // Tail
+        if (isTail) {
+            ctx.strokeStyle = `hsl(${hue % 360}, 80%, 55%)`;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(x - cp.dir * CELL * 0.3, y);
+            ctx.quadraticCurveTo(
+                x - cp.dir * CELL * 0.5, y + Math.sin(frameCount * 0.2) * 4,
+                x - cp.dir * CELL * 0.6, y + Math.sin(frameCount * 0.3) * 3
+            );
+            ctx.stroke();
+        }
+    }
+}
+
+function drawSpider(s) {
+    let x = s.x;
+    let y = s.y;
+    let size = CELL * 0.8;
+
+    // Body
+    ctx.fillStyle = s.color;
+    ctx.beginPath();
+    ctx.arc(x, y, size * 0.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Hourglass marking
+    ctx.fillStyle = '#000000';
+    ctx.beginPath();
+    ctx.moveTo(x - size * 0.15, y - size * 0.1);
+    ctx.lineTo(x + size * 0.15, y - size * 0.1);
+    ctx.lineTo(x, y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x - size * 0.15, y + size * 0.1);
+    ctx.lineTo(x + size * 0.15, y + size * 0.1);
+    ctx.lineTo(x, y);
+    ctx.closePath();
+    ctx.fill();
+
+    // Eyes (8 eyes)
+    ctx.fillStyle = '#ff0000';
+    for (let i = 0; i < 4; i++) {
+        let angle = -Math.PI * 0.7 + i * Math.PI * 0.4;
+        let ex = x + Math.cos(angle) * size * 0.3;
+        let ey = y + Math.sin(angle) * size * 0.3 - size * 0.1;
+        ctx.beginPath();
+        ctx.arc(ex, ey, 2, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // Legs (8 legs)
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = 2;
+    for (let side = -1; side <= 1; side += 2) {
+        for (let i = 0; i < 4; i++) {
+            let angle = side * (0.3 + i * 0.4);
+            let legWave = Math.sin(frameCount * 0.15 + i) * 3;
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            let mx = x + Math.cos(angle) * size * 0.8 + legWave;
+            let my = y + Math.sin(angle) * size * 0.8;
+            ctx.quadraticCurveTo(
+                x + Math.cos(angle) * size * 0.5,
+                y + Math.sin(angle) * size * 0.5 - 5,
+                mx, my
+            );
+            ctx.stroke();
+        }
+    }
+}
+
+function drawFlea(f) {
+    let x = f.x;
+    let y = f.y;
+    let size = CELL * 0.5;
+
+    // Body
+    ctx.fillStyle = f.color;
+    ctx.beginPath();
+    ctx.ellipse(x, y, size * 0.6, size * 0.8, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Stripes
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(x - size * 0.3, y - size * 0.3, size * 0.6, size * 0.1);
+    ctx.fillRect(x - size * 0.3, y, size * 0.6, size * 0.1);
+
+    // Eyes
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(x - 3, y - size * 0.4, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x + 3, y - size * 0.4, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#000000';
+    ctx.beginPath();
+    ctx.arc(x - 3, y - size * 0.4, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x + 3, y - size * 0.4, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Antennae
+    ctx.strokeStyle = '#ff8844';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x, y - size * 0.7);
+    ctx.lineTo(x - 5, y - size * 1.2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x, y - size * 0.7);
+    ctx.lineTo(x + 5, y - size * 1.2);
+    ctx.stroke();
+}
+
+function drawPlayer(x, y) {
+    let size = CELL * 0.6;
+
+    // Cannon barrel
+    ctx.fillStyle = '#44aaff';
+    ctx.fillRect(x - 3, y - size * 1.5, 6, size);
+
+    // Body
+    ctx.fillStyle = '#2288dd';
+    ctx.beginPath();
+    ctx.arc(x, y, size * 0.8, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Inner detail
+    ctx.fillStyle = '#44bbff';
+    ctx.beginPath();
+    ctx.arc(x, y, size * 0.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Eye
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(x, y - size * 0.2, size * 0.25, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#000000';
+    ctx.beginPath();
+    ctx.arc(x, y - size * 0.2, size * 0.12, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Glow
+    ctx.fillStyle = 'rgba(68, 170, 255, 0.2)';
+    ctx.beginPath();
+    ctx.arc(x, y, size * 1.2, 0, Math.PI * 2);
+    ctx.fill();
+}
+
+function drawHUD() {
+    // Score
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 20px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('SCORE: ' + score, 10, 25);
+
+    // Wave
+    ctx.fillText('WAVE: ' + wave, 10, 50);
+
+    // Lives
+    ctx.textAlign = 'right';
+    ctx.fillText('LIVES:', canvas.width - 100, 25);
+    for (let i = 0; i < lives; i++) {
+        let lx = canvas.width - 80 + i * 25;
+        let ly = 20;
+        ctx.fillStyle = '#2288dd';
+        ctx.beginPath();
+        ctx.arc(lx, ly, 8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#44bbff';
+        ctx.beginPath();
+        ctx.arc(lx, ly, 4, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // Mushroom count
+    let totalMushrooms = 0;
+    for (let r = 0; r < PLAYFIELD_ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+            if (mushrooms[r] && mushrooms[r][c]) totalMushrooms++;
+        }
+    }
+    ctx.fillStyle = '#888888';
+    ctx.font = '14px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('Mushrooms: ' + totalMushrooms, 10, 70);
+}
+
+function drawTitleScreen() {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Title
+    ctx.fillStyle = '#ff00ff';
+    ctx.font = 'bold 60px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('CENTIPEDE', canvas.width / 2, 180);
+
+    // Subtitle
+    ctx.fillStyle = '#44ff44';
+    ctx.font = '20px monospace';
+    ctx.fillText('A Classic Arcade Game', canvas.width / 2, 220);
+
+    // Instructions
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '16px monospace';
+    let instructions = [
+        'Arrow Keys / WASD - Move',
+        'Spacebar - Fire',
+        '',
+        'Destroy all centipede segments to advance!',
+        'Beware of spiders and fleas!',
+        '',
+        'Press ENTER to Start'
+    ];
+    instructions.forEach((line, i) => {
+        ctx.fillText(line, canvas.width / 2, 290 + i * 28);
+    });
+
+    // Draw decorative centipede
+    let demoX = canvas.width / 2;
+    let demoY = 520;
+    for (let i = 0; i < 6; i++) {
+        let hue = (i * 60) % 360;
+        ctx.fillStyle = `hsl(${hue}, 80%, 55%)`;
+        ctx.beginPath();
+        ctx.arc(demoX - 60 + i * 25, demoY + Math.sin(frameCount * 0.1 + i * 0.5) * 5, 10, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+function drawGameOverScreen() {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = '#ff4444';
+    ctx.font = 'bold 50px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('GAME OVER', canvas.width / 2, 220);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '24px monospace';
+    ctx.fillText('Final Score: ' + score, canvas.width / 2, 290);
+    ctx.fillText('Waves Completed: ' + (wave - 1), canvas.width / 2, 330);
+
+    ctx.fillStyle = '#ffff00';
+    ctx.font = '18px monospace';
+    ctx.fillText('Press ENTER to Play Again', canvas.width / 2, 420);
+}
+
+// --- GAME LOOP ---
+function gameLoop() {
+    update();
+    draw();
+    requestAnimationFrame(gameLoop);
+}
+
+// --- EVENT LISTENERS ---
+document.addEventListener('keydown', (e) => {
+    keys[e.key] = true;
+
+    if (e.key === 'Enter') {
+        if (gameState === 'title' || gameState === 'gameover') {
+            initAudio();
+            resetGame();
+            gameState = 'playing';
+            console.log('Game started!');
+        }
+    }
+
+    // Prevent scrolling
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) {
+        e.preventDefault();
+    }
+});
+
+document.addEventListener('keyup', (e) => {
+    keys[e.key] = false;
+});
+
+// --- START ---
+initMushroomGrid();
+scatterMushrooms(30);
+createCentipede();
+gameLoop();
+console.log('Game initialized. Press ENTER to start.');
+</script>
+</body>
+</html>

@@ -1,0 +1,983 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Space Invaders</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    overflow: hidden;
+    font-family: 'Courier New', monospace;
+  }
+  #gameContainer {
+    position: relative;
+  }
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+  #scoreDisplay {
+    position: absolute;
+    top: -30px;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: space-between;
+    color: #fff;
+    font-size: 18px;
+  }
+  #startScreen, #gameOverScreen, #winScreen {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    color: #fff;
+    z-index: 10;
+  }
+  #startScreen h1, #gameOverScreen h1, #winScreen h1 {
+    font-size: 48px;
+    margin-bottom: 20px;
+    letter-spacing: 8px;
+  }
+  #startScreen p, #gameOverScreen p, #winScreen p {
+    font-size: 18px;
+    margin: 5px 0;
+  }
+  .blink {
+    animation: blink 1s step-end infinite;
+  }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="gameContainer">
+  <div id="scoreDisplay">
+    <span>SCORE: <span id="scoreText">0</span></span>
+    <span id="highScoreText">HI-SCORE: 0</span>
+    <span>LIVES: <span id="livesText"></span></span>
+  </div>
+  <canvas id="gameCanvas" width="640" height="480"></canvas>
+
+  <div id="startScreen">
+    <h1>SPACE INVADERS</h1>
+    <p>ARROW KEYS to move</p>
+    <p>SPACE to fire</p>
+    <br>
+    <p class="blink">PRESS SPACE TO START</p>
+  </div>
+
+  <div id="gameOverScreen" class="hidden">
+    <h1>GAME OVER</h1>
+    <p>SCORE: <span id="finalScore">0</span></p>
+    <br>
+    <p class="blink">PRESS SPACE TO PLAY AGAIN</p>
+  </div>
+
+  <div id="winScreen" class="hidden">
+    <h1>YOU WIN!</h1>
+    <p>SCORE: <span id="winScore">0</span></p>
+    <br>
+    <p class="blink">PRESS SPACE TO PLAY AGAIN</p>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// SPACE INVADERS - Atari-style clone
+// ============================================================
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width;
+const H = canvas.height;
+
+// Audio context
+let audioCtx = null;
+function initAudio() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+}
+
+// Sound effects
+function playSound(type) {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+
+  switch(type) {
+    case 'playerShoot':
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(880, now);
+      osc.frequency.exponentialRampToValueAtTime(440, now + 0.1);
+      gain.gain.setValueAtTime(0.15, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+      osc.start(now);
+      osc.stop(now + 0.1);
+      break;
+    case 'alienShoot':
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(200, now);
+      osc.frequency.exponentialRampToValueAtTime(100, now + 0.2);
+      gain.gain.setValueAtTime(0.1, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+      osc.start(now);
+      osc.stop(now + 0.2);
+      break;
+    case 'explosion':
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(300, now);
+      osc.frequency.exponentialRampToValueAtTime(30, now + 0.3);
+      gain.gain.setValueAtTime(0.2, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+      osc.start(now);
+      osc.stop(now + 0.3);
+      break;
+    case 'invaderKill':
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(600, now);
+      osc.frequency.exponentialRampToValueAtTime(1200, now + 0.05);
+      osc.frequency.exponentialRampToValueAtTime(200, now + 0.15);
+      gain.gain.setValueAtTime(0.15, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+      osc.start(now);
+      osc.stop(now + 0.15);
+      break;
+    case 'playerHit':
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(400, now);
+      osc.frequency.exponentialRampToValueAtTime(50, now + 0.5);
+      gain.gain.setValueAtTime(0.25, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+      osc.start(now);
+      osc.stop(now + 0.5);
+      break;
+    case 'mystery':
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(1175, now);
+      osc.frequency.setValueAtTime(1175, now + 0.08);
+      osc.frequency.setValueAtTime(1175, now + 0.16);
+      osc.frequency.setValueAtTime(1175, now + 0.24);
+      osc.frequency.setValueAtTime(880, now + 0.32);
+      osc.frequency.setValueAtTime(880, now + 0.4);
+      osc.frequency.setValueAtTime(880, now + 0.48);
+      osc.frequency.setValueAtTime(880, now + 0.56);
+      osc.frequency.setValueAtTime(1175, now + 0.64);
+      osc.frequency.setValueAtTime(1480, now + 0.72);
+      gain.gain.setValueAtTime(0.12, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
+      osc.start(now);
+      osc.stop(now + 0.8);
+      break;
+    case 'step1':
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(180, now);
+      gain.gain.setValueAtTime(0.06, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
+      osc.start(now);
+      osc.stop(now + 0.04);
+      break;
+    case 'step2':
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(160, now);
+      gain.gain.setValueAtTime(0.06, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
+      osc.start(now);
+      osc.stop(now + 0.04);
+      break;
+    case 'step3':
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(200, now);
+      gain.gain.setValueAtTime(0.06, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
+      osc.start(now);
+      osc.stop(now + 0.04);
+      break;
+    case 'step4':
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(170, now);
+      gain.gain.setValueAtTime(0.06, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
+      osc.start(now);
+      osc.stop(now + 0.04);
+      break;
+    case 'levelUp':
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(500, now);
+      osc.frequency.setValueAtTime(600, now + 0.1);
+      osc.frequency.setValueAtTime(700, now + 0.2);
+      osc.frequency.setValueAtTime(800, now + 0.3);
+      osc.frequency.setValueAtTime(1000, now + 0.4);
+      gain.gain.setValueAtTime(0.12, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+      osc.start(now);
+      osc.stop(now + 0.5);
+      break;
+  }
+}
+
+// ============================================================
+// SPRITE BITMAPS (pixel art - 1 = filled, 0 = empty)
+// ============================================================
+
+const SPRITE_SCALE = 3;
+
+// Invader type 0 - top row (squid) - 2 frames
+const INVADER_0_FRAME0 = [
+  [0,0,0,1,1,0,0,0],
+  [0,0,1,1,1,1,0,0],
+  [0,1,1,1,1,1,1,0],
+  [1,1,0,1,1,0,1,1],
+  [1,1,1,1,1,1,1,1],
+  [0,1,0,1,1,0,1,0],
+  [1,0,0,0,0,0,0,1],
+  [0,1,0,0,0,0,1,0],
+];
+const INVADER_0_FRAME1 = [
+  [0,0,0,1,1,0,0,0],
+  [0,0,1,1,1,1,0,0],
+  [0,1,1,1,1,1,1,0],
+  [1,1,0,1,1,0,1,1],
+  [1,1,1,1,1,1,1,1],
+  [0,0,1,0,0,1,0,0],
+  [0,1,0,1,1,0,1,0],
+  [1,0,1,0,0,1,0,1],
+];
+
+// Invader type 1 & 2 - middle rows (crab) - 2 frames
+const INVADER_1_FRAME0 = [
+  [0,1,0,0,1,0,0,0,1,0,0,1,0,0,1,0],
+  [0,0,1,0,1,0,0,0,1,0,0,1,0,1,0,0],
+  [0,1,1,1,1,1,0,0,1,1,1,1,1,1,1,0],
+  [1,1,0,1,1,1,1,1,1,0,1,1,1,0,1,1],
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+  [1,1,1,0,0,1,1,0,0,1,1,0,0,1,1,1],
+  [1,1,0,0,0,0,0,0,0,0,0,0,0,0,1,1],
+  [0,0,1,1,1,0,1,0,0,1,0,1,1,1,0,0],
+];
+const INVADER_1_FRAME1 = [
+  [0,1,0,0,1,0,0,0,1,0,0,1,0,0,1,0],
+  [1,0,1,0,1,0,0,0,1,0,0,1,0,1,0,1],
+  [1,1,1,1,1,1,0,0,1,1,1,1,1,1,1,1],
+  [1,1,0,1,1,1,1,1,1,0,1,1,1,0,1,1],
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+  [0,0,1,1,0,1,1,1,1,0,1,1,0,1,1,0],
+  [0,1,1,0,0,0,0,0,0,0,0,0,0,1,1,0],
+  [1,1,0,1,1,0,1,0,0,1,0,1,1,0,1,1],
+];
+
+// Invader type 3 - bottom rows (octopus) - 2 frames
+const INVADER_3_FRAME0 = [
+  [0,0,1,0,0,0,0,0,1,0,0,0],
+  [0,0,0,1,0,0,0,0,0,1,0,0],
+  [0,0,1,1,1,1,1,1,1,1,0,0],
+  [0,1,1,0,1,1,1,1,0,1,1,0],
+  [1,1,1,1,1,1,1,1,1,1,1,1],
+  [1,1,1,0,0,1,1,0,0,1,1,1],
+  [1,1,1,1,1,1,1,1,1,1,1,1],
+  [0,0,0,1,1,0,0,1,1,0,0,0],
+  [0,0,1,0,0,1,1,0,0,1,0,0],
+];
+const INVADER_3_FRAME1 = [
+  [0,0,1,0,0,0,0,0,1,0,0,0],
+  [1,0,0,1,0,0,0,0,0,1,0,1],
+  [1,0,1,1,1,1,1,1,1,1,0,1],
+  [1,1,1,0,1,1,1,1,0,1,1,1],
+  [1,1,1,1,1,1,1,1,1,1,1,1],
+  [0,1,1,0,0,1,1,0,0,1,1,0],
+  [0,1,1,1,1,1,1,1,1,1,1,0],
+  [0,0,0,1,1,0,0,1,1,0,0,0],
+  [0,0,1,0,0,0,0,0,0,1,0,0],
+];
+
+// Player ship - symmetrical, matches Atari original
+const PLAYER_SPRITE = [
+  [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0],
+  [0,0,0,0,0,0,0,1,1,1,0,0,0,0,0,0,0],
+  [0,0,0,0,0,0,1,1,1,1,1,0,0,0,0,0,0],
+  [0,0,0,0,0,1,1,1,1,1,1,1,0,0,0,0,0],
+  [0,0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0],
+  [0,0,0,1,1,1,1,1,1,1,1,1,1,1,0,0,0],
+  [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0],
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+];
+
+// Mystery ship (UFO)
+const MYSTERY_SPRITE = [
+  [0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0],
+  [0,0,0,1,1,1,1,1,1,1,1,1,1,0,0,0],
+  [0,0,1,1,1,1,1,1,1,1,1,1,1,1,0,0],
+  [0,1,1,0,1,1,0,1,1,0,1,1,0,1,1,0],
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+  [0,0,1,1,1,0,0,1,1,0,0,1,1,1,0,0],
+  [0,0,0,1,0,0,0,0,0,0,0,0,1,0,0,0],
+];
+
+// Shield sprite (40x30 pixels, simplified)
+const SHIELD_PATTERN = [
+  "00000000000000000000000000000000000000",
+  "00000000000000000000000000000000000000",
+  "00000000000000000000000000000000000000",
+  "00000000000000000000000000000000000000",
+  "00000000000000000000000000000000000000",
+  "00000000000011111111111111110000000000",
+  "00000000000111111111111111111000000000",
+  "00000000001111111111111111111000000000",
+  "00000000011111111111111111111100000000",
+  "00000000111111111111111111111110000000",
+  "00000001111111111111111111111111000000",
+  "00000011111111111111111111111111100000",
+  "00000111111111111111111111111111110000",
+  "00001111111111111111111111111111111000",
+  "00011111111111111111111111111111111100",
+  "00111111111111111111111111111111111100",
+  "01111111111111111111111111111111111100",
+  "01111111111111111111111111111111111100",
+  "11111111111111111111111111111111111110",
+  "11111111111111111111111111111111111110",
+  "11111111111111111111111111111111111110",
+  "11111111111111111111111111111111111110",
+  "11111111111111111111111111111111111110",
+  "11111111111111111111111111111111111110",
+  "11111111111111111111111111111111111110",
+  "11111111111111111111111111111111111110",
+  "11111111111111111111111111111111111110",
+  "11111111111111111111111111111111111110",
+  "11111111111111111111111111111111111110",
+  "11111111111111111111111111111111111110",
+];
+
+// ============================================================
+// Drawing helpers
+// ============================================================
+
+function drawSprite(ctx, sprite, x, y, color, scale) {
+  ctx.fillStyle = color;
+  for (let row = 0; row < sprite.length; row++) {
+    for (let col = 0; col < sprite[row].length; col++) {
+      if (sprite[row][col]) {
+        ctx.fillRect(x + col * scale, y + row * scale, scale, scale);
+      }
+    }
+  }
+}
+
+function drawShield(ctx, shieldX, shieldY) {
+  ctx.fillStyle = '#00ff00';
+  for (let row = 0; row < SHIELD_PATTERN.length; row++) {
+    for (let col = 0; col < SHIELD_PATTERN[row].length; col++) {
+      if (SHIELD_PATTERN[row][col] === '1') {
+        ctx.fillRect(shieldX + col * 2, shieldY + row * 2, 2, 2);
+      }
+    }
+  }
+}
+
+// ============================================================
+// Game state
+// ============================================================
+
+let gameState = 'start'; // start, playing, gameover, win
+let score = 0;
+let highScore = parseInt(localStorage.getItem('siHighScore')) || 0;
+let lives = 3;
+let level = 1;
+let player, aliens, bullets, alienBullets, shields, mystery, stars;
+let alienDirection = 1;
+let alienStepTimer = 0;
+let alienStepInterval = 45;
+let alienMoveSoundIndex = 0;
+let mysteryTimer = 0;
+let mysteryActive = false;
+let mysteryDirection = 1;
+let playerAnimFrame = 0;
+let explosionTimer = 0;
+let explosionX = 0;
+let explosionY = 0;
+let levelUpTimer = 0;
+let lastShotTime = 0;
+const SHOOT_COOLDOWN = 350;
+
+// ============================================================
+// Stars background
+// ============================================================
+
+function createStars() {
+  stars = [];
+  for (let i = 0; i < 80; i++) {
+    stars.push({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      speed: 0.1 + Math.random() * 0.3,
+      brightness: Math.random()
+    });
+  }
+}
+
+function updateStars() {
+  for (const star of stars) {
+    star.y += star.speed;
+    star.brightness = 0.3 + Math.sin(Date.now() * 0.001 + star.x) * 0.3;
+    if (star.y > H) {
+      star.y = 0;
+      star.x = Math.random() * W;
+    }
+  }
+}
+
+function drawStars() {
+  for (const star of stars) {
+    const alpha = 0.3 + star.brightness * 0.5;
+    ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+    ctx.fillRect(star.x, star.y, 1, 1);
+  }
+}
+
+// ============================================================
+// Initialize game
+// ============================================================
+
+function initGame() {
+  score = 0;
+  lives = 3;
+  level = 1;
+  initLevel();
+}
+
+function initLevel() {
+  // Player
+  player = {
+    x: W / 2 - 17 * SPRITE_SCALE / 2,
+    y: H - 50,
+    width: 17 * SPRITE_SCALE,
+    height: 8 * SPRITE_SCALE,
+    speed: 4,
+    alive: true,
+    respawnTimer: 0
+  };
+
+  aliens = [];
+  const alienRows = 5;
+  const alienCols = 10;
+  const alienW = 16 * SPRITE_SCALE;
+  const alienH = 8 * SPRITE_SCALE;
+  const alienPadding = 14;
+  const alienStartX = (W - (alienCols * (alienW + alienPadding) - alienPadding)) / 2;
+  const alienStartY = 60;
+
+  for (let row = 0; row < alienRows; row++) {
+    for (let col = 0; col < alienCols; col++) {
+      let type;
+      if (row === 0) type = 0;
+      else if (row <= 2) type = 1;
+      else type = 3;
+
+      aliens.push({
+        x: alienStartX + col * (alienW + alienPadding),
+        y: alienStartY + row * (alienH + alienPadding),
+        width: alienW,
+        height: alienH,
+        type: type,
+        row: row,
+        col: col,
+        alive: true
+      });
+    }
+  }
+
+  bullets = [];
+  alienBullets = [];
+  mysteryActive = false;
+  mysteryTimer = 600 + Math.random() * 400;
+  alienDirection = 1;
+  alienStepTimer = 0;
+  alienStepInterval = Math.max(8, 45 - (level - 1) * 5);
+  alienMoveSoundIndex = 0;
+  explosionTimer = 0;
+  levelUpTimer = 0;
+
+  // Shields
+  shields = [];
+  const shieldCount = 4;
+  const shieldW = 40 * 2;
+  const shieldH = 30 * 2;
+  const shieldSpacing = W / shieldCount;
+  for (let i = 0; i < shieldCount; i++) {
+    shields.push({
+      x: shieldSpacing * i + shieldSpacing / 2 - shieldW / 2,
+      y: H - 130,
+      width: shieldW,
+      height: shieldH,
+      pixels: SHIELD_PATTERN.map(r => r.split('').map(c => c === '1' ? 1 : 0))
+    });
+  }
+}
+
+// ============================================================
+// Input
+// ============================================================
+
+const keys = {};
+document.addEventListener('keydown', (e) => {
+  keys[e.code] = true;
+
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (gameState === 'start') {
+      initAudio();
+      gameState = 'playing';
+      document.getElementById('startScreen').classList.add('hidden');
+      initGame();
+    } else if (gameState === 'gameover' || gameState === 'win') {
+      gameState = 'playing';
+      document.getElementById('gameOverScreen').classList.add('hidden');
+      document.getElementById('winScreen').classList.add('hidden');
+      initGame();
+    }
+  }
+});
+document.addEventListener('keyup', (e) => {
+  keys[e.code] = false;
+});
+
+// ============================================================
+// Update
+// ============================================================
+
+function update() {
+  if (gameState !== 'playing') return;
+
+  updateStars();
+
+  // Level up timer
+  if (levelUpTimer > 0) {
+    levelUpTimer--;
+    if (levelUpTimer === 0) {
+      level++;
+      initLevel();
+    }
+    return;
+  }
+
+  // Explosion timer
+  if (explosionTimer > 0) {
+    explosionTimer--;
+    if (explosionTimer === 0) {
+      player.alive = true;
+    }
+    return;
+  }
+
+  // Player movement
+  if (player.alive) {
+    if (keys['ArrowLeft'] && player.x > 5) {
+      player.x -= player.speed;
+    }
+    if (keys['ArrowRight'] && player.x < W - player.width - 5) {
+      player.x += player.speed;
+    }
+
+    // Player shooting
+    if (keys['Space']) {
+      const now = Date.now();
+      const activeBullets = bullets.filter(b => b.alive);
+      if (activeBullets.length === 0 && now - lastShotTime > SHOOT_COOLDOWN) {
+        bullets.push({
+          x: player.x + player.width / 2 - 2,
+          y: player.y - 8,
+          width: 4,
+          height: 12,
+          alive: true
+        });
+        lastShotTime = now;
+        playSound('playerShoot');
+      }
+    }
+  }
+
+  // Update player bullets
+  for (const b of bullets) {
+    if (!b.alive) continue;
+    b.y -= 7;
+    if (b.y < -20) b.alive = false;
+  }
+
+  // Update alien bullets
+  for (const b of alienBullets) {
+    if (!b.alive) continue;
+    b.x += b.dx || 0;
+    b.y += b.dy === undefined ? 4 : b.dy;
+    if (b.y > H + 20) b.alive = false;
+  }
+
+  // Alien movement
+  alienStepTimer++;
+  const currentInterval = Math.max(2, alienStepInterval - Math.floor((55 - aliens.filter(a => a.alive).length) * 0.5));
+
+  if (alienStepTimer >= currentInterval) {
+    alienStepTimer = 0;
+    playSound(['step1', 'step2', 'step3', 'step4'][alienMoveSoundIndex % 4]);
+    alienMoveSoundIndex++;
+
+    let shouldDrop = false;
+    const aliveAliens = aliens.filter(a => a.alive);
+
+    for (const alien of aliveAliens) {
+      const nextX = alien.x + alienDirection * 8;
+      if (nextX < 5 || nextX + alien.width > W - 5) {
+        shouldDrop = true;
+        break;
+      }
+    }
+
+    if (shouldDrop) {
+      alienDirection *= -1;
+      for (const alien of aliveAliens) {
+        alien.y += 12;
+      }
+    } else {
+      for (const alien of aliveAliens) {
+        alien.x += alienDirection * 8;
+      }
+    }
+
+    // Check if aliens reached the bottom
+    if (gameState === 'playing') {
+      for (const alien of aliveAliens) {
+        if (alien.y + alien.height >= player.y) {
+          gameState = 'gameover';
+          document.getElementById('gameOverScreen').classList.remove('hidden');
+          document.getElementById('finalScore').textContent = score;
+          if (score > highScore) {
+            highScore = score;
+            localStorage.setItem('siHighScore', highScore);
+          }
+          return;
+        }
+      }
+    }
+  }
+
+  // Alien shooting
+  if (Math.random() < 0.015 + level * 0.003) {
+    const aliveAliens = aliens.filter(a => a.alive);
+    if (aliveAliens.length > 0) {
+      // Prefer aliens in columns with most alive aliens
+      const colCounts = {};
+      for (const a of aliveAliens) {
+        colCounts[a.col] = (colCounts[a.col] || 0) + 1;
+      }
+      let bestCol = 0;
+      let bestCount = 0;
+      for (const col in colCounts) {
+        if (colCounts[col] > bestCount) {
+          bestCount = colCounts[col];
+          bestCol = parseInt(col);
+        }
+      }
+      const colAliens = aliveAliens.filter(a => a.col === bestCol);
+      const shooter = colAliens[colAliens.length - 1];
+      alienBullets.push({
+        x: shooter.x + shooter.width / 2 - 2,
+        y: shooter.y + shooter.height,
+        width: 4,
+        height: 12,
+        alive: true,
+        dx: 0,
+        dy: 4 + level * 0.3
+      });
+      playSound('alienShoot');
+    }
+  }
+
+  // Mystery ship
+  mysteryTimer--;
+  if (mysteryTimer <= 0 && !mysteryActive) {
+    mysteryActive = true;
+    mysteryDirection = Math.random() > 0.5 ? 1 : -1;
+    mystery = {
+      x: mysteryDirection === 1 ? -60 : W + 10,
+      y: 30,
+      width: 16 * SPRITE_SCALE,
+      height: 7 * SPRITE_SCALE,
+      alive: true,
+      points: [50, 100, 150, 200, 300][Math.floor(Math.random() * 5)]
+    };
+    mysteryTimer = 800 + Math.random() * 600;
+  }
+
+  if (mysteryActive && mystery) {
+    mystery.x += mysteryDirection * 2;
+    if (mystery.x > W + 80 || mystery.x < -80) {
+      mysteryActive = false;
+    }
+  }
+
+  // Collision: player bullets vs aliens
+  for (const b of bullets) {
+    if (!b.alive) continue;
+    for (const alien of aliens) {
+      if (!alien.alive) continue;
+      if (rectsOverlap(b, alien)) {
+        b.alive = false;
+        alien.alive = false;
+        const points = alien.type === 0 ? 30 : alien.type === 1 ? 20 : 10;
+        score += points;
+        explosionX = alien.x + alien.width / 2;
+        explosionY = alien.y + alien.height / 2;
+        explosionTimer = 15;
+        playSound('invaderKill');
+        break;
+      }
+    }
+  }
+
+  // Collision: player bullets vs mystery
+  if (mysteryActive && mystery && mystery.alive) {
+    for (const b of bullets) {
+      if (!b.alive) continue;
+      if (rectsOverlap(b, mystery)) {
+        b.alive = false;
+        mystery.alive = false;
+        mysteryActive = false;
+        score += mystery.points;
+        explosionX = mystery.x + mystery.width / 2;
+        explosionY = mystery.y + mystery.height / 2;
+        explosionTimer = 25;
+        playSound('mystery');
+        break;
+      }
+    }
+  }
+
+  // Collision: alien bullets vs player
+  if (player.alive) {
+    for (const b of alienBullets) {
+      if (!b.alive) continue;
+      if (rectsOverlap(b, player)) {
+        b.alive = false;
+        player.alive = false;
+        lives--;
+        explosionX = player.x + player.width / 2;
+        explosionY = player.y + player.height / 2;
+        explosionTimer = 90;
+        playSound('playerHit');
+        if (lives <= 0) {
+          setTimeout(() => {
+            gameState = 'gameover';
+            document.getElementById('gameOverScreen').classList.remove('hidden');
+            document.getElementById('finalScore').textContent = score;
+            if (score > highScore) {
+              highScore = score;
+              localStorage.setItem('siHighScore', highScore);
+            }
+          }, 1000);
+        }
+        break;
+      }
+    }
+  }
+
+  // Collision: bullets vs shields
+  for (const shield of shields) {
+    if (shield.pixels.every(row => row.every(v => v === 0))) continue;
+
+    // Player bullets
+    for (const b of bullets) {
+      if (!b.alive) continue;
+      destroyShieldPixels(shield, b.x, b.y, 2);
+    }
+
+    // Alien bullets
+    for (const b of alienBullets) {
+      if (!b.alive) continue;
+      destroyShieldPixels(shield, b.x, b.y, 2);
+    }
+  }
+
+  // Clean up
+  bullets = bullets.filter(b => b.alive);
+  alienBullets = alienBullets.filter(b => b.alive);
+
+  // Check win condition
+  if (aliens.filter(a => a.alive).length === 0 && levelUpTimer === 0) {
+    levelUpTimer = 120;
+    playSound('levelUp');
+    if (level >= 10) {
+      setTimeout(() => {
+        gameState = 'win';
+        document.getElementById('winScreen').classList.remove('hidden');
+        document.getElementById('winScore').textContent = score;
+        if (score > highScore) {
+          highScore = score;
+          localStorage.setItem('siHighScore', highScore);
+        }
+      }, 2000);
+    }
+  }
+
+  // Update score display
+  document.getElementById('scoreText').textContent = score;
+  document.getElementById('highScoreText').textContent = 'HI-SCORE: ' + highScore;
+  let livesStr = '';
+  for (let i = 0; i < lives; i++) livesStr += '♥ ';
+  document.getElementById('livesText').textContent = livesStr;
+}
+
+function rectsOverlap(a, b) {
+  return a.x < b.x + b.width &&
+         a.x + a.width > b.x &&
+         a.y < b.y + b.height &&
+         a.y + a.height > b.y;
+}
+
+function destroyShieldPixels(shield, bx, by, radius) {
+  const startCol = Math.floor((bx - shield.x) / 2);
+  const startRow = Math.floor((by - shield.y) / 2);
+  for (let row = Math.max(0, startRow - radius); row <= Math.min(shield.pixels.length - 1, startRow + radius); row++) {
+    for (let col = Math.max(0, startCol - radius); col <= Math.min(shield.pixels[0].length - 1, startCol + radius); col++) {
+      const dist = Math.sqrt((col - startCol) ** 2 + (row - startRow) ** 2);
+      if (dist <= radius && shield.pixels[row][col] === 1) {
+        shield.pixels[row][col] = 0;
+      }
+    }
+  }
+}
+
+// ============================================================
+// Draw
+// ============================================================
+
+function draw() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+
+  drawStars();
+
+  if (gameState === 'start') return;
+
+  // Draw ground line
+  ctx.fillStyle = '#00ff00';
+  ctx.fillRect(0, H - 20, W, 2);
+
+  // Draw shields
+  for (const shield of shields) {
+    drawShield(ctx, shield.x, shield.y);
+  }
+
+  // Draw aliens
+  const frame = Math.floor(Date.now() / 500) % 2;
+  for (const alien of aliens) {
+    if (!alien.alive) continue;
+    let sprite;
+    if (alien.type === 0) {
+      sprite = frame === 0 ? INVADER_0_FRAME0 : INVADER_0_FRAME1;
+    } else if (alien.type === 1) {
+      sprite = frame === 0 ? INVADER_1_FRAME0 : INVADER_1_FRAME1;
+    } else {
+      sprite = frame === 0 ? INVADER_3_FRAME0 : INVADER_3_FRAME1;
+    }
+    const colors = ['#ff4444', '#44ff44', '#4444ff'];
+    drawSprite(ctx, sprite, alien.x, alien.y, colors[alien.type], SPRITE_SCALE);
+  }
+
+  // Draw mystery ship
+  if (mysteryActive && mystery && mystery.alive) {
+    drawSprite(ctx, MYSTERY_SPRITE, mystery.x, mystery.y, '#ff0000', SPRITE_SCALE);
+  }
+
+  // Draw player
+  if (player.alive) {
+    drawSprite(ctx, PLAYER_SPRITE, player.x, player.y, '#00ff00', SPRITE_SCALE);
+  }
+
+  // Draw player bullets
+  for (const b of bullets) {
+    if (!b.alive) continue;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(b.x, b.y, b.width, b.height);
+    // Extra glow
+    ctx.fillStyle = 'rgba(0,255,255,0.3)';
+    ctx.fillRect(b.x - 1, b.y - 1, b.width + 2, b.height + 2);
+  }
+
+  // Draw alien bullets (double-barrel style like original)
+  for (const b of alienBullets) {
+    if (!b.alive) continue;
+    ctx.fillStyle = '#fff';
+    const flash = Math.floor(Date.now() / 150) % 2;
+    if (flash) {
+      ctx.fillRect(b.x, b.y, b.width, b.height);
+      ctx.fillRect(b.x - 2, b.y + 2, b.width, 4);
+      ctx.fillRect(b.x + 2, b.y + 2, b.width, 4);
+    } else {
+      ctx.fillRect(b.x, b.y, b.width, b.height);
+    }
+  }
+
+  // Draw explosion
+  if (explosionTimer > 0) {
+    const progress = 1 - explosionTimer / 25;
+    const radius = progress * 25;
+    ctx.strokeStyle = `rgba(255,255,255,${1 - progress})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(explosionX, explosionY, radius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    if (explosionTimer > 10) {
+      ctx.fillStyle = `rgba(255,100,0,${(explosionTimer - 10) / 15})`;
+      ctx.beginPath();
+      ctx.arc(explosionX, explosionY, radius * 0.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // Level up text
+  if (levelUpTimer > 0) {
+    ctx.fillStyle = '#00ff00';
+    ctx.font = '36px Courier New';
+    ctx.textAlign = 'center';
+    ctx.fillText(`LEVEL ${level} COMPLETE!`, W / 2, H / 2);
+    ctx.font = '18px Courier New';
+    ctx.fillText('GET READY...', W / 2, H / 2 + 35);
+  }
+}
+
+// ============================================================
+// Game loop
+// ============================================================
+
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+// ============================================================
+// Start
+// ============================================================
+
+createStars();
+document.getElementById('highScoreText').textContent = 'HI-SCORE: ' + highScore;
+gameLoop();
+
+</script>
+</body>
+</html>

@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BLOOMBERG TERMINAL</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0a0a0a;--panel:#111;--border:#333;--orange:#ff8c00;--amber:#ffb347;--green:#00c853;--red:#ff1744;--cyan:#00e5ff;--text:#e0e0e0;--dim:#666;--yellow:#ffd600}
+@font-face{font-family:'Term';src:local('Courier New'),local('Consolas'),local('monospace')}
+body{background:var(--bg);color:var(--text);font-family:'Courier New',Consolas,monospace;font-size:13px;overflow:hidden;height:100vh;display:flex;flex-direction:column}
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--border)}
+#header{background:var(--panel);border-bottom:2px solid var(--orange);padding:4px 12px;display:flex;justify-content:space-between;align-items:center;height:36px;flex-shrink:0}
+#header .logo{color:var(--orange);font-size:16px;font-weight:bold;letter-spacing:2px}
+#header .logo span{color:var(--amber);font-size:11px;margin-left:8px}
+#header .clock{color:var(--orange);font-size:13px}
+#header .status{color:var(--green);font-size:11px}
+#nav{background:var(--panel);border-bottom:1px solid var(--border);padding:3px 8px;display:flex;gap:2px;flex-shrink:0}
+#nav button{background:transparent;border:1px solid var(--border);color:var(--dim);padding:3px 10px;cursor:pointer;font-family:inherit;font-size:11px;border-radius:2px}
+#nav button:hover,#nav button.active{color:var(--orange);border-color:var(--orange);background:rgba(255,140,0,0.1)}
+#main{flex:1;display:grid;overflow:hidden;transition:all 0.2s}
+#main.layout-default{grid-template-columns:280px 1fr 300px;grid-template-rows:1fr 200px}
+#main.layout-chart{grid-template-columns:260px 1fr;grid-template-rows:1fr 180px}
+#main.layout-news{grid-template-columns:1fr 340px;grid-template-rows:1fr 180px}
+#main.layout-data{grid-template-columns:1fr 1fr;grid-template-rows:1fr 180px}
+.panel{background:var(--panel);border:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;position:relative}
+.panel-header{background:rgba(255,140,0,0.08);border-bottom:1px solid var(--border);padding:4px 8px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0}
+.panel-header h3{color:var(--orange);font-size:12px;font-weight:bold;letter-spacing:1px}
+.panel-header .badge{color:var(--dim);font-size:10px}
+.panel-body{flex:1;overflow-y:auto;padding:4px}
+#watchlist{grid-row:1/3}
+#chart-panel{grid-column:2}
+#news-panel{grid-column:3;grid-row:1/3}
+#bottom-panel{grid-column:1/4}
+#command-bar{background:var(--panel);border-top:2px solid var(--orange);padding:6px 12px;display:flex;align-items:center;gap:8px;flex-shrink:0;height:38px}
+#command-bar .prompt{color:var(--orange);font-weight:bold;font-size:14px}
+#cmd-input{flex:1;background:transparent;border:none;color:var(--amber);font-family:inherit;font-size:14px;outline:none;caret-color:var(--orange)}
+#cmd-input::placeholder{color:var(--dim)}
+.ticker-row{display:grid;grid-template-columns:80px 1fr 70px;gap:4px;padding:3px 6px;border-bottom:1px solid rgba(255,255,255,0.03);cursor:pointer;transition:background 0.15s}
+.ticker-row:hover{background:rgba(255,140,0,0.1)}
+.ticker-row.selected{background:rgba(255,140,0,0.15);border-left:2px solid var(--orange)}
+.ticker-sym{color:var(--orange);font-weight:bold;font-size:12px}
+.ticker-name{color:var(--dim);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ticker-price{color:var(--text);text-align:right;font-size:12px;font-weight:bold}
+.ticker-change{font-size:10px;text-align:right}
+.up{color:var(--green)}.down{color:var(--red)}.flat{color:var(--dim)}
+.chart-container{width:100%;height:100%;position:relative}
+.chart-container canvas{width:100%;height:100%}
+.chart-toolbar{display:flex;gap:4px;padding:4px 8px;border-bottom:1px solid var(--border);flex-shrink:0}
+.chart-toolbar button{background:transparent;border:1px solid var(--border);color:var(--dim);padding:2px 8px;cursor:pointer;font-family:inherit;font-size:10px;border-radius:2px}
+.chart-toolbar button.active,.chart-toolbar button:hover{color:var(--orange);border-color:var(--orange)}
+.chart-info{position:absolute;top:8px;left:12px;color:var(--orange);font-size:11px}
+.chart-info .price-big{font-size:22px;font-weight:bold;color:var(--amber)}
+.chart-info .change-line{font-size:12px;margin-top:2px}
+.news-item{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,0.04);cursor:pointer;transition:background 0.15s}
+.news-item:hover{background:rgba(255,140,0,0.08)}
+.news-time{color:var(--dim);font-size:10px}
+.news-source{color:var(--cyan);font-size:10px;margin-left:6px}
+.news-title{color:var(--text);font-size:11px;margin-top:2px;line-height:1.3}
+.news-title.blink{animation:newsBlink 0.5s}
+@keyframes newsBlink{0%,100%{opacity:1}50%{opacity:0.3}}
+.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:2px 12px;padding:4px 8px}
+.detail-label{color:var(--dim);font-size:10px}
+.detail-value{color:var(--text);font-size:11px;text-align:right}
+.detail-value.highlight{color:var(--orange)}
+.bottom-tabs{display:flex;gap:0;border-bottom:1px solid var(--border);flex-shrink:0}
+.bottom-tabs button{background:transparent;border:none;color:var(--dim);padding:4px 12px;cursor:pointer;font-family:inherit;font-size:11px;border-bottom:2px solid transparent}
+.bottom-tabs button.active{color:var(--orange);border-bottom-color:var(--orange)}
+.econ-row{display:grid;grid-template-columns:60px 1fr 80px 80px 80px;gap:4px;padding:3px 8px;border-bottom:1px solid rgba(255,255,255,0.03);font-size:10px}
+.econ-row .date{color:var(--dim)}
+.econ-row .event{color:var(--text)}
+.econ-row .actual,.econ-row .forecast,.econ-row .previous{color:var(--amber);text-align:right}
+.econ-row .actual.surprise-up{color:var(--green)}
+.econ-row .actual.surprise-down{color:var(--red)}
+.market-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:0}
+.market-index{padding:6px 8px;border-right:1px solid var(--border);text-align:center}
+.market-index:last-child{border-right:none}
+.market-index .idx-name{color:var(--dim);font-size:10px}
+.market-index .idx-val{color:var(--text);font-size:14px;font-weight:bold;margin:2px 0}
+.market-index .idx-chg{font-size:10px}
+.portfolio-row{display:grid;grid-template-columns:70px 1fr 60px 70px 70px;gap:4px;padding:3px 8px;border-bottom:1px solid rgba(255,255,255,0.03);font-size:10px}
+.portfolio-row .sym{color:var(--orange);font-weight:bold}
+.portfolio-row .shares,.portfolio-row .price,.portfolio-row .total,.portfolio-row .pnl{text-align:right}
+.sector-bar{display:flex;align-items:center;gap:6px;padding:2px 8px;font-size:10px}
+.sector-bar .name{color:var(--dim);width:80px}
+.sector-bar .bar{flex:1;height:12px;background:var(--bg);position:relative;overflow:hidden}
+.sector-bar .fill{height:100%;transition:width 0.5s}
+.sector-bar .pct{width:40px;text-align:right}
+.tooltip{position:absolute;background:var(--panel);border:1px solid var(--orange);padding:6px 10px;font-size:10px;z-index:100;pointer-events:none;display:none;white-space:nowrap}
+.flash{animation:flash 0.8s}
+@keyframes flash{0%{background:rgba(255,140,0,0.3)}100%{background:transparent}}
+.modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:200;display:flex;align-items:center;justify-content:center}
+.modal{background:var(--panel);border:2px solid var(--orange);padding:20px;min-width:400px;max-width:600px}
+.modal h2{color:var(--orange);margin-bottom:12px;font-size:14px}
+.modal .close{float:right;cursor:pointer;color:var(--dim);font-size:18px}
+.modal .close:hover{color:var(--orange)}
+.help-grid{display:grid;grid-template-columns:140px 1fr;gap:4px 12px;font-size:11px}
+.help-grid .cmd{color:var(--orange);font-weight:bold}
+.help-grid .desc{color:var(--dim)}
+</style>
+</head>
+<body>
+<div id="header">
+<div class="logo">BLOOMBERG <span>TERMINAL</span></div>
+<div style="display:flex;align-items:center;gap:16px">
+<div class="status">● CONNECTED</div>
+<div class="clock" id="clock"></div>
+</div>
+</div>
+<div id="nav">
+<button class="active" onclick="setLayout('default')">OVERVIEW</button>
+<button onclick="setLayout('chart')">CHART</button>
+<button onclick="setLayout('news')">NEWS</button>
+<button onclick="setLayout('data')">DATA</button>
+<button onclick="showHelp()">HELP</button>
+</div>
+<div id="main" class="layout-default">
+<div class="panel" id="watchlist">
+<div class="panel-header"><h3>WATCHLIST</h3><span class="badge" id="wl-count"></span></div>
+<div class="panel-body" id="wl-body"></div>
+</div>
+<div class="panel" id="chart-panel">
+<div class="panel-header"><h3 id="chart-title">AAPL - APPLE INC</h3><span class="badge" id="chart-exchange">NASDAQ</span></div>
+<div class="chart-toolbar">
+<button class="active" onclick="setChartType('candle')">CANDLE</button>
+<button onclick="setChartType('line')">LINE</button>
+<button onclick="setChartType('volume')">VOLUME</button>
+<span style="color:var(--border);margin:0 4px">|</span>
+<button onclick="setChartRange('1D')">1D</button>
+<button class="active" onclick="setChartRange('1W')">1W</button>
+<button onclick="setChartRange('1M')">1M</button>
+<button onclick="setChartRange('3M')">3M</button>
+<button onclick="setChartRange('1Y')">1Y</button>
+</div>
+<div class="panel-body" style="padding:0">
+<div class="chart-container">
+<canvas id="chart-canvas"></canvas>
+<div class="chart-info" id="chart-info"></div>
+<div class="tooltip" id="chart-tooltip"></div>
+</div>
+</div>
+</div>
+<div class="panel" id="news-panel">
+<div class="panel-header"><h3>NEWS FEED</h3><span class="badge" id="news-count"></span></div>
+<div class="panel-body" id="news-body"></div>
+</div>
+<div class="panel" id="bottom-panel">
+<div class="bottom-tabs">
+<button class="active" onclick="setBottomTab('detail')">DETAIL</button>
+<button onclick="setBottomTab('sectors')">SECTORS</button>
+<button onclick="setBottomTab('portfolio')">PORTFOLIO</button>
+<button onclick="setBottomTab('econ')">ECONOMICS</button>
+</div>
+<div class="panel-body" id="bottom-body"></div>
+</div>
+</div>
+<div id="command-bar">
+<span class="prompt">&gt;</span>
+<input type="text" id="cmd-input" placeholder="Enter command (type HELP for commands)..." autocomplete="off" spellcheck="false">
+</div>
+<script>
+const TICKERS = [
+{sym:'AAPL',name:'Apple Inc',price:189.84,sector:'Technology',exchange:'NASDAQ'},
+{sym:'MSFT',name:'Microsoft Corp',price:417.88,sector:'Technology',exchange:'NASDAQ'},
+{sym:'GOOGL',name:'Alphabet Inc',price:174.13,sector:'Technology',exchange:'NASDAQ'},
+{sym:'AMZN',name:'Amazon.com Inc',price:186.49,sector:'Consumer Disc',exchange:'NASDAQ'},
+{sym:'NVDA',name:'NVIDIA Corp',price:875.28,sector:'Technology',exchange:'NASDAQ'},
+{sym:'META',name:'Meta Platforms',price:505.75,sector:'Technology',exchange:'NASDAQ'},
+{sym:'TSLA',name:'Tesla Inc',price:177.48,sector:'Consumer Disc',exchange:'NASDAQ'},
+{sym:'BRK.B',name:'Berkshire Hathaway',price:432.15,sector:'Financials',exchange:'NYSE'},
+{sym:'JPM',name:'JPMorgan Chase',price:198.52,sector:'Financials',exchange:'NYSE'},
+{sym:'V',name:'Visa Inc',price:279.33,sector:'Financials',exchange:'NYSE'},
+{sym:'JNJ',name:'Johnson & Johnson',price:156.74,sector:'Health Care',exchange:'NYSE'},
+{sym:'WMT',name:'Walmart Inc',price:168.83,sector:'Consumer Staples',exchange:'NYSE'},
+{sym:'XOM',name:'Exxon Mobil',price:104.27,sector:'Energy',exchange:'NYSE'},
+{sym:'PG',name:'Procter & Gamble',price:162.45,sector:'Consumer Staples',exchange:'NYSE'},
+{sym:'MA',name:'Mastercard Inc',price:463.21,sector:'Financials',exchange:'NYSE'},
+{sym:'UNH',name:'UnitedHealth Group',price:512.38,sector:'Health Care',exchange:'NYSE'},
+{sym:'HD',name:'Home Depot Inc',price:362.17,sector:'Consumer Disc',exchange:'NYSE'},
+{sym:'DIS',name:'Walt Disney Co',price:112.43,sector:'Communication',exchange:'NYSE'},
+{sym:'NFLX',name:'Netflix Inc',price:628.45,sector:'Communication',exchange:'NASDAQ'},
+{sym:'AMD',name:'AMD Inc',price:167.82,sector:'Technology',exchange:'NASDAQ'},
+{sym:'BAC',name:'Bank of America',price:38.92,sector:'Financials',exchange:'NYSE'},
+{sym:'INTC',name:'Intel Corp',price:31.24,sector:'Technology',exchange:'NASDAQ'},
+{sym:'CSCO',name:'Cisco Systems',price:51.37,sector:'Technology',exchange:'NASDAQ'},
+{sym:'PFE',name:'Pfizer Inc',price:28.15,sector:'Health Care',exchange:'NYSE'},
+{sym:'KO',name:'Coca-Cola Co',price:62.48,sector:'Consumer Staples',exchange:'NYSE'},
+{sym:'NKE',name:'Nike Inc',price:98.73,sector:'Consumer Disc',exchange:'NYSE'},
+{sym:'CRM',name:'Salesforce Inc',price:283.56,sector:'Technology',exchange:'NYSE'},
+{sym:'ORCL',name:'Oracle Corp',price:127.89,sector:'Technology',exchange:'NYSE'},
+{sym:'PEP',name:'PepsiCo Inc',price:171.24,sector:'Consumer Staples',exchange:'NASDAQ'},
+{sym:'COST',name:'Costco Wholesale',price:742.31,sector:'Consumer Staples',exchange:'NASDAQ'}
+];
+const INDICES = [
+{name:'S&P 500',sym:'SPX',price:5234.18,change:0.42},
+{name:'DOW JONES',sym:'DJI',price:39512.84,change:0.31},
+{name:'NASDAQ',sym:'IXIC',price:16340.87,change:0.58},
+{name:'RUSSELL 2000',sym:'RUT',price:2083.35,change:-0.15}
+];
+const SECTORS = [
+{name:'Technology',change:1.24,color:'#00c853'},
+{name:'Financials',change:0.67,color:'#00c853'},
+{name:'Health Care',change:-0.32,color:'#ff1744'},
+{name:'Energy',change:0.89,color:'#00c853'},
+{name:'Consumer Disc',change:-0.15,color:'#ff1744'},
+{name:'Consumer Staples',change:0.23,color:'#00c853'},
+{name:'Communication',change:0.45,color:'#00c853'},
+{name:'Industrials',change:0.38,color:'#00c853'},
+{name:'Materials',change:-0.52,color:'#ff1744'},
+{name:'Utilities',change:0.12,color:'#00c853'},
+{name:'Real Estate',change:-0.28,color:'#ff1744'}
+];
+const NEWS_TEMPLATES = [
+{src:'REUTERS',titles:['{sym} reports strong quarterly earnings, beats analyst expectations','{sym} announces strategic partnership with major tech firm','{sym} shares surge on positive clinical trial results','{sym} CEO discusses growth strategy at investor conference','{sym} expands operations into Asian markets']},
+{src:'BLOOMBERG',titles:['{sym} faces regulatory scrutiny over market practices','{sym} stock reaches new 52-week high amid buying pressure','{sym} announces $2B share buyback program','{sym} supply chain improvements drive margin expansion','{sym} integrates AI technology into core product line']},
+{src:'CNBC',titles:['Analysts upgrade {sym} to "Buy" with raised price target','{sym} revenue growth accelerates in latest quarter','{sym} board approves special dividend for shareholders','{sym} launches new product line targeting enterprise clients','{sym} acquisition deal valued at $3.5B receives approval']},
+{src:'WSJ',titles:['{sym} navigates tariff concerns with diversified supply chain','{sym} insider trading activity raises investor interest','{sym} R&D spending increases 15% year over year','{sym} faces class action lawsuit over product safety','{sym} ESG rating upgraded by major rating agency']},
+{src:'FT',titles:['{sym} European operations show resilience amid economic headwinds','{sym} debt restructuring plan gains creditor support','{sym} international revenue exceeds domestic for first time','{sym} pension fund increases stake to 8.3%','{sym} faces antitrust investigation in EU markets']},
+{src:'BBG',titles:['Fed rate decision impacts {sym} sector outlook','{sym} trading volume spikes 300% above average','{sym} options market signals bullish sentiment','{sym} short interest drops to lowest level in 2 years','{sym} institutional ownership reaches record 78%']}
+];
+const ECON_EVENTS = [
+{date:'Mon',event:'ISM Manufacturing PMI',forecast:'49.2',previous:'49.1',actual:'49.5'},
+{date:'Tue',event:'Homebuilding Permits',forecast:'1.425M',previous:'1.432M',actual:'1.440M'},
+{date:'Wed',event:'Initial Jobless Claims',forecast:'215K',previous:'212K',actual:'208K'},
+{date:'Thu',event:'Flash Manufacturing PMI',forecast:'52.1',previous:'51.8',actual:'52.4'},
+{date:'Fri',event:'Consumer Confidence (UoM)',forecast:'105.0',previous:'104.7',actual:'107.2'},
+{date:'Mon',event:'New Home Sales',forecast:'645K',previous:'628K',actual:'660K'},
+{date:'Tue',event:'Existing Home Sales',forecast:'4.08M',previous:'4.14M',actual:'4.02M'},
+{date:'Wed',event:'Durable Goods Orders',forecast:'0.3%',previous:'0.5%',actual:'0.6%'},
+{date:'Thu',event:'GDP QoQ (Prelim)',forecast:'2.4%',previous:'2.2%',actual:'2.8%'},
+{date:'Fri',event:'CPI MoM',forecast:'0.3%',previous:'0.2%',actual:'0.4%'},
+{date:'Mon',event:'Retail Sales MoM',forecast:'0.4%',previous:'0.1%',actual:'0.6%'},
+{date:'Tue',event:'Industrial Production',forecast:'0.2%',previous:'0.1%',actual:'0.3%'}
+];
+const PORTFOLIO = [
+{sym:'AAPL',shares:50,avgCost:165.20},
+{sym:'MSFT',shares:25,avgCost:380.50},
+{sym:'NVDA',shares:15,avgCost:620.00},
+{sym:'GOOGL',shares:40,avgCost:145.80},
+{sym:'AMZN',shares:30,avgCost:155.30},
+{sym:'JPM',shares:35,avgCost:175.60},
+{sym:'META',shares:20,avgCost:420.00},
+{sym:'V',shares:25,avgCost:255.40}
+];
+let state = {
+selectedTicker: 'AAPL',
+chartType: 'candle',
+chartRange: '1W',
+bottomTab: 'detail',
+tickers: {},
+historicalData: {},
+news: [],
+lastPrices: {}
+};
+TICKERS.forEach(t => {
+state.tickers[t.sym] = {...t, prevPrice: t.price, change: 0, changePct: 0, high: t.price * 1.02, low: t.price * 0.98, open: t.price * 0.995, volume: Math.floor(Math.random() * 50000000) + 5000000};
+state.lastPrices[t.sym] = t.price;
+});
+function generateHistory(sym, days) {
+const t = state.tickers[sym];
+let price = t.price * (0.92 + Math.random() * 0.08);
+const data = [];
+for (let i = 0; i < days; i++) {
+const volatility = 0.015 + Math.random() * 0.02;
+const drift = (Math.random() - 0.48) * volatility;
+const open = price;
+const close = open * (1 + drift);
+const high = Math.max(open, close) * (1 + Math.random() * 0.008);
+const low = Math.min(open, close) * (1 - Math.random() * 0.008);
+const volume = Math.floor((15000000 + Math.random() * 40000000) * (1 + Math.abs(drift) * 10));
+data.push({open, high, low, close, volume, date: new Date(Date.now() - (days - i) * 86400000)});
+price = close;
+}
+data[data.length - 1].close = t.price;
+data[data.length - 1].high = Math.max(data[data.length - 1].high, t.price);
+data[data.length - 1].low = Math.min(data[data.length - 1].low, t.price);
+return data;
+}
+TICKERS.forEach(t => {
+state.historicalData[t.sym] = generateHistory(t.sym, 365);
+});
+function generateNews() {
+const news = [];
+for (let i = 0; i < 40; i++) {
+const template = NEWS_TEMPLATES[Math.floor(Math.random() * NEWS_TEMPLATES.length)];
+const ticker = TICKERS[Math.floor(Math.random() * TICKERS.length)];
+const title = template.titles[Math.floor(Math.random() * template.titles.length)].replace('{sym}', ticker.sym);
+const minsAgo = i * 3 + Math.floor(Math.random() * 3);
+news.push({time: minsAgo === 0 ? 'JUST NOW' : `${minsAgo}m ago`, source: template.src, title, ticker: ticker.sym, isNew: i < 3});
+}
+return news;
+}
+state.news = generateNews();
+function updateClock() {
+const now = new Date();
+const et = now.toLocaleString('en-US', {timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false});
+const date = now.toLocaleDateString('en-US', {timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'});
+document.getElementById('clock').textContent = `${date} ${et} ET`;
+}
+function renderWatchlist() {
+const body = document.getElementById('wl-body');
+let html = '<div style="padding:4px 8px;border-bottom:1px solid var(--border);display:grid;grid-template-columns:80px 1fr 70px;gap:4px;font-size:10px;color:var(--dim)"><span>SYMBOL</span><span>NAME</span><span style="text-align:right">PRICE</span></div>';
+TICKERS.forEach(t => {
+const d = state.tickers[t.sym];
+const chg = d.price - d.prevPrice;
+const chgPct = (chg / d.prevPrice * 100);
+const dir = chg > 0 ? 'up' : chg < 0 ? 'down' : 'flat';
+const sign = chg > 0 ? '+' : '';
+const sel = t.sym === state.selectedTicker ? ' selected' : '';
+html += `<div class="ticker-row${sel}" onclick="selectTicker('${t.sym}')">
+<div><div class="ticker-sym">${t.sym}</div><div class="ticker-name">${t.name}</div></div>
+<div class="ticker-price">${d.price.toFixed(2)}</div>
+<div><div class="ticker-change ${dir}">${sign}${chg.toFixed(2)}</div><div class="ticker-change ${dir}">${sign}${chgPct.toFixed(2)}%</div></div>
+</div>`;
+});
+document.getElementById('wl-count').textContent = `${TICKERS.length} symbols`;
+body.innerHTML = html;
+}
+function selectTicker(sym) {
+state.selectedTicker = sym;
+const t = TICKERS.find(x => x.sym === sym);
+document.getElementById('chart-title').textContent = `${sym} - ${t.name.toUpperCase()}`;
+document.getElementById('chart-exchange').textContent = t.exchange;
+renderWatchlist();
+renderChart();
+renderBottom();
+}
+function renderChart() {
+const canvas = document.getElementById('chart-canvas');
+const container = canvas.parentElement;
+const dpr = window.devicePixelRatio || 1;
+canvas.width = container.clientWidth * dpr;
+canvas.height = container.clientHeight * dpr;
+canvas.style.width = container.clientWidth + 'px';
+canvas.style.height = container.clientHeight + 'px';
+const ctx = canvas.getContext('2d');
+ctx.scale(dpr, dpr);
+const W = container.clientWidth;
+const H = container.clientHeight;
+const data = state.historicalData[state.selectedTicker];
+const rangeMap = {'1D': 1, '1W': 5, '1M': 22, '3M': 66, '1Y': 252};
+const days = rangeMap[state.chartRange] || 5;
+const slice = data.slice(-days);
+if (!slice.length) return;
+const allPrices = slice.flatMap(d => [d.high, d.low]);
+const minP = Math.min(...allPrices) * 0.998;
+const maxP = Math.max(...allPrices) * 1.002;
+const pad = {top: 60, right: 60, bottom: 40, left: 10};
+const chartW = W - pad.left - pad.right;
+const chartH = H - pad.top - pad.bottom;
+ctx.fillStyle = '#0d0d0d';
+ctx.fillRect(0, 0, W, H);
+const gridLines = 6;
+for (let i = 0; i <= gridLines; i++) {
+const y = pad.top + (chartH / gridLines) * i;
+const price = maxP - ((maxP - minP) / gridLines) * i;
+ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+ctx.beginPath();
+ctx.moveTo(pad.left, y);
+ctx.lineTo(W - pad.right, y);
+ctx.stroke();
+ctx.fillStyle = '#555';
+ctx.font = '10px Courier New';
+ctx.textAlign = 'right';
+ctx.fillText(price.toFixed(2), W - 4, y + 3);
+}
+const barW = chartW / slice.length;
+if (state.chartType === 'candle') {
+const bodyW = Math.max(1, barW * 0.6);
+slice.forEach((d, i) => {
+const x = pad.left + i * barW + barW / 2;
+const oY = pad.top + ((maxP - d.open) / (maxP - minP)) * chartH;
+const cY = pad.top + ((maxP - d.close) / (maxP - minP)) * chartH;
+const hY = pad.top + ((maxP - d.high) / (maxP - minP)) * chartH;
+const lY = pad.top + ((maxP - d.low) / (maxP - minP)) * chartH;
+const green = d.close >= d.open;
+ctx.strokeStyle = green ? '#00c853' : '#ff1744';
+ctx.lineWidth = 1;
+ctx.beginPath();
+ctx.moveTo(x, hY);
+ctx.lineTo(x, lY);
+ctx.stroke();
+ctx.fillStyle = green ? '#00c853' : '#ff1744';
+const bodyTop = Math.min(oY, cY);
+const bodyH = Math.max(1, Math.abs(oY - cY));
+ctx.fillRect(x - bodyW / 2, bodyTop, bodyW, bodyH);
+});
+} else if (state.chartType === 'line') {
+ctx.strokeStyle = '#ff8c00';
+ctx.lineWidth = 2;
+ctx.beginPath();
+slice.forEach((d, i) => {
+const x = pad.left + i * barW + barW / 2;
+const y = pad.top + ((maxP - d.close) / (maxP - minP)) * chartH;
+if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+});
+ctx.stroke();
+const lastD = slice[slice.length - 1];
+const lastX = pad.left + (slice.length - 1) * barW + barW / 2;
+const lastY = pad.top + ((maxP - lastD.close) / (maxP - minP)) * chartH;
+const grad = ctx.createLinearGradient(0, lastY, 0, pad.top + chartH);
+grad.addColorStop(0, 'rgba(255,140,0,0.15)');
+grad.addColorStop(1, 'rgba(255,140,0,0)');
+ctx.fillStyle = grad;
+ctx.beginPath();
+ctx.moveTo(pad.left + barW / 2, pad.top + chartH);
+slice.forEach((d, i) => {
+const x = pad.left + i * barW + barW / 2;
+const y = pad.top + ((maxP - d.close) / (maxP - minP)) * chartH;
+ctx.lineTo(x, y);
+});
+ctx.lineTo(lastX, pad.top + chartH);
+ctx.closePath();
+ctx.fill();
+} else if (state.chartType === 'volume') {
+const maxVol = Math.max(...slice.map(d => d.volume));
+slice.forEach((d, i) => {
+const x = pad.left + i * barW;
+const h = (d.volume / maxVol) * chartH * 0.8;
+const green = d.close >= d.open;
+ctx.fillStyle = green ? 'rgba(0,200,83,0.6)' : 'rgba(255,23,68,0.6)';
+ctx.fillRect(x + 1, pad.top + chartH - h, barW - 2, h);
+});
+}
+const t = state.tickers[state.selectedTicker];
+const chg = t.price - t.prevPrice;
+const chgPct = (chg / t.prevPrice * 100);
+const dir = chg >= 0 ? 'up' : 'down';
+const sign = chg >= 0 ? '+' : '';
+document.getElementById('chart-info').innerHTML = `
+<div style="color:var(--orange);font-size:11px;margin-bottom:2px">${state.selectedTicker} | ${TICKERS.find(x=>x.sym===state.selectedTicker).name}</div>
+<div class="price-big">${t.price.toFixed(2)}</div>
+<div class="change-line ${dir}">${sign}${chg.toFixed(2)} (${sign}${chgPct.toFixed(2)}%)</div>
+<div style="margin-top:4px;font-size:10px;color:var(--dim)">
+Vol: ${(t.volume/1e6).toFixed(1)}M &nbsp; H: ${t.high.toFixed(2)} &nbsp; L: ${t.low.toFixed(2)}
+</div>`;
+canvas.onmousemove = function(e) {
+const rect = canvas.getBoundingClientRect();
+const mx = e.clientX - rect.left;
+const idx = Math.floor((mx - pad.left) / barW);
+if (idx >= 0 && idx < slice.length) {
+const d = slice[idx];
+const tooltip = document.getElementById('chart-tooltip');
+tooltip.style.display = 'block';
+tooltip.style.left = (mx + 10) + 'px';
+tooltip.style.top = (e.clientY - rect.top - 30) + 'px';
+tooltip.innerHTML = `<div style="color:var(--orange)">${d.date.toLocaleDateString()}</div>
+O: ${d.open.toFixed(2)} H: ${d.high.toFixed(2)}<br>L: ${d.low.toFixed(2)} C: ${d.close.toFixed(2)}<br>Vol: ${(d.volume/1e6).toFixed(1)}M`;
+}
+};
+canvas.onmouseleave = function() {
+document.getElementById('chart-tooltip').style.display = 'none';
+};
+}
+function renderNews() {
+const body = document.getElementById('news-body');
+let html = '';
+state.news.forEach(n => {
+const blink = n.isNew ? ' blink' : '';
+html += `<div class="news-item" onclick="selectTicker('${n.ticker}')">
+<div><span class="news-time">${n.time}</span><span class="news-source">${n.source}</span></div>
+<div class="news-title${blink}">${n.title}</div>
+</div>`;
+});
+document.getElementById('news-count').textContent = `${state.news.length} items`;
+body.innerHTML = html;
+}
+function renderBottom() {
+const body = document.getElementById('bottom-body');
+if (state.bottomTab === 'detail') renderDetail(body);
+else if (state.bottomTab === 'sectors') renderSectors(body);
+else if (state.bottomTab === 'portfolio') renderPortfolio(body);
+else if (state.bottomTab === 'econ') renderEconomics(body);
+}
+function renderDetail(el) {
+const t = state.tickers[state.selectedTicker];
+const info = TICKERS.find(x => x.sym === state.selectedTicker);
+const chg = t.price - t.prevPrice;
+const chgPct = (chg / t.prevPrice * 100);
+const dir = chg >= 0 ? 'up' : 'down';
+const sign = chg >= 0 ? '+' : '';
+const mktCap = (t.price * (2500 + Math.floor(Math.random() * 8000)) / 1e9).toFixed(2);
+const pe = (15 + Math.random() * 35).toFixed(2);
+const div = (0.5 + Math.random() * 4).toFixed(2);
+const beta = (0.5 + Math.random() * 1.5).toFixed(2);
+const week52h = (t.price * (1.1 + Math.random() * 0.2)).toFixed(2);
+const week52l = (t.price * (0.7 + Math.random() * 0.15)).toFixed(2);
+el.innerHTML = `
+<div style="display:grid;grid-template-columns:200px 1fr;gap:12px">
+<div>
+<div style="color:var(--orange);font-size:18px;font-weight:bold;margin-bottom:4px">${state.selectedTicker}</div>
+<div style="color:var(--dim);font-size:11px;margin-bottom:8px">${info.name} | ${info.exchange} | ${info.sector}</div>
+<div style="font-size:24px;font-weight:bold;color:var(--amber)">${t.price.toFixed(2)}</div>
+<div class="${dir}" style="font-size:13px">${sign}${chg.toFixed(2)} (${sign}${chgPct.toFixed(2)}%)</div>
+</div>
+<div>
+<div class="detail-grid">
+<div class="detail-label">Open</div><div class="detail-value">${t.open.toFixed(2)}</div>
+<div class="detail-label">High</div><div class="detail-value">${t.high.toFixed(2)}</div>
+<div class="detail-label">Low</div><div class="detail-value">${t.low.toFixed(2)}</div>
+<div class="detail-label">Prev Close</div><div class="detail-value">${t.prevPrice.toFixed(2)}</div>
+<div class="detail-label">Volume</div><div class="detail-value">${(t.volume/1e6).toFixed(1)}M</div>
+<div class="detail-label">Avg Volume</div><div class="detail-value">${(t.volume*0.85/1e6).toFixed(1)}M</div>
+<div class="detail-label">Market Cap</div><div class="detail-value highlight">${mktCap}B</div>
+<div class="detail-label">P/E Ratio</div><div class="detail-value">${pe}</div>
+<div class="detail-label">Dividend Yield</div><div class="detail-value">${div}%</div>
+<div class="detail-label">Beta</div><div class="detail-value">${beta}</div>
+<div class="detail-label">52W High</div><div class="detail-value">${week52h}</div>
+<div class="detail-label">52W Low</div><div class="detail-value">${week52l}</div>
+<div class="detail-label">EPS</div><div class="detail-value">${(t.price/parseFloat(pe)).toFixed(2)}</div>
+<div class="detail-label">YTD Return</div><div class="detail-value ${Math.random()>0.4?'up':'down'}">${(Math.random()*30-5).toFixed(2)}%</div>
+</div>
+</div>
+</div>`;
+}
+function renderSectors(el) {
+let html = '<div style="padding:4px 8px;font-size:10px;color:var(--dim);border-bottom:1px solid var(--border);margin-bottom:4px">SECTOR PERFORMANCE - TODAY</div>';
+const maxAbs = Math.max(...SECTORS.map(s => Math.abs(s.change)));
+SECTORS.forEach(s => {
+const pct = (Math.abs(s.change) / maxAbs * 85) + 10;
+const color = s.change >= 0 ? 'var(--green)' : 'var(--red)';
+const sign = s.change >= 0 ? '+' : '';
+html += `<div class="sector-bar">
+<div class="name">${s.name}</div>
+<div class="bar"><div class="fill" style="width:${pct}%;background:${color}"></div></div>
+<div class="pct ${s.change>=0?'up':'down'}">${sign}${s.change.toFixed(2)}%</div>
+</div>`;
+});
+html += '<div style="margin-top:8px;padding:0 8px"><div style="color:var(--orange);font-size:11px;margin-bottom:4px">MARKET INDICES</div>';
+INDICES.forEach(idx => {
+const dir = idx.change >= 0 ? 'up' : 'down';
+const sign = idx.change >= 0 ? '+' : '';
+html += `<div class="market-index"><div class="idx-name">${idx.name}</div><div class="idx-val">${idx.price.toFixed(2)}</div><div class="idx-chg ${dir}">${sign}${idx.change.toFixed(2)}%</div></div>`;
+});
+html += '</div>';
+el.innerHTML = html;
+}
+function renderPortfolio(el) {
+let totalValue = 0, totalCost = 0, totalPnl = 0;
+let html = '<div style="padding:4px 8px;font-size:10px;color:var(--dim);border-bottom:1px solid var(--border);display:grid;grid-template-columns:70px 1fr 60px 70px 70px;gap:4px"><span>SYMBOL</span><span>NAME</span><span style="text-align:right">SHARES</span><span style="text-align:right">PRICE</span><span style="text-align:right">P&L</span></div>';
+PORTFOLIO.forEach(p => {
+const t = state.tickers[p.sym];
+const info = TICKERS.find(x => x.sym === p.sym);
+const value = t.price * p.shares;
+const cost = p.avgCost * p.shares;
+const pnl = value - cost;
+const pnlPct = (pnl / cost * 100);
+const dir = pnl >= 0 ? 'up' : 'down';
+const sign = pnl >= 0 ? '+' : '';
+totalValue += value;
+totalCost += cost;
+totalPnl += pnl;
+html += `<div class="portfolio-row" onclick="selectTicker('${p.sym}')" style="cursor:pointer">
+<div class="sym">${p.sym}</div>
+<div style="color:var(--dim)">${info.name}</div>
+<div class="shares">${p.shares}</div>
+<div class="price">${t.price.toFixed(2)}</div>
+<div class="pnl ${dir}">${sign}$${pnl.toFixed(2)} (${sign}${pnlPct.toFixed(1)}%)</div>
+</div>`;
+});
+const totalPnlPct = (totalPnl / totalCost * 100);
+const tDir = totalPnl >= 0 ? 'up' : 'down';
+const tSign = totalPnl >= 0 ? '+' : '';
+html += `<div style="padding:6px 8px;border-top:2px solid var(--orange);display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:4px">
+<div><div style="color:var(--dim);font-size:10px">TOTAL VALUE</div><div style="color:var(--amber);font-size:14px;font-weight:bold">$${totalValue.toFixed(2)}</div></div>
+<div><div style="color:var(--dim);font-size:10px">TOTAL COST</div><div style="color:var(--text);font-size:14px">$${totalCost.toFixed(2)}</div></div>
+<div><div style="color:var(--dim);font-size:10px">TOTAL P&L</div><div class="${tDir}" style="font-size:14px;font-weight:bold">${tSign}$${totalPnl.toFixed(2)} (${tSign}${totalPnlPct.toFixed(1)}%)</div></div>
+</div>`;
+el.innerHTML = html;
+}
+function renderEconomics(el) {
+let html = '<div style="padding:4px 8px;font-size:10px;color:var(--dim);border-bottom:1px solid var(--border);margin-bottom:2px">ECONOMIC CALENDAR</div>';
+html += '<div class="econ-row" style="color:var(--dim);font-weight:bold"><span>DATE</span><span>EVENT</span><span style="text-align:right">ACTUAL</span><span style="text-align:right">FORECAST</span><span style="text-align:right">PREVIOUS</span></div>';
+ECON_EVENTS.forEach(e => {
+let cls = '';
+if (e.actual && e.forecast) {
+const a = parseFloat(e.actual);
+const f = parseFloat(e.forecast);
+if (a > f) cls = 'surprise-up';
+else if (a < f) cls = 'surprise-down';
+}
+html += `<div class="econ-row">
+<span class="date">${e.date}</span>
+<span class="event">${e.event}</span>
+<span class="actual ${cls}">${e.actual || '-'}</span>
+<span class="forecast">${e.forecast}</span>
+<span class="previous">${e.previous}</span>
+</div>`;
+});
+el.innerHTML = html;
+}
+function setLayout(layout) {
+const main = document.getElementById('main');
+main.className = 'layout-' + layout;
+document.querySelectorAll('#nav button').forEach(b => b.classList.remove('active'));
+event.target.classList.add('active');
+setTimeout(() => { renderChart(); }, 50);
+}
+function setChartType(type) {
+state.chartType = type;
+document.querySelectorAll('.chart-toolbar button').forEach(b => {
+if (['candle','line','volume'].includes(b.textContent.toLowerCase())) b.classList.remove('active');
+});
+event.target.classList.add('active');
+renderChart();
+}
+function setChartRange(range) {
+state.chartRange = range;
+document.querySelectorAll('.chart-toolbar button').forEach(b => {
+if (['1D','1W','1M','3M','1Y'].includes(b.textContent)) b.classList.remove('active');
+});
+event.target.classList.add('active');
+renderChart();
+}
+function setBottomTab(tab) {
+state.bottomTab = tab;
+document.querySelectorAll('.bottom-tabs button').forEach(b => b.classList.remove('active'));
+event.target.classList.add('active');
+renderBottom();
+}
+function showHelp() {
+const overlay = document.createElement('div');
+overlay.className = 'modal-overlay';
+overlay.id = 'help-modal';
+overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+overlay.innerHTML = `<div class="modal">
+<span class="close" onclick="document.getElementById('help-modal').remove()">&times;</span>
+<h2>COMMAND REFERENCE</h2>
+<div class="help-grid">
+<div class="cmd">AAPL</div><div class="desc">Select a ticker by symbol</div>
+<div class="cmd">QUOTE AAPL</div><div class="desc">Show detailed quote for a ticker</div>
+<div class="cmd">CHART AAPL</div><div class="desc">Show chart for a ticker</div>
+<div class="cmd">NEWS</div><div class="desc">Refresh news feed</div>
+<div class="cmd">PORTFOLIO</div><div class="desc">Switch to portfolio view</div>
+<div class="cmd">SECTORS</div><div class="desc">Switch to sector performance</div>
+<div class="cmd">ECON</div><div class="desc">Switch to economic calendar</div>
+<div class="cmd">DETAIL</div><div class="desc">Switch to detail view</div>
+<div class="cmd">WATCHLIST</div><div class="desc">Show all watchlist symbols</div>
+<div class="cmd">ADD AAPL</div><div class="desc">Add symbol to watchlist</div>
+<div class="cmd">CLEAR</div><div class="desc">Clear command output</div>
+<div class="cmd">HELP</div><div class="desc">Show this help screen</div>
+</div>
+<div style="margin-top:12px;color:var(--dim);font-size:10px">
+Keyboard: Use arrow keys to navigate watchlist. Enter to select. ESC to close modals.
+</div>
+</div>`;
+document.body.appendChild(overlay);
+}
+function processCommand(cmd) {
+const parts = cmd.trim().toUpperCase().split(/\s+/);
+const action = parts[0];
+const arg = parts[1];
+if (!action) return;
+if (action === 'HELP') { showHelp(); return; }
+if (action === 'CLEAR') { return; }
+if (action === 'NEWS') { state.news = generateNews(); renderNews(); return; }
+if (action === 'PORTFOLIO') { state.bottomTab = 'portfolio'; document.querySelectorAll('.bottom-tabs button').forEach((b,i) => {b.classList.toggle('active', i===2)}); renderBottom(); return; }
+if (action === 'SECTORS') { state.bottomTab = 'sectors'; document.querySelectorAll('.bottom-tabs button').forEach((b,i) => {b.classList.toggle('active', i===1)}); renderBottom(); return; }
+if (action === 'ECON') { state.bottomTab = 'econ'; document.querySelectorAll('.bottom-tabs button').forEach((b,i) => {b.classList.toggle('active', i===3)}); renderBottom(); return; }
+if (action === 'DETAIL') { state.bottomTab = 'detail'; document.querySelectorAll('.bottom-tabs button').forEach((b,i) => {b.classList.toggle('active', i===0)}); renderBottom(); return; }
+if (action === 'WATCHLIST') { return; }
+if (action === 'ADD' && arg) {
+if (!TICKERS.find(t => t.sym === arg)) {
+const newTicker = {sym:arg, name: arg + ' Corp', price: 50 + Math.random()*200, sector:'Other', exchange:'NYSE'};
+TICKERS.push(newTicker);
+state.tickers[arg] = {...newTicker, prevPrice: newTicker.price, change:0, changePct:0, high: newTicker.price*1.02, low: newTicker.price*0.98, open: newTicker.price*0.995, volume: Math.floor(Math.random()*30000000)};
+state.historicalData[arg] = generateHistory(arg, 365);
+renderWatchlist();
+}
+return;
+}
+if (action === 'QUOTE' && arg) {
+const found = TICKERS.find(t => t.sym === arg);
+if (found) { selectTicker(arg); state.bottomTab = 'detail'; document.querySelectorAll('.bottom-tabs button').forEach((b,i) => {b.classList.toggle('active', i===0)}); renderBottom(); }
+return;
+}
+if (action === 'CHART' && arg) {
+const found = TICKERS.find(t => t.sym === arg);
+if (found) { selectTicker(arg); setLayout('chart'); }
+return;
+}
+if (TICKERS.find(t => t.sym === action)) {
+selectTicker(action);
+return;
+}
+}
+document.getElementById('cmd-input').addEventListener('keydown', function(e) {
+if (e.key === 'Enter') {
+processCommand(this.value);
+this.value = '';
+}
+if (e.key === 'Escape') {
+const modal = document.getElementById('help-modal');
+if (modal) modal.remove();
+}
+});
+document.getElementById('cmd-input').addEventListener('keydown', function(e) {
+const idx = TICKERS.findIndex(t => t.sym === state.selectedTicker);
+if (e.key === 'ArrowDown') {
+e.preventDefault();
+const next = (idx + 1) % TICKERS.length;
+selectTicker(TICKERS[next].sym);
+}
+if (e.key === 'ArrowUp') {
+e.preventDefault();
+const prev = (idx - 1 + TICKERS.length) % TICKERS.length;
+selectTicker(TICKERS[prev].sym);
+}
+});
+function simulateMarket() {
+TICKERS.forEach(t => {
+const d = state.tickers[t.sym];
+d.prevPrice = d.price;
+const volatility = 0.002 + Math.random() * 0.004;
+const change = (Math.random() - 0.48) * volatility;
+d.price = d.price * (1 + change);
+d.change = d.price - d.prevPrice;
+d.changePct = (d.change / d.prevPrice) * 100;
+d.high = Math.max(d.high, d.price);
+d.low = Math.min(d.low, d.price);
+d.volume += Math.floor(Math.random() * 50000);
+});
+INDICES.forEach(idx => {
+const chg = (Math.random() - 0.48) * 0.05;
+idx.price = idx.price * (1 + chg);
+idx.change += chg;
+});
+const lastData = state.historicalData[state.selectedTicker];
+if (lastData) {
+const last = lastData[lastData.length - 1];
+last.close = state.tickers[state.selectedTicker].price;
+last.high = Math.max(last.high, state.tickers[state.selectedTicker].price);
+last.low = Math.min(last.low, state.tickers[state.selectedTicker].price);
+last.volume = state.tickers[state.selectedTicker].volume;
+}
+}
+function refreshNews() {
+const template = NEWS_TEMPLATES[Math.floor(Math.random() * NEWS_TEMPLATES.length)];
+const ticker = TICKERS[Math.floor(Math.random() * TICKERS.length)];
+const title = template.titles[Math.floor(Math.random() * template.titles.length)].replace('{sym}', ticker.sym);
+state.news.unshift({time: 'JUST NOW', source: template.src, title, ticker: ticker.sym, isNew: true});
+if (state.news.length > 50) state.news.pop();
+state.news.forEach((n, i) => { n.isNew = i < 3; });
+renderNews();
+}
+function init() {
+updateClock();
+renderWatchlist();
+renderChart();
+renderNews();
+renderBottom();
+setInterval(updateClock, 1000);
+setInterval(() => { simulateMarket(); renderWatchlist(); renderChart(); }, 2000);
+setInterval(refreshNews, 8000);
+window.addEventListener('resize', () => { renderChart(); });
+document.getElementById('cmd-input').focus();
+document.addEventListener('click', function(e) {
+if (!e.target.closest('#command-bar') && !e.target.closest('.modal')) {
+document.getElementById('cmd-input').focus();
+}
+});
+}
+init();
+</script>
+</body>
+</html>

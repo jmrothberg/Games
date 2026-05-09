@@ -1,0 +1,58 @@
+OpenCode + MLX on a new Mac
+
+1) Start the MLX server
+Example:
+mlx_lm.server --model /Users/YOURNAME/MLX_Models/Qwen3.6-35B-A3B-mxfp8 --port 8080
+
+2) Check the exact model ID MLX is exposing
+curl http://localhost:8080/v1/models
+
+3) Make the OpenCode config
+mkdir -p ~/.config/opencode
+cat > ~/.config/opencode/opencode.json <<'EOF2'
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "mlx": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "MLX Local",
+      "options": {
+        "baseURL": "http://127.0.0.1:8080/v1",
+        "apiKey": "sk-local"
+      },
+      "models": {
+        "localmodel": {
+          "name": "Local MLX Model",
+          "id": "PASTE_THE_EXACT_MODEL_ID_FROM_CURL_HERE"
+        }
+      }
+    }
+  },
+  "model": "mlx/localmodel"
+}
+EOF2
+
+4) Start OpenCode
+OPENAI_API_KEY=sk-local opencode
+
+If you want a different running MLX model
+
+A) Run:
+curl http://localhost:8080/v1/models
+
+B) Copy the exact "id" for the model you want.
+
+C) Edit this line in ~/.config/opencode/opencode.json:
+"id": "PASTE_THE_EXACT_MODEL_ID_FROM_CURL_HERE"
+
+D) Keep this line the same:
+"model": "mlx/localmodel"
+
+E) Restart OpenCode:
+pkill opencode
+OPENAI_API_KEY=sk-local opencode
+
+Notes
+- OpenCode uses the exact model ID exposed by MLX.
+- Do not put the filesystem path directly after -m unless your config maps it.
+- The clean way is: map the MLX model ID to a short alias like localmodel in opencode.json.

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>JMR's Gauntlet: The Third Encounter</title>
+<title>JMR's Gauntlet: The Third Encounter v1.0</title>
 <meta name="description" content="Single-file HTML/JS recreation of the 1990 Atari Lynx classic — 8 character classes, procedural dungeons, Star Gem quest, IT boss, cheat mode, touch controls.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://jmrothberg.github.io/Games/gauntlet_third_encounter.html">
@@ -25,11 +25,13 @@ html, body { width:100%; height:100%; overflow:hidden; background:#000; display:
 #wrap { display:flex; flex-direction:column; align-items:center; justify-content:center; width:100%; height:100%; padding:8px; }
 #game { image-rendering:pixelated; image-rendering:crisp-edges; background:#000; border:2px solid #444; max-width:100%; max-height:calc(100vh - 180px); }
 #controls { display:flex; gap:16px; margin-top:10px; align-items:center; justify-content:center; width:100%; max-width:500px; padding:0 12px; }
-.dpad { position:relative; width:140px; height:140px; flex-shrink:0; }
+.dpad { position:relative; width:148px; height:148px; flex-shrink:0; }
 .btn { position:absolute; background:rgba(109,179,58,0.15); border:2px solid rgba(109,179,58,0.5); border-radius:8px; color:#6db33a; font-size:20px; font-weight:bold; display:flex; align-items:center; justify-content:center; }
 .btn:active { background:rgba(109,179,58,0.4); }
-.dpad .btn { width:46px; height:46px; }
-.u { top:0; left:47px; } .d { bottom:0; left:47px; } .l { top:47px; left:0; } .r { top:47px; right:0; }
+.dpad .btn { width:44px; height:44px; }
+.dpad .dbtn { width:34px; height:34px; font-size:12px; opacity:0.6; }
+.u { top:0; left:52px; } .d { bottom:0; left:52px; } .l { top:52px; left:0; } .r { top:52px; right:0; }
+.ul { top:4px; left:4px; } .ur { top:4px; right:4px; } .dl { bottom:4px; left:4px; } .dr { bottom:4px; right:4px; }
 .actions { display:flex; flex-direction:column; gap:8px; flex-shrink:0; }
 .arow { display:flex; gap:8px; }
 .abtn { position:relative; width:60px; height:50px; font-size:14px; }
@@ -41,17 +43,22 @@ html, body { width:100%; height:100%; overflow:hidden; background:#000; display:
   <canvas id="game" width="320" height="480"></canvas>
   <div id="controls">
     <div class="dpad">
+      <div class="btn dbtn ul" id="bul">&#8598;</div>
       <div class="btn u" id="bu">▲</div>
-      <div class="btn d" id="bd">▼</div>
+      <div class="btn dbtn ur" id="bur">&#8599;</div>
       <div class="btn l" id="bl">◀</div>
+      <div class="btn" id="bh" style="top:52px;left:52px;width:44px;height:44px;font-size:14px;opacity:0.7;">?</div>
       <div class="btn r" id="br">▶</div>
+      <div class="btn dbtn dl" id="bdl">&#8601;</div>
+      <div class="btn d" id="bd">▼</div>
+      <div class="btn dbtn dr" id="bdr">&#8600;</div>
     </div>
     <div class="actions">
       <div class="arow"><div class="btn abtn" id="ba">MELEE</div><div class="btn abtn" id="bb">SHOOT</div></div>
       <div class="arow"><div class="btn abtn" id="bi">INV</div><div class="btn abtn" id="bs">START</div></div>
     </div>
   </div>
-  <div id="hint">Arrows/WASD move · J melee · K shoot · I inventory · Space start · 1-4 use item</div>
+  <div id="hint"></div>
 </div>
 <script>
 'use strict';
@@ -1328,6 +1335,84 @@ const GENERATOR_1 = [
   '5555555555555555',
 ];
 
+// Computer Terminal — green-screen monitor on a stand
+const TERMINAL_0 = [
+  '................',
+  '..1111111111111.',
+  '..188888888881..',
+  '..184444444481..',
+  '..184344434481..',
+  '..184444444481..',
+  '..184434344481..',
+  '..184444444481..',
+  '..184344443481..',
+  '..184444444481..',
+  '..188888888881..',
+  '..1111111111111.',
+  '......1881......',
+  '.....188881.....',
+  '....11111111....',
+  '................',
+];
+const TERMINAL_1 = [
+  '................',
+  '..1111111111111.',
+  '..188888888881..',
+  '..184444444481..',
+  '..184434344481..',
+  '..184444444481..',
+  '..184344434481..',
+  '..184444444481..',
+  '..184434344481..',
+  '..184444444481..',
+  '..188888888881..',
+  '..1111111111111.',
+  '......1881......',
+  '.....188881.....',
+  '....11111111....',
+  '................',
+];
+
+// Gold pile — small shiny coins
+const GOLD_ITEM = [
+  '................',
+  '................',
+  '................',
+  '................',
+  '........BB......',
+  '.......BCCB.....',
+  '.......BCBB.....',
+  '......BB.BB.....',
+  '.....BCCBCCB....',
+  '.....BCBBCBB....',
+  '....BCCBBCCBB...',
+  '....BBBBBBBBB...',
+  '.....BBBBBBB....',
+  '................',
+  '................',
+  '................',
+];
+
+// Scroll — rolled parchment with wax seal
+const SCROLL_ITEM = [
+  '................',
+  '................',
+  '.....999999.....',
+  '....9AAAAAA9....',
+  '...9AAAAAAAA9...',
+  '...9A9AAAA9A9...',
+  '...9AAAAAAAA9...',
+  '...9A9A99A9A9...',
+  '...9AAAAAAAA9...',
+  '...9AAAADDAA9...',
+  '...9AAAADDAA9...',
+  '...9AAAAAAAA9...',
+  '....9AAAAAA9....',
+  '.....999999.....',
+  '................',
+  '................',
+];
+
 // ----- bake everything -------------------------------------------------------
 const SPR = {};
 
@@ -1413,6 +1498,14 @@ function bake() {
   // generators
   SPR.gen0 = bakeSprite(GENERATOR_0);
   SPR.gen1 = bakeSprite(GENERATOR_1);
+
+  // computer terminal
+  SPR.terminal0 = bakeSprite(TERMINAL_0);
+  SPR.terminal1 = bakeSprite(TERMINAL_1);
+
+  // gold & scroll
+  SPR.gold = bakeSprite(GOLD_ITEM);
+  SPR.scroll = bakeSprite(SCROLL_ITEM);
 
   // portraits
   SPR.portrait_warrior  = makeWarriorPortrait();
@@ -1501,6 +1594,7 @@ function tileSprite(id, x, y, t) {
     case 4: return (t >> 3) & 1 ? SPR.exit1 : SPR.exit0;
     case 5: return (t >> 3) & 1 ? SPR.torch1 : SPR.torch0;
     case 6: return (t >> 3) & 1 ? SPR.gen1  : SPR.gen0;
+    case 7: return (t >> 4) & 1 ? SPR.terminal1 : SPR.terminal0;
   }
   return SPR.grass0;
 }
@@ -1514,26 +1608,34 @@ function tileSprite(id, x, y, t) {
 // Main path (S → X) has no locked doors — player can always reach exit.
 // Keys unlock two optional loot rooms (treasure/generator + potion/missile bonus).
 const LEVEL1_MAP = [
-  '####################',
-  '#S...@..K..........#',
-  '#..................#',
-  '#....######........#',
-  '#....#....#........#',
-  '#....D.E..#........#',
-  '#....#.$..#........#',
-  '#....##D###........#',
-  '#....#....#........#',
-  '#....#.G..#........#',
-  '#....######........#',
-  '#..................#',
-  '#.K......P.........#',
-  '#....T.............#',
-  '#.........E........#',
-  '#..................#',
-  '#...u....z.........#',
-  '#..................#',
-  '#.............@..Xm#',
-  '####################',
+  '############################',
+  '#S...@..K..........K.......#',
+  '#..........................#',
+  '#....######....T...........#',
+  '#....#....#................#',
+  '#....D.E..#.......W........#',
+  '#....#.$..#................#',
+  '#....##D###................#',
+  '#....#....#..####D####.....#',
+  '#....#.G..#..#........#....#',
+  '#....######..#..H.P...#....#',
+  '#............#........#....#',
+  '#.K......P...#..K.@...#....#',
+  '#....T.......#........#....#',
+  '#.........E..##########....#',
+  '#..........................#',
+  '#...u....z.......W.........#',
+  '#..........C...............#',
+  '#..........................#',
+  '#..........................#',
+  '#......####D####...........#',
+  '#......#.......#...........#',
+  '#......#.B.K.$.#...........#',
+  '#......#.......#...........#',
+  '#......#########...........#',
+  '#.........E.......E........#',
+  '#.............@..Xm........#',
+  '############################',
 ];
 
 // Parse a map string grid into a level structure
@@ -1551,6 +1653,7 @@ function parseMap(mapRows, biome) {
         case 'X': tile = 4; spawns.exit = {x,y}; break;
         case 'T': tile = 5; spawns.torches.push({x,y}); break;
         case 'G': tile = 6; spawns.generators.push({x,y,type:'scorpion',hp:12}); break;
+        case 'C': tile = 7; spawns.terminals = spawns.terminals || []; spawns.terminals.push({x,y}); break;
         case 'S': spawns.player = {x,y}; break;
         case 'E': spawns.enemies.push({x,y,type:'scorpion'}); break;
         case 'k': spawns.enemies.push({x,y,type:'skeleton'}); break;
@@ -1564,7 +1667,13 @@ function parseMap(mapRows, biome) {
         case 'K': spawns.items.push({x,y,type:'key'}); break;
         case 'P': spawns.items.push({x,y,type:'potion'}); break;
         case '$': spawns.items.push({x,y,type:'treasure'}); break;
+        case 'W': spawns.items.push({x,y,type:'gold'}); break;
         case 'm': spawns.items.push({x,y,type:'missile'}); break;
+        case 'H': spawns.items.push({x,y,type:'scroll_heal'}); break;
+        case 'B': spawns.items.push({x,y,type:'scroll_blast'}); break;
+        case 'V': spawns.items.push({x,y,type:'scroll_speed'}); break;
+        case 'R': spawns.items.push({x,y,type:'scroll_strong'}); break;
+        case 'N': spawns.items.push({x,y,type:'scroll_invis'}); break;
         case '0': case '1': case '2': case '3': case '4': case '5': case '6': case '7': {
           spawns.items.push({x,y,type:'gem_' + ch});
           break;
@@ -1615,8 +1724,7 @@ const player = {
   missiles: 3,
   levelNum: 1,
   score: 0,
-  keys: 0,
-  inventory: [],        // list of item types (potions etc)
+  inventory: [],        // list of item types (keys, potions, food, etc)
   meleeCd: 0,
   shootCd: 0,
   attacking: 0,         // frames remaining of melee anim
@@ -1631,13 +1739,29 @@ const player = {
   gems: 0,             // bitmask of collected Star Gem fragments (8 bits)
   cheat: false,        // C key: invincible-ish + unlimited ammo
   cheatCd: 0,          // toggle debounce
+  gold: 0,             // gold for buying from terminals
+  lastEncounter: null,  // { type:'item'|'enemy', id:'food'|'scorpion'|etc } — shown in HUD left panel
+  shopSel: 0,          // selected item in shop
 };
+
+// Shop stock — what terminals sell
+const SHOP_STOCK = [
+  { type:'food',         name:'FOOD',         price:30,  desc:'+400 life' },
+  { type:'potion',       name:'POTION',       price:80,  desc:'Bomb+heal' },
+  { type:'key',          name:'KEY',          price:40,  desc:'Opens door' },
+  { type:'missile',      name:'MISSILES',     price:50,  desc:'+5 ammo' },
+  { type:'scroll_heal',  name:'HEAL SCROLL',  price:100, desc:'+2500 life' },
+  { type:'scroll_blast', name:'BLAST SCROLL', price:120, desc:'Kill visible' },
+  { type:'scroll_speed', name:'SPEED SCROLL', price:80,  desc:'+4 speed' },
+  { type:'scroll_strong',name:'STR SCROLL',   price:80,  desc:'+2 strength' },
+];
 let enemies = [];
 let projectiles = [];
 let items = [];
 let generators = [];
 let doors = [];
 let torches = [];
+let terminals = [];
 let particles = [];
 let cameraX = 0, cameraY = 0;
 let gameTime = 0;
@@ -1668,12 +1792,151 @@ function setBtn(id, k) {
 setBtn('bu','u'); setBtn('bd','d'); setBtn('bl','l'); setBtn('br','r');
 setBtn('ba','a'); setBtn('bb','b'); setBtn('bi','i'); setBtn('bs','s');
 
+// Diagonal buttons — set two directions at once
+function setDiagBtn(id, k1, k2) {
+  const el = document.getElementById(id);
+  const on = e => { e.preventDefault(); touchState[k1] = true; touchState[k2] = true; };
+  const off = e => { e.preventDefault(); touchState[k1] = false; touchState[k2] = false; };
+  el.addEventListener('touchstart', on, {passive:false});
+  el.addEventListener('touchend', off, {passive:false});
+  el.addEventListener('touchcancel', off, {passive:false});
+  el.addEventListener('mousedown', on);
+  el.addEventListener('mouseup', off);
+  el.addEventListener('mouseleave', off);
+}
+setDiagBtn('bul','u','l'); setDiagBtn('bur','u','r');
+setDiagBtn('bdl','d','l'); setDiagBtn('bdr','d','r');
+
+// Help button (center of d-pad) — toggles help overlay
+(function() {
+  const hb = document.getElementById('bh');
+  const handler = function(e) {
+    e.preventDefault();
+    if (gameState === STATE.PLAY && helpCd <= 0) { helpOpen = !helpOpen; helpCd = 0.3; }
+  };
+  hb.addEventListener('touchstart', handler, {passive:false});
+  hb.addEventListener('mousedown', handler);
+})();
+
+// ---- Canvas touch: swipe to steer, tap to melee, 2-finger tap to shoot ----
+const canvasDir = { u:false, d:false, l:false, r:false };
+let _ctPrimary = null;       // { id, sx, sy, time }
+let _ctWasTwoFinger = false;
+
+canvas.addEventListener('touchstart', function(e) {
+  e.preventDefault();
+  audio();  // ensure AudioContext on first user gesture
+  const t0 = e.changedTouches[0];
+  if (e.touches.length === 1) {
+    _ctPrimary = { id: t0.identifier, sx: t0.clientX, sy: t0.clientY, time: performance.now() };
+    _ctWasTwoFinger = false;
+  }
+  if (e.touches.length >= 2) { _ctWasTwoFinger = true; }
+}, {passive:false});
+
+canvas.addEventListener('touchmove', function(e) {
+  e.preventDefault();
+  if (!_ctPrimary) return;
+  let pt = null;
+  for (let i = 0; i < e.touches.length; i++) {
+    if (e.touches[i].identifier === _ctPrimary.id) { pt = e.touches[i]; break; }
+  }
+  if (!pt) return;
+  const dx = pt.clientX - _ctPrimary.sx;
+  const dy = pt.clientY - _ctPrimary.sy;
+  const dist = Math.hypot(dx, dy);
+  const threshold = 18;
+  canvasDir.u = canvasDir.d = canvasDir.l = canvasDir.r = false;
+  if (dist > threshold) {
+    if (dx >  threshold * 0.4) canvasDir.r = true;
+    if (dx < -threshold * 0.4) canvasDir.l = true;
+    if (dy >  threshold * 0.4) canvasDir.d = true;
+    if (dy < -threshold * 0.4) canvasDir.u = true;
+  }
+}, {passive:false});
+
+canvas.addEventListener('touchend', function(e) {
+  e.preventDefault();
+  let primaryEnded = false;
+  for (let i = 0; i < e.changedTouches.length; i++) {
+    if (_ctPrimary && e.changedTouches[i].identifier === _ctPrimary.id) { primaryEnded = true; break; }
+  }
+  if (primaryEnded && _ctPrimary) {
+    const elapsed = performance.now() - _ctPrimary.time;
+    let endX = _ctPrimary.sx, endY = _ctPrimary.sy;
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      if (e.changedTouches[i].identifier === _ctPrimary.id) {
+        endX = e.changedTouches[i].clientX; endY = e.changedTouches[i].clientY; break;
+      }
+    }
+    const dist = Math.hypot(endX - _ctPrimary.sx, endY - _ctPrimary.sy);
+    // Tap detection: quick touch with little movement
+    if (elapsed < 300 && dist < 20) {
+      if (_ctWasTwoFinger) {
+        // Two-finger tap → shoot
+        touchState.b = true; setTimeout(()=>{ touchState.b = false; }, 120);
+      } else {
+        // Single tap
+        if (gameState === STATE.SELECT) {
+          handleSelectTouch(_ctPrimary.sx, _ctPrimary.sy);
+        } else if (gameState === STATE.PLAY) {
+          // Tap → melee
+          touchState.a = true; setTimeout(()=>{ touchState.a = false; }, 120);
+        } else {
+          // TITLE / DEAD / VICTORY → start
+          touchState.s = true; setTimeout(()=>{ touchState.s = false; }, 120);
+        }
+      }
+    }
+    canvasDir.u = canvasDir.d = canvasDir.l = canvasDir.r = false;
+    _ctPrimary = null;
+  }
+  if (e.touches.length === 0) {
+    _ctPrimary = null; _ctWasTwoFinger = false;
+    canvasDir.u = canvasDir.d = canvasDir.l = canvasDir.r = false;
+  }
+}, {passive:false});
+
+canvas.addEventListener('touchcancel', function() {
+  _ctPrimary = null; _ctWasTwoFinger = false;
+  canvasDir.u = canvasDir.d = canvasDir.l = canvasDir.r = false;
+}, {passive:false});
+
+// Handle canvas tap on select screen: tap left half = prev, right half = next, tap center = start
+function handleSelectTouch(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const cx = (clientX - rect.left) * (CW / rect.width);
+  const cy = (clientY - rect.top)  * (CH / rect.height);
+  // Tap on bottom half = start game
+  if (cy > CH * 0.6) {
+    applyClass(CLASSES[selectIdx]);
+    startLevel(1);
+    gameState = STATE.PLAY;
+    selectCooldown = 0.3;
+    return;
+  }
+  // Tap left or right to cycle characters
+  if (cx < CW * 0.35) {
+    selectIdx = (selectIdx - 1 + CLASSES.length) % CLASSES.length;
+    selectCooldown = 0.18;
+  } else if (cx > CW * 0.65) {
+    selectIdx = (selectIdx + 1) % CLASSES.length;
+    selectCooldown = 0.18;
+  } else {
+    // Tap center = start
+    applyClass(CLASSES[selectIdx]);
+    startLevel(1);
+    gameState = STATE.PLAY;
+    selectCooldown = 0.3;
+  }
+}
+
 function inputDir() {
   let dx = 0, dy = 0;
-  if (keys.ArrowUp    || keys.KeyW || touchState.u) dy -= 1;
-  if (keys.ArrowDown  || keys.KeyS || touchState.d) dy += 1;
-  if (keys.ArrowLeft  || keys.KeyA || touchState.l) dx -= 1;
-  if (keys.ArrowRight || keys.KeyD || touchState.r) dx += 1;
+  if (keys.ArrowUp    || keys.KeyW || touchState.u || canvasDir.u) dy -= 1;
+  if (keys.ArrowDown  || keys.KeyS || touchState.d || canvasDir.d) dy += 1;
+  if (keys.ArrowLeft  || keys.KeyA || touchState.l || canvasDir.l) dx -= 1;
+  if (keys.ArrowRight || keys.KeyD || touchState.r || canvasDir.r) dx += 1;
   return { dx, dy };
 }
 function inputMelee() { return keys.KeyJ || touchState.a; }
@@ -1740,13 +2003,13 @@ function mulberry32(a) { return function() { a |= 0; a = a + 0x6D2B79F5 | 0; let
 
 function generateLevel(n) {
   const rng = mulberry32(0x5EED ^ (n * 1337));
-  const W = 22, H = 22;
+  const W = 32, H = 32;
   const grid = [];
   for (let y = 0; y < H; y++) { grid.push(new Array(W).fill('#')); }
 
   // Carve random rectangular rooms
   const rooms = [];
-  const wantRooms = 4 + Math.min(4, Math.floor(n / 2));
+  const wantRooms = 6 + Math.min(6, Math.floor(n / 2));
   for (let i = 0; i < wantRooms * 4 && rooms.length < wantRooms; i++) {
     const rw = 4 + Math.floor(rng() * 5);
     const rh = 4 + Math.floor(rng() * 5);
@@ -1822,6 +2085,14 @@ function generateLevel(n) {
   // Treasure / potion / missile (keys handled in the reachability pass below)
   const drop = (ch) => { for (let t = 0; t < 20; t++) { const r = rooms[Math.floor(rng() * rooms.length)]; const p = roomFloor(r); if (grid[p.y][p.x] === '.') { grid[p.y][p.x] = ch; return; } } };
   drop('P'); drop('$'); drop('m');
+  // Gold and computer terminal
+  drop('W'); drop('W'); drop('W');
+  // Computer terminal
+  if (rng() < 0.7) drop('C');
+  // Scrolls — 1-2 per level
+  const scrollChars = ['H','B','V','R','N'];
+  drop(scrollChars[Math.floor(rng() * scrollChars.length)]);
+  if (rng() < 0.4) drop(scrollChars[Math.floor(rng() * scrollChars.length)]);
 
   // A couple torches on walls inside rooms
   for (let i = 0; i < 3; i++) {
@@ -1999,21 +2270,23 @@ function startLevel(n) {
   generators = level.spawns.generators.map(g => ({ x:(g.x+0.5)*TILE, y:(g.y+0.5)*TILE, type:g.type, hp:g.hp, cd:2, tx:g.x, ty:g.y }));
   doors = level.spawns.doors.map(d => ({ x:d.x, y:d.y, open:false }));
   torches = level.spawns.torches.map(t => ({ x:t.x, y:t.y }));
+  terminals = (level.spawns.terminals || []).map(t => ({ x:t.x, y:t.y }));
   projectiles = []; particles = [];
   cameraX = cameraY = 0;
   player.alertMsg = `Level ${n}`; player.alertTime = 2;
 }
 
 function makeEnemy(type, px, py) {
+  // All normal enemies chase the player. Only IT boss shoots.
   const stats = {
-    scorpion: { hp: 6,  speed: 60, dmg: 6,  score: 100, ai:'chase' },
+    scorpion: { hp: 6,  speed: 55, dmg: 6,  score: 100, ai:'chase' },
     skeleton: { hp: 10, speed: 40, dmg: 10, score: 150, ai:'chase' },
-    ghost:    { hp: 4,  speed: 50, dmg: 8,  score: 80,  ai:'drift', ethereal:true },
-    grunt:    { hp: 8,  speed: 55, dmg: 8,  score: 120, ai:'chase' },
-    demon:    { hp: 14, speed: 10, dmg: 0,  score: 300, ai:'shooter', cd:1.6, proj:'fire' },
-    sorcerer: { hp: 8,  speed: 25, dmg: 0,  score: 250, ai:'teleport', cd:2.0, proj:'fire' },
-    lobber:   { hp: 12, speed: 15, dmg: 0,  score: 220, ai:'lobber', cd:2.2 },
-    death:    { hp: 30, speed: 30, dmg: 40, score: 500, ai:'drain' },
+    ghost:    { hp: 4,  speed: 50, dmg: 8,  score: 80,  ai:'chase', ethereal:true },
+    grunt:    { hp: 8,  speed: 50, dmg: 8,  score: 120, ai:'chase' },
+    demon:    { hp: 14, speed: 35, dmg: 12, score: 300, ai:'chase' },
+    sorcerer: { hp: 8,  speed: 30, dmg: 10, score: 250, ai:'chase' },
+    lobber:   { hp: 12, speed: 25, dmg: 10, score: 220, ai:'chase' },
+    death:    { hp: 30, speed: 30, dmg: 40, score: 500, ai:'chase' },
     it:       { hp: 200, speed: 35, dmg: 25, score: 10000, ai:'boss', cd: 1.2, size: 32 },
   }[type] || { hp:5, speed:40, dmg:5, score:50, ai:'chase' };
   return {
@@ -2021,7 +2294,7 @@ function makeEnemy(type, px, py) {
     hp: stats.hp, maxHp: stats.hp,
     speed: stats.speed, dmg: stats.dmg, score: stats.score,
     ethereal: !!stats.ethereal,
-    ai: stats.ai, cd: (stats.cd || 0) * (0.5 + Math.random()), proj: stats.proj,
+    ai: stats.ai, cd: (stats.cd || 0) * (1.0 + Math.random()), proj: stats.proj,
     size: stats.size || 16,
     facing:'s', frame:0, animTime:0,
     hitFlash: 0,
@@ -2041,7 +2314,7 @@ function tileAt(tx, ty) {
 function isBlocked(px, py, ethereal) {
   const tx = Math.floor(px / TILE), ty = Math.floor(py / TILE);
   const t = tileAt(tx, ty);
-  if (t === 1) return true;
+  if (t === 1 || t === 7) return true;  // walls and terminals are solid
   if (t === 2) {
     // door — check if any door at this tile is open
     const d = doors.find(d => d.x === tx && d.y === ty);
@@ -2071,18 +2344,20 @@ function moveEntity(e, dx, dy) {
 // ============================================================================
 
 function updatePlayer(dt) {
-  const { dx, dy } = inputDir();
-  const mag = Math.hypot(dx, dy);
-  if (mag > 0) {
-    const nx = dx / mag, ny = dy / mag;
-    moveEntity(player, nx * player.speed * dt, ny * player.speed * dt);
-    // facing — prefer last-pressed axis
-    if (Math.abs(dx) >= Math.abs(dy)) player.facing = dx > 0 ? 'e' : 'w';
-    else                              player.facing = dy > 0 ? 's' : 'n';
-    player.animTime += dt;
-    if (player.animTime > 0.12) { player.animTime = 0; player.frame ^= 1; }
-  } else {
-    player.frame = 0;
+  // Don't move while inventory or shop is open — arrows control those UIs
+  if (player.hudMode === 'stats') {
+    const { dx, dy } = inputDir();
+    const mag = Math.hypot(dx, dy);
+    if (mag > 0) {
+      const nx = dx / mag, ny = dy / mag;
+      moveEntity(player, nx * player.speed * dt, ny * player.speed * dt);
+      if (Math.abs(dx) >= Math.abs(dy)) player.facing = dx > 0 ? 'e' : 'w';
+      else                              player.facing = dy > 0 ? 's' : 'n';
+      player.animTime += dt;
+      if (player.animTime > 0.12) { player.animTime = 0; player.frame ^= 1; }
+    } else {
+      player.frame = 0;
+    }
   }
 
   // Attack
@@ -2103,17 +2378,32 @@ function updatePlayer(dt) {
   }
   player.shootCd = Math.max(0, player.shootCd - dt);
 
-  // Door open with key (auto-open on adjacent)
+  // Door open with key (auto-open on adjacent — consumes key from inventory)
   const ptx = Math.floor(player.x / TILE), pty = Math.floor(player.y / TILE);
   for (const d of doors) {
     if (!d.open && Math.abs(d.x - ptx) + Math.abs(d.y - pty) <= 1) {
-      if (player.keys > 0) {
-        d.open = true; player.keys--;
+      const ki = player.inventory.indexOf('key');
+      if (ki !== -1) {
+        player.inventory.splice(ki, 1);
+        if (player.invSel >= player.inventory.length) player.invSel = Math.max(0, player.inventory.length - 1);
+        d.open = true;
         level.tiles[d.y * level.w + d.x] = 3;
         sfx('door');
         alertMsg('Door opened');
       }
     }
+  }
+
+  // Terminal proximity — open/close shop (with cooldown to prevent re-entry)
+  player.shopExitCd = Math.max(0, (player.shopExitCd || 0) - dt);
+  let nearTerminal = false;
+  for (const term of terminals) {
+    if (Math.abs(term.x - ptx) + Math.abs(term.y - pty) <= 1) { nearTerminal = true; break; }
+  }
+  if (nearTerminal && player.hudMode !== 'shop' && player.shopExitCd <= 0) {
+    player.hudMode = 'shop'; player.shopSel = 0; player.invCd = 0.3;
+  } else if (!nearTerminal && player.hudMode === 'shop') {
+    player.hudMode = 'stats';
   }
 
   // Item pickup
@@ -2159,12 +2449,17 @@ function updatePlayer(dt) {
 
 function pickupItem(type) {
   sfx('pickup');
+  player.lastEncounter = { type:'item', id: type };
   switch (type) {
-    case 'food':    player.life = Math.min(player.life + 400, 9999); player.score += 10; alertMsg('+400 life'); break;
-    case 'key':     player.keys += 1; player.score += 50; alertMsg('Got key'); break;
+    case 'food':    player.inventory.push('food'); player.score += 10; alertMsg('Got food'); break;
+    case 'key':     player.inventory.push('key'); player.score += 50; alertMsg('Got key'); break;
     case 'potion':  player.inventory.push('potion'); alertMsg('Potion acquired'); break;
-    case 'treasure':player.score += 200; alertMsg('+200 score'); break;
+    case 'treasure':player.gold += 200; player.score += 200; alertMsg('+200 gold'); break;
+    case 'gold':    player.gold += 100; player.score += 100; alertMsg('+100 gold'); break;
     case 'missile': player.missiles += 5; alertMsg('+5 missiles'); break;
+    case 'scroll_heal': case 'scroll_blast': case 'scroll_speed': case 'scroll_strong':
+    case 'scroll_invis': case 'scroll_shots': case 'scroll_repel': case 'scroll_power':
+      player.inventory.push(type); alertMsg('Got ' + type.slice(7).toUpperCase() + ' scroll'); break;
     default:
       if (type && type.startsWith('gem_')) {
         const idx = parseInt(type.slice(4), 10);
@@ -2226,6 +2521,7 @@ function damageEnemy(en, dmg) {
   if (en.hp <= 0) {
     en.alive = false;
     player.score += en.score;
+    player.lastEncounter = { type:'enemy', id: en.type };
     particleBurst(en.x, en.y, en.type === 'it' ? 40 : 8);
     if (en.type === 'it') {
       gameState = STATE.VICTORY;
@@ -2245,45 +2541,8 @@ function updateEnemies(dt) {
     const dx = player.x - en.x, dy = player.y - en.y;
     const d = Math.hypot(dx, dy) || 1;
 
-    if (en.ai === 'chase' || en.ai === 'drift') {
-      const mvx = (dx / d) * en.speed * dt, mvy = (dy / d) * en.speed * dt;
-      moveEntity(en, mvx, mvy);
-    } else if (en.ai === 'shooter') {
-      // holds position; fires at player every cd seconds if in range
-      en.cd -= dt;
-      if (en.cd <= 0 && d < 200) {
-        en.cd = 1.8;
-        spawnEnemyProj(en.x, en.y, dx/d, dy/d, 'fire', 12);
-      }
-    } else if (en.ai === 'teleport') {
-      // drifts slowly + periodic teleport closer to player + fireballs
-      en.cd -= dt;
-      if (en.cd <= 0) {
-        en.cd = 2.5 + Math.random();
-        const a = Math.atan2(dy, dx) + (Math.random() - 0.5);
-        const r = 80 + Math.random() * 40;
-        const tx = player.x - Math.cos(a) * r, ty = player.y - Math.sin(a) * r;
-        if (!isBlocked(tx, ty, false)) { en.x = tx; en.y = ty; particleBurst(en.x, en.y, 6); }
-        spawnEnemyProj(en.x, en.y, dx/d, dy/d, 'fire', 10);
-      }
-      moveEntity(en, (dx/d) * en.speed * dt, (dy/d) * en.speed * dt);
-    } else if (en.ai === 'lobber') {
-      en.cd -= dt;
-      if (en.cd <= 0 && d < 240) {
-        en.cd = 2.0 + Math.random();
-        // arcing projectile: travels to player location with gravity-arc effect (flat in 2D top-down, so just a fast traveling rock)
-        spawnEnemyProj(en.x, en.y, dx/d, dy/d, 'rock', 10);
-      }
-      // slowly sidestep to maintain distance
-      const mvx = -(dx / d) * en.speed * dt * (d < 60 ? 1 : -0.3);
-      const mvy = -(dy / d) * en.speed * dt * (d < 60 ? 1 : -0.3);
-      moveEntity(en, mvx, mvy);
-    } else if (en.ai === 'drain') {
-      // slow pursuit, heavy damage on contact
-      const mvx = (dx / d) * en.speed * dt, mvy = (dy / d) * en.speed * dt;
-      moveEntity(en, mvx, mvy);
-    } else if (en.ai === 'boss') {
-      // IT: slow pursuit + periodic fireball spreads
+    if (en.ai === 'boss') {
+      // IT boss: slow pursuit + periodic fireball spreads
       moveEntity(en, (dx/d) * en.speed * dt, (dy/d) * en.speed * dt);
       en.cd -= dt;
       if (en.cd <= 0 && d < 240) {
@@ -2293,12 +2552,16 @@ function updateEnemies(dt) {
           spawnEnemyProj(en.x, en.y, Math.cos(a), Math.sin(a), 'fire', 15);
         }
       }
+    } else {
+      // All normal enemies: chase the player
+      const mvx = (dx / d) * en.speed * dt, mvy = (dy / d) * en.speed * dt;
+      moveEntity(en, mvx, mvy);
     }
 
     if (Math.abs(dx) >= Math.abs(dy)) en.facing = dx > 0 ? 'e' : 'w';
     else                              en.facing = dy > 0 ? 's' : 'n';
     en.animTime += dt;
-    const animRate = en.ai === 'shooter' ? 0.35 : 0.2;
+    const animRate = 0.2;
     if (en.animTime > animRate) { en.animTime = 0; en.frame ^= 1; }
     en.hitFlash = Math.max(0, en.hitFlash - dt);
 
@@ -2375,6 +2638,10 @@ function alertMsg(msg) { player.alertMsg = msg; player.alertTime = 2.5; }
 function useInventorySlot(i) {
   const item = player.inventory[i];
   if (!item) return;
+  if (item === 'key') {
+    alertMsg('Walk to a door to use key');
+    return; // keys auto-consume at doors, can't manually use
+  }
   if (item === 'potion') {
     // potion: nuke visible enemies, restore some life
     for (const en of enemies) {
@@ -2389,6 +2656,25 @@ function useInventorySlot(i) {
     player.life = Math.min(player.life + 400, 9999);
     sfx('pickup');
     alertMsg('+400 LIFE');
+  } else if (item === 'scroll_heal') {
+    player.life = Math.min(player.life + 2500, 9999);
+    sfx('potion'); alertMsg('HEAL +2500');
+  } else if (item === 'scroll_blast') {
+    for (const en of enemies) { if (en.alive) damageEnemy(en, 999); }
+    sfx('potion'); alertMsg('BLAST!');
+  } else if (item === 'scroll_speed') {
+    player.speed += 4; sfx('pickup'); alertMsg('SPEED +4');
+  } else if (item === 'scroll_strong') {
+    player.strength += 2; sfx('pickup'); alertMsg('STRENGTH +2');
+  } else if (item === 'scroll_shots') {
+    player.missiles += 10; sfx('pickup'); alertMsg('MISSILES +10');
+  } else if (item === 'scroll_invis') {
+    player.invincibleTime = 25; sfx('potion'); alertMsg('INVISIBLE 25s');
+  } else if (item === 'scroll_repel') {
+    player.repelTime = 25; sfx('potion'); alertMsg('REPEL 25s');
+  } else if (item === 'scroll_power') {
+    player.speed += 4; player.strength += 2; player.missiles += 5;
+    sfx('potion'); alertMsg('POWER UP!');
   }
   player.inventory.splice(i, 1);
   if (player.invSel >= player.inventory.length) player.invSel = Math.max(0, player.inventory.length - 1);
@@ -2410,7 +2696,7 @@ function applyClass(cls) {
   player.missiles = cls.shot;
   player.levelNum = 1;
   player.score = 0;
-  player.keys = 0;
+  player.gold = 0;
   player.inventory = [];
   player.hitFlash = 0;
   player.alertTime = 0;
@@ -2418,6 +2704,7 @@ function applyClass(cls) {
   player.hudMode = 'stats';
   player.cheat = false;
   player.cheatCd = 0;
+  player.lastEncounter = null;
 }
 
 function nextLevel() {
@@ -2547,6 +2834,8 @@ function drawItems() {
     else if (it.type === 'potion') spr = SPR.potion;
     else if (it.type === 'treasure') spr = SPR.treasure;
     else if (it.type === 'missile') spr = SPR.missilePickup;
+    else if (it.type === 'gold') spr = SPR.gold;
+    else if (it.type && it.type.startsWith('scroll_')) spr = SPR.scroll;
     else if (it.type && it.type.startsWith('gem_')) spr = SPR['gem_' + it.type.slice(4)];
     if (spr) drawSpriteAt(spr, it.x, it.y + bob);
   }
@@ -2571,6 +2860,7 @@ function drawParticles() {
 
 function drawHUD() {
   if (player.hudMode === 'inv') { drawHUDInv(); return; }
+  if (player.hudMode === 'shop') { drawHUDShop(); return; }
   // panel background
   ctx.fillStyle = '#000';
   ctx.fillRect(0, HUD_Y, CW, HUD_H);
@@ -2578,165 +2868,285 @@ function drawHUD() {
   ctx.fillStyle = '#2d5016';
   ctx.fillRect(0, HUD_Y, CW, 2);
 
-  // portrait frame on left
+  // radar/encounter frame on left — shows last item picked up or enemy killed
   const px = 8, py = HUD_Y + 8;
   const pw = 80, ph = 80;
   // frame (dark)
   ctx.fillStyle = '#222'; ctx.fillRect(px-2, py-2, pw+4, ph+4);
   ctx.fillStyle = '#000'; ctx.fillRect(px, py, pw, ph);
-  // portrait sprite — per current class
-  const portraitSpr = SPR['portrait_' + player.cls] || SPR.portrait_warrior;
-  if (portraitSpr) {
-    const scale = Math.floor(pw / portraitSpr.width);
-    const dx = px + (pw - portraitSpr.width * scale) / 2;
-    const dy = py + (ph - portraitSpr.height * scale) / 2;
-    ctx.drawImage(portraitSpr, dx, dy, portraitSpr.width * scale, portraitSpr.height * scale);
-    // damage flash on portrait
-    if (player.hitFlash > 0) {
-      ctx.fillStyle = 'rgba(255,40,40,0.5)';
-      ctx.fillRect(dx, dy, portraitSpr.width * scale, portraitSpr.height * scale);
-    }
-    // blink: every ~3s, overlay a thin dark stripe across the eye area for ~100ms
-    const phase = (gameTime % 3);
-    if (phase < 0.12) {
-      ctx.fillStyle = 'rgba(0,0,0,0.8)';
-      ctx.fillRect(dx + scale * 6, dy + scale * 12, scale * 20, scale * 3);
-    }
-    // low-HP portrait pulse
-    if (player.life < 200) {
-      const pulse = 0.25 + 0.25 * Math.sin(gameTime * 8);
-      ctx.fillStyle = 'rgba(200,40,40,' + pulse.toFixed(2) + ')';
-      ctx.fillRect(dx, dy, portraitSpr.width * scale, portraitSpr.height * scale);
-    }
+  // show last encountered thing (item picked up / enemy killed)
+  const encSpr = encounterSprite(player.lastEncounter);
+  if (encSpr) {
+    const scale = Math.min(Math.floor(pw / encSpr.width), Math.floor((ph - 16) / encSpr.height));
+    const dx = px + (pw - encSpr.width * scale) / 2;
+    const dy = py + ((ph - 16) - encSpr.height * scale) / 2;
+    ctx.drawImage(encSpr, dx, dy, encSpr.width * scale, encSpr.height * scale);
+    // label below
+    const label = encounterLabel(player.lastEncounter);
+    ctx.fillStyle = player.lastEncounter.type === 'enemy' ? '#c33' : '#e8c547';
+    ctx.font = 'bold 9px Courier New, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, px + pw/2, py + ph - 12);
+    ctx.textAlign = 'left';
+  } else {
+    ctx.fillStyle = '#333';
+    ctx.font = 'bold 9px Courier New, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('RADAR', px + pw/2, py + ph/2 + 4);
+    ctx.textAlign = 'left';
   }
 
   // stat column on right
   const sx = 100, sy0 = HUD_Y + 10;
   ctx.textBaseline = 'top';
   ctx.font = 'bold 14px Courier New, monospace';
+  // count keys in inventory
+  const keyCount = player.inventory.filter(x => x === 'key').length;
   const rows = [
     ['LIFE',     player.life.toString()],
     ['SPEED',    (player.speed|0).toString()],
     ['STRENGTH', player.strength.toString()],
     ['MISSILES', player.missiles.toString()],
+    ['KEYS',     keyCount.toString()],
+    ['GOLD',     player.gold.toString()],
     ['LEVEL',    player.levelNum.toString()],
     ['SCORE',    player.score.toString()],
   ];
   for (let i = 0; i < rows.length; i++) {
-    const y = sy0 + i * 15;
+    const y = sy0 + i * 13;
     ctx.fillStyle = '#6db33a';
+    ctx.font = 'bold 12px Courier New, monospace';
     ctx.fillText(rows[i][0], sx, y);
-    const v = rows[i][1];
     ctx.fillStyle = '#e8c547';
     ctx.textAlign = 'right';
-    ctx.fillText(v, CW - 10, y);
+    ctx.fillText(rows[i][1], CW - 10, y);
     ctx.textAlign = 'left';
-  }
-  // key indicator
-  if (player.keys > 0) {
-    ctx.drawImage(SPR.key, CW - 90, sy0 + 5, 16, 16);
-    ctx.fillStyle = '#d9a441'; ctx.fillText('x' + player.keys, CW - 70, sy0 + 8);
   }
   // cheat indicator
   if (player.cheat) {
     ctx.fillStyle = '#e8c547';
     ctx.font = 'bold 10px Courier New, monospace';
-    ctx.fillText('CHEAT', sx - 18, HUD_Y + HUD_H - 32);
-    ctx.font = 'bold 14px Courier New, monospace';
+    ctx.fillText('CHEAT', sx, sy0 + rows.length * 13 + 2);
   }
-  // gem progress row (8 tiny cells)
-  const gx0 = 100, gy = HUD_Y + HUD_H - 18;
-  ctx.font = '9px Courier New, monospace';
-  ctx.fillStyle = '#888'; ctx.fillText('GEMS', gx0, gy);
+  // gem progress row — bigger, lower
+  const gemSize = 12;
+  const gx0 = 100, gy = HUD_Y + HUD_H - 14;
+  ctx.font = '8px Courier New, monospace';
+  ctx.fillStyle = '#888'; ctx.fillText('GEMS', gx0, gy - 1);
   for (let i = 0; i < 8; i++) {
-    const x = gx0 + 32 + i * 11, y = gy - 1;
-    ctx.fillStyle = '#222'; ctx.fillRect(x, y, 9, 9);
+    const x = gx0 + 30 + i * (gemSize + 2), y = gy - 2;
+    ctx.fillStyle = '#222'; ctx.fillRect(x, y, gemSize, gemSize);
     if (player.gems & (1 << i) && SPR['gem_' + i]) {
-      ctx.drawImage(SPR['gem_' + i], x - 3, y - 3, 16, 16);
+      ctx.drawImage(SPR['gem_' + i], x - 1, y - 1, gemSize + 2, gemSize + 2);
     }
-  }
-
-  // alert ticker at bottom of HUD
-  if (player.alertTime > 0) {
-    ctx.fillStyle = '#c33';
-    ctx.textAlign = 'center';
-    ctx.font = 'bold 12px Courier New, monospace';
-    ctx.fillText(player.alertMsg, CW / 2, HUD_Y + HUD_H - 14);
-    ctx.textAlign = 'left';
   }
 }
 
-// inventory HUD mode: big selected-item icon on left, life + slot row + USE/DROP on right
+// inventory HUD — original Lynx layout:
+// Left panel: large image of selected item.
+// Right panel: LIFE, 3 visible item icons (selected highlighted), USE, DROP.
 function drawHUDInv() {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, HUD_Y, CW, HUD_H);
   ctx.fillStyle = '#2d5016';
   ctx.fillRect(0, HUD_Y, CW, 2);
 
-  const px = 8, py = HUD_Y + 8, pw = 80, ph = 80;
-  ctx.fillStyle = '#222'; ctx.fillRect(px-2, py-2, pw+4, ph+4);
+  // ---- left panel: big item picture ----
+  const px = 8, py = HUD_Y + 6, pw = 86, ph = 86;
+  ctx.fillStyle = '#222'; ctx.fillRect(px - 2, py - 2, pw + 4, ph + 4);
   ctx.fillStyle = '#000'; ctx.fillRect(px, py, pw, ph);
 
   const selItem = player.inventory[player.invSel];
   if (selItem) {
     const icon = itemIcon(selItem);
     if (icon) {
-      const s = Math.floor(pw / icon.width);
+      const s = Math.min(Math.floor((pw - 4) / icon.width), Math.floor((ph - 20) / icon.height));
       const dx = px + (pw - icon.width * s) / 2;
-      const dy = py + (ph - icon.height * s) / 2;
+      const dy = py + ((ph - 18) - icon.height * s) / 2;
       ctx.drawImage(icon, dx, dy, icon.width * s, icon.height * s);
     }
+    // item name below image
+    let label = selItem.replace('scroll_','').toUpperCase();
+    if (selItem.startsWith('scroll_')) label = label + ' SCROLL';
+    ctx.fillStyle = '#e8c547';
+    ctx.font = 'bold 8px Courier New, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, px + pw / 2, py + ph - 8);
+    ctx.textAlign = 'left';
   } else {
     ctx.fillStyle = '#444';
     ctx.font = 'bold 10px Courier New, monospace';
     ctx.textAlign = 'center';
-    ctx.fillText('EMPTY', px + pw/2, py + ph/2 + 4);
+    ctx.fillText('EMPTY', px + pw / 2, py + ph / 2 + 4);
     ctx.textAlign = 'left';
   }
 
-  // right column: LIFE + slot row + USE/DROP
-  const sx = 100, sy0 = HUD_Y + 10;
+  // ---- right panel ----
+  const sx = 104, sy0 = HUD_Y + 8;
+  const rw = CW - sx - 6;  // right panel width
   ctx.textBaseline = 'top';
+
+  // LIFE
   ctx.font = 'bold 14px Courier New, monospace';
   ctx.fillStyle = '#6db33a';
   ctx.fillText('LIFE', sx, sy0);
   ctx.fillStyle = '#e8c547';
   ctx.textAlign = 'right';
-  ctx.fillText(player.life.toString(), CW - 10, sy0);
+  ctx.fillText(player.life.toString(), CW - 8, sy0);
   ctx.textAlign = 'left';
 
-  // 4 slots (16x16 icons, scaled 2x)
-  const slotY = sy0 + 22, slotSize = 32, slotPad = 6;
-  ctx.font = 'bold 10px Courier New, monospace';
-  for (let i = 0; i < 4; i++) {
-    const bx = sx + i * (slotSize + slotPad);
-    ctx.fillStyle = '#222'; ctx.fillRect(bx, slotY, slotSize, slotSize);
-    ctx.strokeStyle = (i === player.invSel) ? '#e8c547' : '#555';
-    ctx.lineWidth = (i === player.invSel) ? 2 : 1;
-    ctx.strokeRect(bx + 0.5, slotY + 0.5, slotSize - 1, slotSize - 1);
-    const it = player.inventory[i];
-    if (it) {
-      const icon = itemIcon(it);
-      if (icon) ctx.drawImage(icon, bx + 4, slotY + 4, 24, 24);
+  // 3 visible item icons — show items around the selection
+  const invLen = player.inventory.length;
+  const iconSz = 28;
+  const iconY = sy0 + 22;
+
+  if (invLen > 0) {
+    // Show 3 items centered on invSel
+    const vis = 3;
+    let start = Math.max(0, player.invSel - 1);
+    if (start + vis > invLen) start = Math.max(0, invLen - vis);
+    const end = Math.min(invLen, start + vis);
+    const totalW = (end - start) * (iconSz + 6) - 6;
+    const ox = sx + (rw - totalW) / 2;
+
+    for (let vi = start; vi < end; vi++) {
+      const ix = ox + (vi - start) * (iconSz + 6);
+      const iy = iconY;
+      // selected highlight
+      if (vi === player.invSel) {
+        ctx.strokeStyle = '#e8c547'; ctx.lineWidth = 2;
+        ctx.strokeRect(ix - 2, iy - 2, iconSz + 4, iconSz + 4);
+      }
+      ctx.fillStyle = '#111'; ctx.fillRect(ix, iy, iconSz, iconSz);
+      const ic = itemIcon(player.inventory[vi]);
+      if (ic) ctx.drawImage(ic, ix + 2, iy + 2, iconSz - 4, iconSz - 4);
     }
-    ctx.fillStyle = '#888';
-    ctx.fillText((i+1).toString(), bx + 2, slotY + slotSize + 2);
+    // scroll arrows
+    if (start > 0) {
+      ctx.fillStyle = '#888'; ctx.font = '10px Courier New, monospace';
+      ctx.fillText('\u25C0', ox - 12, iconY + 8);
+    }
+    if (end < invLen) {
+      ctx.fillStyle = '#888'; ctx.font = '10px Courier New, monospace';
+      ctx.fillText('\u25B6', ox + totalW + 4, iconY + 8);
+    }
+  } else {
+    ctx.fillStyle = '#555'; ctx.font = '10px Courier New, monospace';
+    ctx.fillText('(no items)', sx + 20, iconY + 6);
   }
 
   // USE / DROP
-  ctx.font = 'bold 11px Courier New, monospace';
+  const labelY = iconY + iconSz + 8;
+  ctx.font = 'bold 14px Courier New, monospace';
+  ctx.textAlign = 'center';
   ctx.fillStyle = '#6db33a';
-  ctx.fillText('USE (U/1-4)',  sx, slotY + slotSize + 16);
+  ctx.fillText('USE', sx + rw / 2, labelY);
   ctx.fillStyle = '#c33';
-  ctx.fillText('DROP (X)',     sx + 130, slotY + slotSize + 16);
+  ctx.fillText('DROP', sx + rw / 2, labelY + 18);
+  ctx.textAlign = 'left';
 
   if (player.alertTime > 0) {
     ctx.fillStyle = '#c33';
     ctx.textAlign = 'center';
-    ctx.font = 'bold 12px Courier New, monospace';
-    ctx.fillText(player.alertMsg, CW / 2, HUD_Y + HUD_H - 14);
+    ctx.font = 'bold 10px Courier New, monospace';
+    ctx.fillText(player.alertMsg, CW / 2, HUD_Y + HUD_H - 8);
     ctx.textAlign = 'left';
   }
+}
+
+// Shop HUD — same layout as inventory but browsing SHOP_STOCK to buy
+function drawHUDShop() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, HUD_Y, CW, HUD_H);
+  ctx.fillStyle = '#2d5016';
+  ctx.fillRect(0, HUD_Y, CW, 2);
+
+  const sel = SHOP_STOCK[player.shopSel] || SHOP_STOCK[0];
+
+  // ---- left panel: big item picture ----
+  const px = 8, py = HUD_Y + 6, pw = 86, ph = 86;
+  ctx.fillStyle = '#222'; ctx.fillRect(px - 2, py - 2, pw + 4, ph + 4);
+  ctx.fillStyle = '#000'; ctx.fillRect(px, py, pw, ph);
+  const icon = itemIcon(sel.type);
+  if (icon) {
+    const s = Math.min(Math.floor((pw - 4) / icon.width), Math.floor((ph - 28) / icon.height));
+    const dx = px + (pw - icon.width * s) / 2;
+    const dy = py + ((ph - 28) - icon.height * s) / 2;
+    ctx.drawImage(icon, dx, dy, icon.width * s, icon.height * s);
+  }
+  // item name + price
+  ctx.fillStyle = '#e8c547';
+  ctx.font = 'bold 8px Courier New, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(sel.name, px + pw / 2, py + ph - 18);
+  ctx.fillStyle = '#d9a441';
+  ctx.fillText(sel.price + ' GOLD', px + pw / 2, py + ph - 8);
+  ctx.textAlign = 'left';
+
+  // ---- right panel ----
+  const sx = 104, sy0 = HUD_Y + 8;
+  const rw = CW - sx - 6;
+  ctx.textBaseline = 'top';
+
+  // GOLD (your balance)
+  ctx.font = 'bold 14px Courier New, monospace';
+  ctx.fillStyle = '#6db33a';
+  ctx.fillText('GOLD', sx, sy0);
+  ctx.fillStyle = '#d9a441';
+  ctx.textAlign = 'right';
+  ctx.fillText(player.gold.toString(), CW - 8, sy0);
+  ctx.textAlign = 'left';
+
+  // 3 visible shop items centered on selection
+  const iconSz = 28;
+  const iconY = sy0 + 22;
+  const vis = 3;
+  let start = Math.max(0, player.shopSel - 1);
+  if (start + vis > SHOP_STOCK.length) start = Math.max(0, SHOP_STOCK.length - vis);
+  const end = Math.min(SHOP_STOCK.length, start + vis);
+  const totalW = (end - start) * (iconSz + 6) - 6;
+  const ox = sx + (rw - totalW) / 2;
+
+  for (let vi = start; vi < end; vi++) {
+    const ix = ox + (vi - start) * (iconSz + 6);
+    const iy = iconY;
+    if (vi === player.shopSel) {
+      ctx.strokeStyle = '#e8c547'; ctx.lineWidth = 2;
+      ctx.strokeRect(ix - 2, iy - 2, iconSz + 4, iconSz + 4);
+    }
+    ctx.fillStyle = '#111'; ctx.fillRect(ix, iy, iconSz, iconSz);
+    const ic = itemIcon(SHOP_STOCK[vi].type);
+    if (ic) ctx.drawImage(ic, ix + 2, iy + 2, iconSz - 4, iconSz - 4);
+    // price below
+    ctx.fillStyle = '#888'; ctx.font = '7px Courier New, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(SHOP_STOCK[vi].price + 'g', ix + iconSz / 2, iy + iconSz + 2);
+    ctx.textAlign = 'left';
+  }
+  if (start > 0) {
+    ctx.fillStyle = '#888'; ctx.font = '10px Courier New, monospace';
+    ctx.fillText('\u25C0', ox - 12, iconY + 8);
+  }
+  if (end < SHOP_STOCK.length) {
+    ctx.fillStyle = '#888'; ctx.font = '10px Courier New, monospace';
+    ctx.fillText('\u25B6', ox + totalW + 4, iconY + 8);
+  }
+
+  // BUY label + description
+  const labelY = iconY + iconSz + 14;
+  ctx.font = 'bold 14px Courier New, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = player.gold >= sel.price ? '#6db33a' : '#c33';
+  ctx.fillText('\u25B2 BUY', sx + rw / 2, labelY);
+  ctx.fillStyle = '#888';
+  ctx.font = '9px Courier New, monospace';
+  ctx.fillText(sel.desc, sx + rw / 2, labelY + 16);
+  ctx.textAlign = 'left';
+
+  // Close hint
+  ctx.fillStyle = '#555';
+  ctx.font = '8px Courier New, monospace';
+  ctx.fillText('SHOP  \u25BC or I to close', sx, HUD_Y + HUD_H - 6);
 }
 
 function itemIcon(type) {
@@ -2745,105 +3155,155 @@ function itemIcon(type) {
   if (type === 'key')      return SPR.key;
   if (type === 'treasure') return SPR.treasure;
   if (type === 'missile')  return SPR.missilePickup;
+  if (type === 'gold')     return SPR.gold;
+  if (type === 'terminal') return SPR.terminal0;
+  if (type && type.startsWith('scroll_')) return SPR.scroll;
   return null;
+}
+
+// Get a sprite for a last-encounter display (enemies or items)
+function encounterSprite(enc) {
+  if (!enc) return null;
+  if (enc.type === 'item') return itemIcon(enc.id);
+  if (enc.type === 'enemy') {
+    return SPR[enc.id + '_0'] || null;
+  }
+  return null;
+}
+function encounterLabel(enc) {
+  if (!enc) return '';
+  const names = {
+    food:'FOOD', key:'KEY', potion:'POTION', treasure:'TREASURE', gold:'GOLD',
+    missile:'MISSILES', terminal:'TERMINAL',
+    scroll_heal:'HEAL SCROLL', scroll_blast:'BLAST SCROLL', scroll_speed:'SPEED SCROLL',
+    scroll_strong:'STRONG SCROLL', scroll_invis:'INVIS SCROLL', scroll_shots:'SHOTS SCROLL',
+    scroll_repel:'REPEL SCROLL', scroll_power:'POWER SCROLL',
+    scorpion:'SCORPION', skeleton:'SKELETON', ghost:'GHOST', grunt:'GRUNT',
+    demon:'DEMON', sorcerer:'SORCERER', lobber:'LOBBER', death:'DEATH', it:'IT',
+  };
+  if (enc.id && enc.id.startsWith('gem_')) return 'STAR GEM';
+  return names[enc.id] || enc.id.toUpperCase();
 }
 
 // ----- State overlays --------------------------------------------------------
 
 function drawTitle() {
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, CW, CH);
-  ctx.fillStyle = '#c33333';
   ctx.textAlign = 'center';
-  ctx.font = 'bold 14px Courier New, monospace';
-  ctx.fillText("JMR's", CW/2, 58);
-  ctx.fillStyle = '#d9a441';
-  ctx.font = 'bold 26px Courier New, monospace';
-  ctx.fillText('GAUNTLET', CW/2, 88);
-  ctx.fillStyle = '#6db33a';
-  ctx.font = 'bold 14px Courier New, monospace';
-  ctx.fillText('THE THIRD ENCOUNTER', CW/2, 114);
+
+  // Castle gate background
+  ctx.fillStyle = '#555';
+  // left tower
+  ctx.fillRect(20, 60, 50, 220);
+  ctx.fillStyle = '#777'; ctx.fillRect(25, 60, 40, 220);
+  // right tower
+  ctx.fillStyle = '#555'; ctx.fillRect(250, 60, 50, 220);
+  ctx.fillStyle = '#777'; ctx.fillRect(255, 60, 40, 220);
+  // crenellations
   ctx.fillStyle = '#888';
-  ctx.font = '12px Courier New, monospace';
-  ctx.fillText('(HTML/JS recreation)', CW/2, 135);
-  // animated portrait carousel
-  const carouselIdx = ((gameTime * 0.6) | 0) % CLASSES.length;
-  const cls = CLASSES[carouselIdx];
-  const spr = SPR['portrait_' + cls.id];
-  if (spr) {
-    const s = 4;
-    const w = spr.width * s, h = spr.height * s;
-    ctx.drawImage(spr, (CW-w)/2, 170, w, h);
-    ctx.fillStyle = cls.col;
-    ctx.font = 'bold 14px Courier New, monospace';
-    ctx.fillText(cls.name, CW/2, 320);
-  }
+  for (let i = 0; i < 4; i++) { ctx.fillRect(20 + i * 14, 48, 10, 16); ctx.fillRect(250 + i * 14, 48, 10, 16); }
+  // arch
+  ctx.fillStyle = '#555';
+  ctx.fillRect(70, 80, 180, 200);
+  ctx.fillStyle = '#222';
+  ctx.beginPath(); ctx.ellipse(160, 140, 70, 80, 0, Math.PI, 0); ctx.fill();
+  ctx.fillRect(90, 140, 140, 140);
+  // gate bars
+  ctx.strokeStyle = '#444'; ctx.lineWidth = 3;
+  for (let x = 100; x <= 220; x += 15) { ctx.beginPath(); ctx.moveTo(x, 100); ctx.lineTo(x, 280); ctx.stroke(); }
+
+  // Title text
+  ctx.fillStyle = '#c33333';
+  ctx.font = 'bold 14px Courier New, monospace';
+  ctx.fillText("JMR's  v1.0", CW/2, 320);
+  ctx.fillStyle = '#d9a441';
+  ctx.font = 'bold 28px Courier New, monospace';
+  ctx.fillText('GAUNTLET', CW/2, 348);
+  ctx.fillStyle = '#6db33a';
+  ctx.font = 'bold 12px Courier New, monospace';
+  ctx.fillText('THE THIRD ENCOUNTER', CW/2, 368);
+
+  ctx.fillStyle = '#888';
+  ctx.font = '9px Courier New, monospace';
+  ctx.fillText('\u00A9 1989 Tengen Inc.', CW/2, 392);
+  ctx.fillText('Atari Games Corp.', CW/2, 404);
+  ctx.fillText('HTML/JS recreation by JMR', CW/2, 418);
+
   ctx.fillStyle = '#e8c547';
   ctx.font = 'bold 14px Courier New, monospace';
   const blink = ((gameTime * 2) | 0) & 1;
-  if (blink) ctx.fillText('PRESS SPACE / START', CW/2, 360);
+  if (blink) ctx.fillText('TAP or PRESS SPACE', CW/2, 446);
   const hs = getHighScore();
   if (hs > 0) {
     ctx.fillStyle = '#6db33a';
     ctx.font = 'bold 11px Courier New, monospace';
-    ctx.fillText('HI-SCORE ' + hs, CW/2, 388);
+    ctx.fillText('HI-SCORE ' + hs, CW/2, 466);
   }
-  ctx.fillStyle = '#555';
-  ctx.font = '10px Courier New, monospace';
-  ctx.fillText('Arrows · J melee · K shoot · I inv · H help', CW/2, 410);
-  ctx.fillText('C = cheat mode (full life & missiles)', CW/2, 426);
   ctx.textAlign = 'left';
 }
 
 function drawSelect() {
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, CW, CH);
-  ctx.fillStyle = '#d9a441'; ctx.textAlign = 'center';
-  ctx.font = 'bold 14px Courier New, monospace';
-  ctx.fillText('CHOOSE YOUR HERO', CW/2, 20);
-  // 2 cols x 4 rows grid of portraits. Each cell: 64x64 portrait (32 sprite x 2) + label.
-  const psize = 64;      // rendered portrait size
-  const cellW = 140, cellH = 76, pad = 8;
-  const gridX = (CW - (cellW * 2 + pad)) / 2;
-  const gridY = 32;
-  for (let i = 0; i < CLASSES.length; i++) {
-    const col = i % 2, row = (i / 2) | 0;
-    const x = gridX + col * (cellW + pad);
-    const y = gridY + row * (cellH + 2);
-    const cls = CLASSES[i];
-    const spr = SPR['portrait_' + cls.id];
-    // portrait anchored left side of cell
-    const px = x + 4, py = y + 4;
-    if (spr) ctx.drawImage(spr, px, py, psize, psize);
-    // label to the right of the portrait
-    ctx.fillStyle = (i === selectIdx) ? '#e8c547' : '#888';
-    ctx.font = 'bold 11px Courier New, monospace';
-    ctx.textAlign = 'left';
-    ctx.fillText(cls.name, x + psize + 12, y + 22);
-    if (i === selectIdx) {
-      ctx.strokeStyle = '#e8c547';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(x - 1, y - 1, cellW + 2, cellH + 2);
-      // mini stat bars under name
-      ctx.font = 'bold 8px Courier New, monospace';
-      const mini = [['STR', cls.str, 8], ['MAG', cls.magic, 8], ['SHOT', cls.shot, 10], ['LIFE', Math.floor(cls.life/250), 10]];
-      for (let j = 0; j < mini.length; j++) {
-        const mx = x + psize + 12, my = y + 32 + j * 9;
-        ctx.fillStyle = '#6db33a'; ctx.textAlign = 'left';
-        ctx.fillText(mini[j][0], mx, my + 6);
-        ctx.fillStyle = '#222'; ctx.fillRect(mx + 26, my + 2, 34, 5);
-        ctx.fillStyle = cls.col;
-        ctx.fillRect(mx + 26, my + 2, Math.min(34, (mini[j][1] / mini[j][2]) * 34), 5);
-      }
-    }
-  }
-  const sy = gridY + 4 * (cellH + 2) + 10;
-  ctx.fillStyle = '#e8c547';
   ctx.textAlign = 'center';
-  ctx.font = 'bold 12px Courier New, monospace';
+
+  const cls = CLASSES[selectIdx];
+
+  // Draw background characters (other classes) flanking the selected one
+  const sprScale = 3;  // small background characters
+  for (let i = 0; i < CLASSES.length; i++) {
+    if (i === selectIdx) continue;
+    const other = CLASSES[i];
+    const oSpr = SPR[other.id + '_s_0'] || SPR.warrior_s_0;
+    // Arrange in a row behind the main character
+    const offset = i < selectIdx ? i : i - 1;
+    const total = CLASSES.length - 1;
+    const spacing = 34;
+    const ox = CW / 2 + (offset - total / 2 + 0.5) * spacing;
+    const oy = 80;
+    ctx.globalAlpha = 0.5;
+    ctx.drawImage(oSpr, ox - 8 * sprScale / 2, oy, 16 * sprScale, 16 * sprScale);
+    ctx.globalAlpha = 1;
+  }
+
+  // Draw selected character large and centered
+  const mainSpr = SPR[cls.id + '_s_0'] || SPR.warrior_s_0;
+  const bigScale = 10;
+  const mw = 16 * bigScale, mh = 16 * bigScale;
+  ctx.drawImage(mainSpr, (CW - mw) / 2, 110, mw, mh);
+
+  // Character name
+  ctx.fillStyle = '#e8c547';
+  ctx.font = 'bold 18px Courier New, monospace';
+  ctx.fillText(cls.name, CW / 2, 295);
+
+  // Stats — matching original layout: SPEED / STRENGTH / MISSILES
+  ctx.font = 'bold 14px Courier New, monospace';
+  const stats = [
+    ['SPEED',    cls.speed],
+    ['STRENGTH', cls.str],
+    ['MISSILES', cls.shot],
+  ];
+  for (let i = 0; i < stats.length; i++) {
+    const y = 320 + i * 22;
+    ctx.fillStyle = '#6db33a';
+    ctx.textAlign = 'left';
+    ctx.fillText(stats[i][0], 60, y);
+    ctx.fillStyle = '#e8c547';
+    ctx.textAlign = 'right';
+    ctx.fillText(stats[i][1].toString(), 260, y);
+  }
+
+  // Navigation hint
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#888';
+  ctx.font = '10px Courier New, monospace';
+  ctx.fillText('\u25C0 \u25B6  choose     TAP or SPACE  start', CW / 2, 400);
+
+  // Blinking prompt
+  ctx.fillStyle = '#e8c547';
+  ctx.font = 'bold 13px Courier New, monospace';
   const blink = ((gameTime * 2) | 0) & 1;
-  if (blink) ctx.fillText('PRESS SPACE TO BEGIN', CW/2, sy + 4);
-  ctx.fillStyle = '#666';
-  ctx.font = '9px Courier New, monospace';
-  ctx.fillText('ARROWS to choose, SPACE to start', CW/2, sy + 20);
+  if (blink) ctx.fillText('PRESS START', CW / 2, 424);
   ctx.textAlign = 'left';
 }
 
@@ -2924,6 +3384,17 @@ function drawPlayField() {
   drawPlayer();
   drawParticles();
   drawHUD();
+  // alert message overlay at bottom of viewport
+  if (player.alertTime > 0) {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0, VIEW_H - 18, CW, 18);
+    ctx.fillStyle = '#c33';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.font = 'bold 11px Courier New, monospace';
+    ctx.fillText(player.alertMsg, CW / 2, VIEW_H - 16);
+    ctx.textAlign = 'left';
+  }
   if (helpOpen) drawHelpOverlay();
 }
 
@@ -2953,66 +3424,69 @@ function drawHelpOverlay() {
   ctx.lineWidth = 2;
   ctx.strokeRect(6, 6, CW - 12, VIEW_H - 12);
 
-  ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  ctx.fillStyle = '#e8c547';
-  ctx.font = 'bold 14px Courier New, monospace';
-  ctx.fillText('HELP', CW / 2, 12);
-
   ctx.textAlign = 'left';
+  let cy = 12;  // cursor y — no title, start content immediately
+
   ctx.font = 'bold 10px Courier New, monospace';
   ctx.fillStyle = '#6db33a';
-  ctx.fillText('CONTROLS', 14, 32);
+  ctx.fillText('TOUCH', 14, cy);
+  ctx.font = '9px Courier New, monospace';
+  ctx.fillStyle = '#c8c8c8';
+  const touchCtrls = [
+    'Swipe        steer any direction',
+    'Tap          melee attack',
+    '2-finger tap shoot missile',
+    'INV+START    cheat mode',
+    '? (d-pad)    this help',
+  ];
+  cy += 12;
+  for (let i = 0; i < touchCtrls.length; i++) { ctx.fillText(touchCtrls[i], 14, cy); cy += 11; }
+
+  cy += 3;
+  ctx.fillStyle = '#6db33a';
+  ctx.font = 'bold 10px Courier New, monospace';
+  ctx.fillText('KEYBOARD', 14, cy); cy += 12;
   ctx.font = '9px Courier New, monospace';
   ctx.fillStyle = '#c8c8c8';
   const controls = [
-    'Arrows/WASD  move',
-    'J            melee',
-    'K            shoot missile',
-    'I            stats / inventory',
-    '1-4 / U      use slot',
-    'X            drop slot',
-    'C            cheat (full life/missiles)',
-    'H            this help',
-    'Space        confirm',
+    'Arrows/WASD move   J melee  K shoot',
+    'I inventory  H help  C cheat  Space ok',
+    'INV: L/R select  UP use  DN drop',
   ];
-  for (let i = 0; i < controls.length; i++) ctx.fillText(controls[i], 14, 45 + i * 11);
+  for (let i = 0; i < controls.length; i++) { ctx.fillText(controls[i], 14, cy); cy += 11; }
 
-  const ly = 45 + controls.length * 11 + 6;
+  cy += 4;
   ctx.fillStyle = '#6db33a';
   ctx.font = 'bold 10px Courier New, monospace';
-  ctx.fillText('TILE LEGEND  (only EXIT PORTAL transports you)', 14, ly);
+  ctx.fillText('LEGEND', 14, cy); cy += 13;
 
   const rows = [
-    { spr: () => (gameTime * 4 | 0) & 1 ? SPR.exit1 : SPR.exit0, name: 'EXIT PORTAL', desc: 'Walk onto it — advances level.' },
-    { spr: () => (gameTime * 4 | 0) & 1 ? SPR.gen1  : SPR.gen0,  name: 'GENERATOR',   desc: 'Spawns enemies. Attack to destroy.' },
-    { spr: () => SPR.doorClosed,                                 name: 'LOCKED DOOR', desc: 'Needs 1 key. Walk up to it to open.' },
-    { spr: () => SPR.key,                                        name: 'KEY',         desc: 'Opens one door.' },
-    { spr: () => SPR.food,                                       name: 'FOOD',        desc: '+400 life instantly.' },
-    { spr: () => SPR.potion,                                     name: 'POTION',      desc: 'USE: bomb nearby + heal.' },
-    { spr: () => SPR.treasure,                                   name: 'TREASURE',    desc: '+200 score.' },
-    { spr: () => SPR.missilePickup,                              name: 'MISSILES',    desc: '+5 ammo.' },
-    { spr: () => SPR.gem_0,                                      name: 'STAR GEM',    desc: 'Collect all 8 (one per level 2-9).' },
+    { spr: () => (gameTime * 4 | 0) & 1 ? SPR.exit1 : SPR.exit0, name: 'EXIT',      desc: 'Walk on — next level' },
+    { spr: () => (gameTime * 4 | 0) & 1 ? SPR.gen1  : SPR.gen0,  name: 'GENERATOR', desc: 'Spawns enemies. Destroy it' },
+    { spr: () => SPR.terminal0,                                  name: 'TERMINAL',  desc: 'Items nearby cost gold' },
+    { spr: () => SPR.doorClosed,                                 name: 'DOOR',      desc: 'Walk up with key to open' },
+    { spr: () => SPR.key,                                        name: 'KEY',       desc: 'Opens one door (auto)' },
+    { spr: () => SPR.gold,                                       name: 'GOLD',      desc: 'Currency for terminals' },
+    { spr: () => SPR.apple,                                      name: 'FOOD',      desc: 'USE from inv: +400 life' },
+    { spr: () => SPR.potion,                                     name: 'POTION',    desc: 'USE: bomb nearby + heal' },
+    { spr: () => SPR.scroll,                                     name: 'SCROLL',    desc: 'USE: heal/blast/speed/etc' },
+    { spr: () => SPR.treasure,                                   name: 'TREASURE',  desc: '+200 gold' },
+    { spr: () => SPR.missilePickup,                              name: 'MISSILES',  desc: '+5 ammo' },
+    { spr: () => SPR.gem_0,                                      name: 'STAR GEM',  desc: '1 per level (2-9), get all 8' },
   ];
-  const ry0 = ly + 14;
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
-    const y = ry0 + i * 16;
     const s = r.spr();
-    if (s) ctx.drawImage(s, 16, y, 14, 14);
+    if (s) ctx.drawImage(s, 16, cy, 13, 13);
     ctx.fillStyle = '#e8c547';
-    ctx.font = 'bold 9px Courier New, monospace';
-    ctx.fillText(r.name, 36, y + 2);
+    ctx.font = 'bold 8px Courier New, monospace';
+    ctx.fillText(r.name, 34, cy + 2);
     ctx.fillStyle = '#9a9';
-    ctx.font = '9px Courier New, monospace';
-    ctx.fillText(r.desc, 120, y + 2);
+    ctx.font = '8px Courier New, monospace';
+    ctx.fillText(r.desc, 104, cy + 2);
+    cy += 15;
   }
-
-  ctx.fillStyle = '#888';
-  ctx.font = 'bold 10px Courier New, monospace';
-  ctx.textAlign = 'center';
-  ctx.fillText('Press H to dismiss', CW / 2, VIEW_H - 18);
-  ctx.textAlign = 'left';
 }
 
 // ============================================================================
@@ -3033,13 +3507,10 @@ function loop(t) {
     drawSelect();
     selectCooldown = Math.max(0, selectCooldown - dt);
     if (selectCooldown <= 0) {
-      const { dx, dy } = inputDir();
-      if (dx || dy) {
-        if (dx > 0) selectIdx += 1;
-        if (dx < 0) selectIdx -= 1;
-        if (dy > 0) selectIdx += 2;
-        if (dy < 0) selectIdx -= 2;
-        selectIdx = (selectIdx + CLASSES.length) % CLASSES.length;
+      const { dx } = inputDir();
+      if (dx) {
+        if (dx > 0) selectIdx = (selectIdx + 1) % CLASSES.length;
+        if (dx < 0) selectIdx = (selectIdx - 1 + CLASSES.length) % CLASSES.length;
         selectCooldown = 0.18;
       }
       if (inputStart()) {
@@ -3068,13 +3539,13 @@ function loop(t) {
       player.cheatCd = Math.max(0, player.cheatCd - dt);
     }
     if (!helpOpen) {
-      if (inputInv() && player.invCd <= 0) {
+      if (inputInv() && player.invCd <= 0 && player.hudMode !== 'shop') {
         player.hudMode = (player.hudMode === 'stats') ? 'inv' : 'stats';
         player.invCd = 0.25;
       }
-      if (keys.KeyC && player.cheatCd <= 0) {
+      if ((keys.KeyC || (touchState.i && touchState.s)) && player.cheatCd <= 0) {
         player.cheat = !player.cheat;
-        player.cheatCd = 0.4;
+        player.cheatCd = 0.5;
         if (player.cheat) {
           player.life = 9999;
           player.missiles = 99;
@@ -3086,11 +3557,37 @@ function loop(t) {
         sfx('pickup');
       }
       if (player.hudMode === 'inv' && player.useCd <= 0) {
-        for (let n = 1; n <= 4; n++) {
-          if (keys['Digit' + n]) { useInventorySlot(n - 1); player.useCd = 0.3; break; }
-        }
+        const { dx: idX, dy: idY } = inputDir();
+        if (idX > 0) { player.invSel = Math.min(player.invSel + 1, Math.max(0, player.inventory.length - 1)); player.useCd = 0.18; }
+        if (idX < 0) { player.invSel = Math.max(0, player.invSel - 1); player.useCd = 0.18; }
+        if (idY < 0) { useInventorySlot(player.invSel); player.useCd = 0.3; }   // Up = USE
+        if (idY > 0) { dropInventorySlot(player.invSel); player.useCd = 0.3; }  // Down = DROP
         if (keys.KeyU) { useInventorySlot(player.invSel); player.useCd = 0.3; }
         if (keys.KeyX) { dropInventorySlot(player.invSel); player.useCd = 0.3; }
+      }
+      // Shop controls: left/right browse, up = buy, down/INV = close
+      if (player.hudMode === 'shop' && player.useCd <= 0) {
+        const { dx: sdx, dy: sdy } = inputDir();
+        if (sdx > 0) { player.shopSel = Math.min(player.shopSel + 1, SHOP_STOCK.length - 1); player.useCd = 0.18; }
+        if (sdx < 0) { player.shopSel = Math.max(0, player.shopSel - 1); player.useCd = 0.18; }
+        if (sdy < 0) { // Up = BUY
+          const item = SHOP_STOCK[player.shopSel];
+          if (player.gold >= item.price) {
+            player.gold -= item.price;
+            pickupItem(item.type);
+            sfx('pickup');
+            alertMsg('Bought ' + item.name);
+          } else {
+            alertMsg('Need ' + item.price + ' gold');
+            sfx('alert');
+          }
+          player.useCd = 0.3;
+        }
+        if (sdy > 0 || inputInv()) { // Down or INV = close shop
+          player.hudMode = 'stats';
+          player.shopExitCd = 1.0;  // 1 second before terminal can reopen
+          player.useCd = 0.25;
+        }
       }
     }
     drawPlayField();
